@@ -56,6 +56,17 @@ exactly as claimed. On the Arty A7-100T bench build the whole plane plus
 MII gaskets, PHC and UART reporter placed at 3,726 LUT with WNS
 +0.375 ns — see `docs/BENCH_FIRSTLIGHT.md` for what it did on the wire.
 
+**Re-measured after µcode v3, the grandmaster round (same day):** the
+FULL Grandmaster Capability — BTCA, PortAnnounceTransmit with path trace,
+two-step Sync + Follow_Up as master, role transitions — plus the raw
+announce-vector publish word and the dispatch valid/accept handshake fix
+cost **+51 LUT total: 2,995** / 2,269 FF / 1.5 tiles / 4 DSP, WNS +1.898
+unchanged. The protocol grew from 304 to 539 ROM words; the µCPU stayed
+byte-identical at 1,701. Three revisions in, the architecture's claim
+holds exactly: protocol behavior is ROM words, not fabric. Bench outcome
+of the round: `docs/BENCH_GRANDMASTER.md` — bidirectional BMCA interop
+with the STM32, our node operating as GM on the wire.
+
 (The µCPU reads 1,855 in context vs 1,701 standalone — cross-boundary
 optimization variance of the same kind the protocol-processor record
 documents in the other direction.)

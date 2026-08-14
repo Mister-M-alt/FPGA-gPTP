@@ -10,7 +10,7 @@ VIVADO_SETTINGS=${VIVADO_SETTINGS:-$HOME/Xilinx/2026.1/Vivado/settings64.sh}
 . "$VIVADO_SETTINGS"
 mkdir -p "$HERE/work"
 cd "$HERE/work"
-python3 "$HERE/../../hdl/ucode/gen_gptp_ucode.py" -o gptp_ucode.hex --mac "$MAC"
+python3 "$HERE/../../hdl/ucode/gen_gptp_ucode.py" -o gptp_ucode.hex --mac "$MAC" --p1 "${P1:-248}"
 vivado -mode batch -source "$HERE/build.tcl" -nojournal -log bench_build.log
 echo "bitstream: $HERE/work/bench_arty.bit"
 echo "load (SRAM):  openFPGALoader -b arty --ftdi-serial <ARTY_SERIAL> bench_arty.bit"
