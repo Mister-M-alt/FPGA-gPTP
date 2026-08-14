@@ -83,6 +83,7 @@ module KL_gptp_engine
     output logic [63:0] pub_parent_id_o,
     output logic [31:0] pub_flags_o,   //! asCapable, sync ok, gm present…
     output logic [31:0] pub_pdelay_ns_o,
+    output logic [31:0] pub_offset_o,  //! last sync offset, ns (signed)
     output logic        pub_commit_o,
 
     //! reserved effect strobes (base-ISA compat, unused by gPTP µcode)
@@ -126,6 +127,15 @@ module KL_gptp_engine
   // -------------------------------------------------- engine state RAMs
   (* ram_style = "distributed" *) logic [63:0] bank_r    [0:31];
   (* ram_style = "distributed" *) logic [63:0] scratch_r [0:31];
+
+  //! LUTRAM has no reset; the bitstream's initial state is the reset.
+  //! µcode's init-once flag (scratch S_INIT) DEPENDS on this being zero.
+  initial begin : ram_poweron
+    for (int i = 0; i < 32; i++) begin
+      bank_r[i]    = '0;
+      scratch_r[i] = '0;
+    end
+  end
 
   always_ff @(posedge clk_i) begin : bank_write
     if (bank_we_w) bank_r[bank_addr_w] <= bank_wdata_w;
@@ -355,7 +365,7 @@ module KL_gptp_engine
 
   // -------------------------------------------- state port region map
   logic [63:0] pub_gm_r, pub_parent_r;
-  logic [31:0] pub_flags_r, pub_pdelay_r;
+  logic [31:0] pub_flags_r, pub_pdelay_r, pub_offset_r;
 
   logic [63:0] st_rd_mux_w;
   always_comb begin : st_read_mux
@@ -364,16 +374,24 @@ module KL_gptp_engine
       4'd1: st_rd_mux_w = st_addr_w[0] ? txts_r : rxts_r;
       4'd2: st_rd_mux_w = scratch_r[st_addr_w[4:0]];
       4'd3: begin
-        unique case (st_addr_w[1:0])
-          2'd0: st_rd_mux_w = pub_gm_r;
-          2'd1: st_rd_mux_w = pub_parent_r;
-          2'd2: st_rd_mux_w = {32'd0, pub_flags_r};
-          default: st_rd_mux_w = {32'd0, pub_pdelay_r};
+        unique case (st_addr_w[2:0])
+          3'd0: st_rd_mux_w = pub_gm_r;
+          3'd1: st_rd_mux_w = pub_parent_r;
+          3'd2: st_rd_mux_w = {32'd0, pub_flags_r};
+          3'd3: st_rd_mux_w = {32'd0, pub_pdelay_r};
+          3'd4: st_rd_mux_w = {32'd0, pub_offset_r};
+          default: st_rd_mux_w = 64'd0;
         endcase
       end
       default: st_rd_mux_w = 64'd0;
     endcase
   end
+
+  //! cadence bootstrap: nothing arms a timer before µcode runs, and no
+  //! µcode runs before an event — so the engine arms slot 0 once, shortly
+  //! after reset, and the slot-0 handler owns its own re-arm from then on
+  logic       boot_done_r;
+  logic [7:0] boot_cnt_r;
 
   always_ff @(posedge clk_i) begin : st_port
     if (!rst_n) begin
@@ -385,6 +403,9 @@ module KL_gptp_engine
       pub_parent_r    <= '0;
       pub_flags_r     <= '0;
       pub_pdelay_r    <= '0;
+      pub_offset_r    <= '0;
+      boot_done_r     <= 1'b0;
+      boot_cnt_r      <= '0;
       phc_addend_we_o <= 1'b0;
       phc_addend_o    <= '0;
       phc_step_we_o   <= 1'b0;
@@ -397,6 +418,16 @@ module KL_gptp_engine
       phc_step_we_o   <= 1'b0;
       tmr_arm_we_w    <= 1'b0;
 
+      if (!boot_done_r) begin
+        boot_cnt_r <= boot_cnt_r + 8'd1;
+        if (boot_cnt_r == 8'd255) begin
+          boot_done_r     <= 1'b1;
+          tmr_arm_we_w    <= 1'b1;
+          tmr_arm_slot_w  <= 3'd0;
+          tmr_arm_delta_w <= 32'd1200;
+        end
+      end
+
       // one-shot read completion
       st_rvalid_r <= st_req_w && !st_we_w && !st_rvalid_r;
       if (st_req_w && !st_we_w) st_rdata_r <= st_rd_mux_w;
@@ -407,11 +438,13 @@ module KL_gptp_engine
         unique case (st_addr_w[19:16])
           4'd2: scratch_r[st_addr_w[4:0]] <= st_wdata_w;
           4'd3: begin
-            unique case (st_addr_w[1:0])
-              2'd0: pub_gm_r     <= st_wdata_w;
-              2'd1: pub_parent_r <= st_wdata_w;
-              2'd2: pub_flags_r  <= st_wdata_w[31:0];
-              default: pub_pdelay_r <= st_wdata_w[31:0];
+            unique case (st_addr_w[2:0])
+              3'd0: pub_gm_r     <= st_wdata_w;
+              3'd1: pub_parent_r <= st_wdata_w;
+              3'd2: pub_flags_r  <= st_wdata_w[31:0];
+              3'd3: pub_pdelay_r <= st_wdata_w[31:0];
+              3'd4: pub_offset_r <= st_wdata_w[31:0];
+              default: ;
             endcase
           end
           4'd4: begin
@@ -445,6 +478,7 @@ module KL_gptp_engine
   assign pub_parent_id_o = pub_parent_r;
   assign pub_flags_o     = pub_flags_r;
   assign pub_pdelay_ns_o = pub_pdelay_r;
+  assign pub_offset_o    = pub_offset_r;
 
   // ------------------------------------------------------------ TX slot
   KL_gptp_tx_slot u_txslot (

@@ -1,34 +1,37 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""gPTP µcode ROM image generator.
+"""gPTP µcode ROM image generator — v2, the first protocol round.
 
-Emits 1024 lines of 12 hex digits for KL_gptp_ucpu's $readmemh. Entry
-points are fixed and mirrored by KL_gptp_engine's dispatch table:
+v1 (the resource skeleton) proved the datapaths; v2 makes the plane speak
+802.1AS-2011 on a real wire, aimed at the Arty-vs-STM32 bench:
 
-    16   EV_RX_SYNC       two-step sync receive: latch ingress ts + header
-    64   EV_RX_FOLLOWUP   offset = local - (origin + correction + pdelay),
-                          first-cut P servo -> PHC rate addend
-    128  EV_RX_ANNOUNCE   first-cut master adopt: publish GM + parent,
-                          re-arm the announce receipt timeout
-    192  EV_RX_PDREQ      build + send a Pdelay_Resp skeleton (exercises
-                          the full build path incl. ns -> sec/ns DIVU)
-    256  EV_RX_PDRESP     latch t2/t4 leg
-    320  EV_RX_PDRFU      meanLinkDelay = ((t4-t1)-(t3-t2))/2 -> publish
-    384  EV_RX_SIGNAL     accept and end
-    448  EV_TX_TS         latch egress timestamp (t1/t3 capture)
-    512  EV_TMR           cadence bookkeeping + self re-arm
-    768  TB battery       arithmetic battery used by tb/verilator/ucpu
+  * a COMPLETE two-step Pdelay responder: Pdelay_Resp built with the
+    requester's sequenceId and requestingPortIdentity echoed, twoStep
+    flag set, t2 from the ingress timestamp; Pdelay_Resp_Follow_Up sent
+    on the egress-timestamp return with t3;
+  * a Pdelay INITIATOR on the timer cadence (1 s): Pdelay_Req out,
+    t1 captured from the egress return, meanLinkDelay computed from the
+    four timestamps on Resp + Resp_Follow_Up and published;
+  * Announce adoption (last announcer wins — BTCA is a later µcode
+    round): GM identity + parent published, a 3 s receipt timeout armed
+    that clears gm_present on expiry;
+  * Sync/Follow_Up: offset = t_rx − (preciseOrigin + correction>>16 +
+    meanLinkDelay), published. OBSERVE-ONLY this round: the PHC is not
+    steered, so the bench can watch raw drift honestly.
 
-Every handler is a REAL first cut, not a placeholder: together they use
-ADD/SUB/AND/OR/XOR/SHL/SHR/SAR, MULS, DIVU, so no arithmetic datapath can
-constant-fold out of the OOC synthesis. Unused ROM words carry a
-deterministic non-degenerate fill (splitmix64 masked to 48 bits) for the
-same reason, the base generator's rule.
+Entry table (mirrored by KL_gptp_engine's dispatcher):
+  16 SYNC · 64 FOLLOWUP · 128 ANNOUNCE · 192 PDELAY_REQ · 256 PDELAY_RESP
+  · 320 PDELAY_RESP_FU · 384 SIGNALING · 448 TX_TS · 512 TIMER (slot 0 =
+  init + pdelay cadence, slot 2 = announce receipt timeout) · 768 TB
+  battery (unchanged from v1).
 
-Handlers are the resource skeleton's semantics, not the 802.1AS state
-machines of record — BTCA, asCapable and the receipt-timeout ladder land
-as µcode revisions on this same ROM.
+Station identity is compile-time (bench): --mac sets the source MAC;
+clockIdentity is its EUI-64 (FF:FE inserted), portNumber 1.
+
+RX handlers that depend on init-built constants guard on the init flag,
+so a chatty peer in the first ~1.2 s (before the engine's boot-armed
+timer runs the init leg) is ignored rather than answered with garbage.
 """
 
 import argparse
@@ -49,10 +52,22 @@ FMT_B, FMT_W, FMT_D, FMT_Q = 0, 1, 2, 3
 ALU_ADD, ALU_SUB, ALU_AND, ALU_OR, ALU_XOR, ALU_SHL, ALU_SHR, ALU_SAR = \
     range(8)
 MD_MULS, MD_DIVU = 0, 1
+BRS_NZOK, BRS_ITER, BRS_Z, BRS_LT, BRS_OVF = range(5)
 
-# state-port regions (KL_gptp_engine)
 RG_BANK, RG_TS, RG_SCR, RG_PUB, RG_PHC, RG_TMR = (
     0x00000, 0x10000, 0x20000, 0x30000, 0x40000, 0x50000)
+
+# ---- scratch map -----------------------------------------------------------
+S_SYNCTS, S_HDR, S_OFFSET = 0, 1, 2
+S_PDELAY, S_T2 = 4, 5
+S_T1, S_T4, S_PEND = 16, 17, 18
+S_RQCID, S_TICK, S_RQSEQ, S_RQPN, S_INIT, S_MYSEQ = 19, 20, 21, 22, 23, 24
+S_CID, S_1E9, S_HDR8, S_SALO = 25, 26, 27, 28
+
+# ---- register conventions --------------------------------------------------
+# r0 zero (init-owned) · r1/r2/r4/r10 caller data · r3/r5/r6/r7/r8/r9 temps
+R0, RA, RB, RC, RD_, RT, RU, RSEC, RNS, RP = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+REV, RTS0, RTS1 = 15, 14, 13
 
 
 def w(op, rd=0, ra=0, rb=0, fmt=0, cnd=0, imm=0):
@@ -68,186 +83,363 @@ def splitmix48(i):
     return (z ^ (z >> 31)) & WMASK
 
 
-# ---- handlers --------------------------------------------------------------
-# dispatch preloads: r15 = {code, seq, aux}, r14 = ts0, r13 = ts1
+class Prog:
+    """Tiny two-pass assembler: ops + labels at a fixed base µPC."""
 
-def prog_rx_sync():
-    return [
-        w("RDST", rd=1, imm=RG_BANK | 0, fmt=FMT_Q),      # header word
-        w("WRST", ra=14, imm=RG_SCR | 0, fmt=FMT_Q),      # sync ingress ts
-        w("WRST", ra=1, imm=RG_SCR | 1, fmt=FMT_Q),       # header snapshot
-        w("END"),
-    ]
+    def __init__(self, base):
+        self.base = base
+        self.items = []          # ints or ("label", name) or (op, kw, label)
 
+    def emit(self, op, label=None, **kw):
+        self.items.append((op, kw, label))
 
-def prog_rx_followup():
-    return [
-        w("RDST", rd=1, imm=RG_BANK | 5, fmt=FMT_Q),      # origin ns
-        w("RDST", rd=2, imm=RG_BANK | 1, fmt=FMT_Q),      # correctionField
-        w("ALU", rd=2, ra=2, cnd=ALU_SHR, imm=16),        # scaled-ns -> ns
-        w("ALU", rd=3, ra=1, rb=2, cnd=ALU_ADD),          # origin + corr
-        w("RDST", rd=4, imm=RG_SCR | 0, fmt=FMT_Q),       # sync ingress ts
-        w("RDST", rd=5, imm=RG_SCR | 4, fmt=FMT_Q),       # meanLinkDelay
-        w("ALU", rd=3, ra=3, rb=5, cnd=ALU_ADD),          # gm @ ingress
-        w("ALU", rd=6, ra=4, rb=3, cnd=ALU_SUB),          # offset
-        w("WRST", ra=6, imm=RG_SCR | 2, fmt=FMT_Q),
-        w("MOVE", rd=8, imm=205),                         # Kp (Q8-ish)
-        w("MD", rd=7, ra=6, rb=8, cnd=MD_MULS),           # P term
-        w("ALU", rd=7, ra=7, cnd=ALU_SAR, imm=8),
-        w("WRST", ra=7, imm=RG_PHC | 0, fmt=FMT_D),       # rate addend
-        w("COMMIT"),
-        w("END"),
-    ]
+    def label(self, name):
+        self.items.append(("label", name))
 
-
-def prog_rx_announce():
-    return [
-        w("RDST", rd=1, imm=RG_BANK | 8, fmt=FMT_Q),      # priority vector
-        w("WRST", ra=1, imm=RG_SCR | 8, fmt=FMT_Q),
-        w("RDST", rd=2, imm=RG_BANK | 9, fmt=FMT_Q),      # gm identity
-        w("WRST", ra=2, imm=RG_PUB | 0, fmt=FMT_Q),
-        w("RDST", rd=3, imm=RG_BANK | 2, fmt=FMT_Q),      # parent clock id
-        w("WRST", ra=3, imm=RG_PUB | 1, fmt=FMT_Q),
-        w("MOVE", rd=4, imm=3000),                        # announce timeout
-        w("WRST", ra=4, imm=RG_TMR | 2, fmt=FMT_D),
-        w("COMMIT"),
-        w("END"),
-    ]
+    def words(self):
+        # pass 1: resolve label addresses
+        addr, labels = self.base, {}
+        for it in self.items:
+            if it[0] == "label":
+                labels[it[1]] = addr
+            else:
+                addr += 1
+        # pass 2: encode
+        out = []
+        for it in self.items:
+            if it[0] == "label":
+                continue
+            op, kw, label = it
+            if label is not None:
+                kw = dict(kw, imm=labels[label])
+            out.append(w(op, **kw))
+        return out
 
 
-def prog_rx_pdreq():
-    # Pdelay_Resp skeleton build: eth header + PTP header + t2 as sec/ns.
-    # Exercises SET_LENGTH, BUILD_FLD B/W/D/Q, SHL, DIVU, MULS, SUB, SEND.
-    p = [
-        w("MOVE", rd=0, imm=0),                           # r0 = 0 convention
-        w("SETL", imm=68),                                # 14 + 54
-        w("MOVE", rd=1, imm=0x0180C2),
-        w("ALU", rd=1, ra=1, cnd=ALU_SHL, imm=24),
-        w("MOVE", rd=2, imm=0x00000E),
-        w("ALU", rd=1, ra=1, rb=2, cnd=ALU_OR),           # DA 01-80-C2-..-0E
-        w("ALU", rd=1, ra=1, cnd=ALU_SHL, imm=16),
-        w("BFLD", ra=1, fmt=FMT_Q),                       # DA + SA[47:32]=0
-        w("BFLD", ra=0, fmt=FMT_D),                       # SA[31:0] = 0
-        w("MOVE", rd=3, imm=0x88F7),
-        w("BFLD", ra=3, fmt=FMT_W),                       # EtherType
-        w("MOVE", rd=4, imm=0x13),
-        w("BFLD", ra=4, fmt=FMT_B),                       # ts=1, type=3
-        w("MOVE", rd=4, imm=0x02),
-        w("BFLD", ra=4, fmt=FMT_B),                       # version 2
-        w("MOVE", rd=4, imm=54),
-        w("BFLD", ra=4, fmt=FMT_W),                       # messageLength
-        w("BFLD", ra=0, fmt=FMT_W),                       # domain + reserved
-        w("BFLD", ra=0, fmt=FMT_W),                       # flags
-        w("BFLD", ra=0, fmt=FMT_Q),                       # correctionField
-        w("BFLD", ra=0, fmt=FMT_D),                       # reserved
-        w("BFLD", ra=0, fmt=FMT_Q),                       # srcPortIdentity
-        w("BFLD", ra=0, fmt=FMT_W),                       #   .portNumber
-        w("RDST", rd=5, imm=RG_BANK | 0, fmt=FMT_Q),      # echo sequenceId
-        w("BFLD", ra=5, fmt=FMT_W),                       #  (low 16 of w0…)
-        w("MOVE", rd=4, imm=0x05),
-        w("BFLD", ra=4, fmt=FMT_B),                       # control
-        w("MOVE", rd=4, imm=0x7F),
-        w("BFLD", ra=4, fmt=FMT_B),                       # logMessageInterval
-        # t2 = r14 (ingress ns) -> 48-bit seconds + 32-bit ns
-        w("MOVE", rd=6, imm=0x3B9ACA),
-        w("ALU", rd=6, ra=6, cnd=ALU_SHL, imm=8),         # 1e9
-        w("MD", rd=7, ra=14, rb=6, cnd=MD_DIVU),          # seconds
-        w("MD", rd=8, ra=7, rb=6, cnd=MD_MULS),           # sec * 1e9
-        w("ALU", rd=9, ra=14, rb=8, cnd=ALU_SUB),         # ns remainder
-        w("BFLD", ra=7, fmt=FMT_W),                       # sec[47:32] (lo16)
-        w("BFLD", ra=7, fmt=FMT_D),                       # sec[31:0]
-        w("BFLD", ra=9, fmt=FMT_D),                       # nanoseconds
-        w("BFLD", ra=0, fmt=FMT_Q),                       # reqPortIdentity
-        w("BFLD", ra=0, fmt=FMT_W),                       #   .portNumber
-        w("SEND"),
-        w("END"),
-    ]
+# ---- emit helpers ----------------------------------------------------------
+
+def e_const(p, rd, value):
+    """Load an up-to-64-bit constant via MOVE/SHL/OR chains."""
+    chunks = []
+    v = value
+    while True:
+        chunks.append(v & 0xFFFFFF)
+        v >>= 24
+        if v == 0:
+            break
+    chunks.reverse()
+    p.emit("MOVE", rd=rd, ra=0, imm=chunks[0])
+    for c in chunks[1:]:
+        p.emit("ALU", rd=rd, ra=rd, rb=0, cnd=ALU_SHL, imm=24)
+        if c:
+            p.emit("MOVE", rd=RT, ra=0, imm=c)
+            p.emit("ALU", rd=rd, ra=rd, rb=RT, cnd=ALU_OR)
+
+
+def e_guard_init(p, end_label):
+    """Skip the handler until the init leg has built the constants."""
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_INIT, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
+    p.emit("BRS", cnd=BRS_Z, label="run")
+    p.emit("BR", label=end_label)
+    p.label("run")
+
+
+def e_hdr(p, mtype, flags, seq_reg, logint, msglen):
+    """Bytes 0..47: eth header + 802.1AS common header. Cursor ends at 48."""
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_HDR8, fmt=FMT_Q)
+    p.emit("BFLD", ra=RC, fmt=FMT_Q)                 # DA + SA[47:32]
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_SALO, fmt=FMT_Q)
+    p.emit("BFLD", ra=RC, fmt=FMT_D)                 # SA[31:0]
+    p.emit("MOVE", rd=RT, ra=0, imm=0x88F7)
+    p.emit("BFLD", ra=RT, fmt=FMT_W)                 # EtherType
+    p.emit("MOVE", rd=RT, ra=0, imm=0x10 | mtype)
+    p.emit("BFLD", ra=RT, fmt=FMT_B)                 # transportSpecific|type
+    p.emit("MOVE", rd=RT, ra=0, imm=0x02)
+    p.emit("BFLD", ra=RT, fmt=FMT_B)                 # versionPTP
+    p.emit("MOVE", rd=RT, ra=0, imm=msglen)
+    p.emit("BFLD", ra=RT, fmt=FMT_W)                 # messageLength
+    p.emit("BFLD", ra=0, fmt=FMT_B)                  # domainNumber 0
+    p.emit("BFLD", ra=0, fmt=FMT_B)                  # reserved
+    if flags:
+        p.emit("MOVE", rd=RT, ra=0, imm=flags)
+        p.emit("BFLD", ra=RT, fmt=FMT_W)             # flags
+    else:
+        p.emit("BFLD", ra=0, fmt=FMT_W)
+    p.emit("BFLD", ra=0, fmt=FMT_Q)                  # correctionField
+    p.emit("BFLD", ra=0, fmt=FMT_D)                  # reserved
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    p.emit("BFLD", ra=RC, fmt=FMT_Q)                 # srcPortId.clockIdentity
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("BFLD", ra=RT, fmt=FMT_W)                 # srcPortId.portNumber
+    p.emit("BFLD", ra=seq_reg, fmt=FMT_W)            # sequenceId
+    p.emit("MOVE", rd=RT, ra=0, imm=5)
+    p.emit("BFLD", ra=RT, fmt=FMT_B)                 # control
+    p.emit("MOVE", rd=RT, ra=0, imm=logint)
+    p.emit("BFLD", ra=RT, fmt=FMT_B)                 # logMessageInterval
+
+
+def e_ts_fields(p, ns_reg):
+    """Emit a 1588 Timestamp (sec48 + ns32) from a 64-bit ns register."""
+    p.emit("RDST", rd=RP, imm=RG_SCR | S_1E9, fmt=FMT_Q)
+    p.emit("MD", rd=RSEC, ra=ns_reg, rb=RP, cnd=MD_DIVU)
+    p.emit("MD", rd=RT, ra=RSEC, rb=RP, cnd=MD_MULS)
+    p.emit("ALU", rd=RNS, ra=ns_reg, rb=RT, cnd=ALU_SUB)
+    p.emit("ALU", rd=RU, ra=RSEC, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("BFLD", ra=RU, fmt=FMT_W)                 # seconds[47:32]
+    p.emit("BFLD", ra=RSEC, fmt=FMT_D)               # seconds[31:0]
+    p.emit("BFLD", ra=RNS, fmt=FMT_D)                # nanoseconds
+
+
+def e_full_ts(p, rd):
+    """rd = bank w4 * 1e9 + bank w5 (their sec/ns to a 64-bit ns)."""
+    p.emit("RDST", rd=RSEC, imm=RG_BANK | 4, fmt=FMT_Q)
+    p.emit("RDST", rd=RP, imm=RG_SCR | S_1E9, fmt=FMT_Q)
+    p.emit("MD", rd=rd, ra=RSEC, rb=RP, cnd=MD_MULS)
+    p.emit("RDST", rd=RNS, imm=RG_BANK | 5, fmt=FMT_Q)
+    p.emit("ALU", rd=rd, ra=rd, rb=RNS, cnd=ALU_ADD)
+
+
+# ---- programs --------------------------------------------------------------
+
+def prog_rx_sync(base):
+    p = Prog(base)
+    p.emit("WRST", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
+    p.emit("RDST", rd=RA, imm=RG_BANK | 0, fmt=FMT_Q)
+    p.emit("WRST", ra=RA, imm=RG_SCR | S_HDR, fmt=FMT_Q)
+    p.emit("END")
     return p
 
 
-def prog_rx_pdresp():
-    return [
-        w("RDST", rd=1, imm=RG_BANK | 5, fmt=FMT_Q),      # t2 ns (receipt)
-        w("WRST", ra=1, imm=RG_SCR | 5, fmt=FMT_Q),
-        w("WRST", ra=14, imm=RG_SCR | 17, fmt=FMT_Q),     # t4 (ingress)
-        w("END"),
-    ]
+def prog_rx_followup(base):
+    p = Prog(base)
+    e_guard_init(p, "out")
+    e_full_ts(p, RA)                                  # preciseOrigin ns
+    p.emit("RDST", rd=RB, imm=RG_BANK | 1, fmt=FMT_Q)
+    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_SAR, imm=16)
+    p.emit("ALU", rd=RA, ra=RA, rb=RB, cnd=ALU_ADD)   # + correction ns
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
+    p.emit("ALU", rd=RA, ra=RA, rb=RB, cnd=ALU_ADD)   # + meanLinkDelay
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
+    p.emit("ALU", rd=RA, ra=RB, rb=RA, cnd=ALU_SUB)   # offset = trx - gm
+    p.emit("WRST", ra=RA, imm=RG_SCR | S_OFFSET, fmt=FMT_Q)
+    p.emit("WRST", ra=RA, imm=RG_PUB | 4, fmt=FMT_Q)
+    p.emit("COMMIT")
+    p.label("out")
+    p.emit("END")
+    return p
 
 
-def prog_rx_pdrfu():
-    return [
-        w("RDST", rd=1, imm=RG_SCR | 16, fmt=FMT_Q),      # t1 (egress)
-        w("RDST", rd=2, imm=RG_SCR | 17, fmt=FMT_Q),      # t4
-        w("RDST", rd=3, imm=RG_BANK | 5, fmt=FMT_Q),      # t3 ns
-        w("RDST", rd=4, imm=RG_SCR | 5, fmt=FMT_Q),       # t2
-        w("ALU", rd=5, ra=2, rb=1, cnd=ALU_SUB),          # t4 - t1
-        w("ALU", rd=6, ra=3, rb=4, cnd=ALU_SUB),          # t3 - t2
-        w("ALU", rd=7, ra=5, rb=6, cnd=ALU_SUB),
-        w("ALU", rd=7, ra=7, cnd=ALU_SHR, imm=1),         # /2
-        w("WRST", ra=7, imm=RG_SCR | 4, fmt=FMT_Q),       # meanLinkDelay
-        w("WRST", ra=7, imm=RG_PUB | 3, fmt=FMT_D),
-        w("COMMIT"),
-        w("END"),
-    ]
+def prog_rx_announce(base):
+    p = Prog(base)
+    p.emit("RDST", rd=RA, imm=RG_BANK | 9, fmt=FMT_Q)
+    p.emit("WRST", ra=RA, imm=RG_PUB | 0, fmt=FMT_Q)  # gm identity
+    p.emit("RDST", rd=RB, imm=RG_BANK | 2, fmt=FMT_Q)
+    p.emit("WRST", ra=RB, imm=RG_PUB | 1, fmt=FMT_Q)  # parent clock id
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)  # gm_present
+    p.emit("MOVE", rd=RT, ra=0, imm=3000)
+    p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)  # receipt timeout
+    p.emit("COMMIT")
+    p.emit("END")
+    return p
 
 
-def prog_rx_signal():
-    return [w("END")]
+def prog_rx_pdreq(base):
+    p = Prog(base)
+    e_guard_init(p, "out")
+    p.emit("RDST", rd=RA, imm=RG_BANK | 0, fmt=FMT_Q)
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_SHR, imm=32)   # their seq
+    p.emit("WRST", ra=RA, imm=RG_SCR | S_RQSEQ, fmt=FMT_Q)
+    p.emit("RDST", rd=RB, imm=RG_BANK | 2, fmt=FMT_Q)
+    p.emit("WRST", ra=RB, imm=RG_SCR | S_RQCID, fmt=FMT_Q)
+    p.emit("RDST", rd=RC, imm=RG_BANK | 3, fmt=FMT_Q)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_RQPN, fmt=FMT_Q)
+    e_hdr(p, 0x3, 0x0200, RA, 0x7F, 54)               # Pdelay_Resp, twoStep
+    e_ts_fields(p, RTS0)                              # t2 = ingress ts
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_RQCID, fmt=FMT_Q)
+    p.emit("BFLD", ra=RB, fmt=FMT_Q)                  # requesting cid
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_RQPN, fmt=FMT_Q)
+    p.emit("BFLD", ra=RC, fmt=FMT_W)                  # requesting port
+    p.emit("MOVE", rd=RT, ra=0, imm=2)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    p.emit("SEND")
+    p.label("out")
+    p.emit("END")
+    return p
 
 
-def prog_tx_ts():
-    return [
-        w("WRST", ra=14, imm=RG_SCR | 16, fmt=FMT_Q),     # t1/t3 capture
-        w("END"),
-    ]
+def prog_rx_pdresp(base):
+    p = Prog(base)
+    e_guard_init(p, "out")
+    # ours? requestingPortIdentity.clockIdentity must be our CID
+    p.emit("RDST", rd=RA, imm=RG_BANK | 6, fmt=FMT_Q)
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=RB, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="mine")
+    p.emit("BR", label="out")
+    p.label("mine")
+    e_full_ts(p, RA)                                  # t2 (their receipt)
+    p.emit("WRST", ra=RA, imm=RG_SCR | S_T2, fmt=FMT_Q)
+    p.emit("WRST", ra=RTS0, imm=RG_SCR | S_T4, fmt=FMT_Q)
+    p.label("out")
+    p.emit("END")
+    return p
 
 
-def prog_tmr():
-    return [
-        w("RDST", rd=1, imm=RG_SCR | 20, fmt=FMT_Q),
-        w("ALU", rd=1, ra=1, cnd=ALU_ADD, imm=1),         # cadence count
-        w("WRST", ra=1, imm=RG_SCR | 20, fmt=FMT_Q),
-        w("MOVE", rd=2, imm=1000),
-        w("WRST", ra=2, imm=RG_TMR | 0, fmt=FMT_D),       # re-arm 1 s
-        w("END"),
-    ]
+def prog_rx_pdrfu(base):
+    p = Prog(base)
+    e_guard_init(p, "out")
+    p.emit("RDST", rd=RA, imm=RG_BANK | 6, fmt=FMT_Q)
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=RB, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="mine")
+    p.emit("BR", label="out")
+    p.label("mine")
+    e_full_ts(p, RC)                                  # t3 (their origin)
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_T4, fmt=FMT_Q)
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_T1, fmt=FMT_Q)
+    p.emit("ALU", rd=RD_, ra=RA, rb=RB, cnd=ALU_SUB)  # t4 - t1
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_T2, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=RC, rb=RB, cnd=ALU_SUB)   # t3 - t2
+    p.emit("ALU", rd=RD_, ra=RD_, rb=RC, cnd=ALU_SUB)
+    p.emit("ALU", rd=RD_, ra=RD_, rb=0, cnd=ALU_SHR, imm=1)
+    p.emit("WRST", ra=RD_, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
+    p.emit("WRST", ra=RD_, imm=RG_PUB | 3, fmt=FMT_Q)
+    p.emit("COMMIT")
+    p.label("out")
+    p.emit("END")
+    return p
 
 
-def prog_tb_battery():
+def prog_rx_signal(base):
+    p = Prog(base)
+    p.emit("END")
+    return p
+
+
+def prog_tx_ts(base):
+    p = Prog(base)
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
+    p.emit("BRS", cnd=BRS_Z, label="t1")
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=2)
+    p.emit("BRS", cnd=BRS_Z, label="fu")
+    p.emit("END")
+    p.label("t1")                                     # our Pdelay_Req left
+    p.emit("WRST", ra=RTS0, imm=RG_SCR | S_T1, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    p.emit("END")
+    p.label("fu")                                     # our Pdelay_Resp left
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_RQSEQ, fmt=FMT_Q)
+    e_hdr(p, 0xA, 0x0000, RA, 0x7F, 54)               # Pdelay_Resp_FU
+    e_ts_fields(p, RTS0)                              # t3 = egress ts
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_RQCID, fmt=FMT_Q)
+    p.emit("BFLD", ra=RB, fmt=FMT_Q)
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_RQPN, fmt=FMT_Q)
+    p.emit("BFLD", ra=RC, fmt=FMT_W)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    p.emit("SEND")
+    p.emit("END")
+    return p
+
+
+def prog_tmr(base, mac):
+    cid = ((mac >> 24) << 40) | (0xFFFE << 24) | (mac & 0xFFFFFF)
+    hdr8 = (0x0180C200000E << 16) | ((mac >> 32) & 0xFFFF)
+    salo = mac & 0xFFFFFFFF
+    p = Prog(base)
+    # which slot fired? aux is r15 low16
+    p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="slot0")
+    p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=2)
+    p.emit("BRS", cnd=BRS_Z, label="anntmo")
+    p.emit("END")
+    p.label("anntmo")                                 # announce timed out
+    p.emit("WRST", ra=0, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("COMMIT")
+    p.emit("END")
+    p.label("slot0")
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_INIT, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
+    p.emit("BRS", cnd=BRS_Z, label="run")
+    # ---- init leg: constants + state zero, runs exactly once ----
+    p.emit("MOVE", rd=R0, ra=0, imm=0)                # r0 = 0 convention
+    e_const(p, RP, 1_000_000_000)
+    p.emit("WRST", ra=RP, imm=RG_SCR | S_1E9, fmt=FMT_Q)
+    e_const(p, RC, cid)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    e_const(p, RC, hdr8)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_HDR8, fmt=FMT_Q)
+    e_const(p, RC, salo)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_SALO, fmt=FMT_Q)
+    for s in (S_SYNCTS, S_OFFSET, S_PDELAY, S_T2, S_T1, S_T4, S_PEND,
+              S_TICK, S_MYSEQ):
+        p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_INIT, fmt=FMT_Q)
+    p.label("run")
+    p.emit("MOVE", rd=RT, ra=0, imm=1000)             # own cadence re-arm
+    p.emit("WRST", ra=RT, imm=RG_TMR | 0, fmt=FMT_Q)
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_TICK, fmt=FMT_Q)
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_ADD, imm=1)
+    p.emit("WRST", ra=RA, imm=RG_SCR | S_TICK, fmt=FMT_Q)
+    # send Pdelay_Req unless an egress timestamp is still owed
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="send")
+    p.emit("END")
+    p.label("send")
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
+    e_hdr(p, 0x2, 0x0000, RA, 0x00, 54)               # Pdelay_Req
+    p.emit("BFLD", ra=0, fmt=FMT_Q)                   # 20 reserved bytes
+    p.emit("BFLD", ra=0, fmt=FMT_Q)
+    p.emit("BFLD", ra=0, fmt=FMT_D)
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_ADD, imm=1)
+    p.emit("WRST", ra=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    p.emit("SEND")
+    p.emit("END")
+    return p
+
+
+def prog_tb_battery(base):
     """r14 = A, r13 = B; writes 12 results to scratch 0..11 (tb/ucpu)."""
-    p = []
+    p = Prog(base)
     for n, cnd in enumerate([ALU_ADD, ALU_SUB, ALU_AND, ALU_OR, ALU_XOR,
                              ALU_SHL, ALU_SHR, ALU_SAR]):
-        p.append(w("ALU", rd=1, ra=14, rb=13, cnd=cnd))
-        p.append(w("WRST", ra=1, imm=RG_SCR | n, fmt=FMT_Q))
-    p.append(w("MD", rd=1, ra=14, rb=13, cnd=MD_MULS))
-    p.append(w("WRST", ra=1, imm=RG_SCR | 8, fmt=FMT_Q))
-    p.append(w("MD", rd=1, ra=14, rb=13, cnd=MD_DIVU))
-    p.append(w("WRST", ra=1, imm=RG_SCR | 9, fmt=FMT_Q))
-    p.append(w("ALU", rd=1, ra=14, cnd=ALU_ADD, imm=0xABC))
-    p.append(w("WRST", ra=1, imm=RG_SCR | 10, fmt=FMT_Q))
-    p.append(w("ALU", rd=1, ra=14, cnd=ALU_SHR, imm=16))
-    p.append(w("WRST", ra=1, imm=RG_SCR | 11, fmt=FMT_Q))
-    p.append(w("END"))
+        p.emit("ALU", rd=1, ra=14, rb=13, cnd=cnd)
+        p.emit("WRST", ra=1, imm=RG_SCR | n, fmt=FMT_Q)
+    p.emit("MD", rd=1, ra=14, rb=13, cnd=MD_MULS)
+    p.emit("WRST", ra=1, imm=RG_SCR | 8, fmt=FMT_Q)
+    p.emit("MD", rd=1, ra=14, rb=13, cnd=MD_DIVU)
+    p.emit("WRST", ra=1, imm=RG_SCR | 9, fmt=FMT_Q)
+    p.emit("ALU", rd=1, ra=14, rb=0, cnd=ALU_ADD, imm=0xABC)
+    p.emit("WRST", ra=1, imm=RG_SCR | 10, fmt=FMT_Q)
+    p.emit("ALU", rd=1, ra=14, rb=0, cnd=ALU_SHR, imm=16)
+    p.emit("WRST", ra=1, imm=RG_SCR | 11, fmt=FMT_Q)
+    p.emit("END")
     return p
 
 
-ENTRIES = [
-    (16, prog_rx_sync), (64, prog_rx_followup), (128, prog_rx_announce),
-    (192, prog_rx_pdreq), (256, prog_rx_pdresp), (320, prog_rx_pdrfu),
-    (384, prog_rx_signal), (448, prog_tx_ts), (512, prog_tmr),
-    (768, prog_tb_battery),
-]
-
-
-def build():
+def build(mac):
+    entries = [
+        (16, prog_rx_sync), (64, prog_rx_followup), (128, prog_rx_announce),
+        (192, prog_rx_pdreq), (256, prog_rx_pdresp), (320, prog_rx_pdrfu),
+        (384, prog_rx_signal), (448, prog_tx_ts),
+        (512, lambda b: prog_tmr(b, mac)), (768, prog_tb_battery),
+    ]
     rom = [None] * DEPTH
     used = 0
-    for base, fn in ENTRIES:
-        words = fn()
-        assert base + len(words) <= DEPTH
+    ends = sorted(b for b, _ in entries) + [DEPTH]
+    for base, fn in entries:
+        words = fn(base).words()
+        limit = min(e for e in ends if e > base)
+        assert base + len(words) <= limit, \
+            f"program at {base} is {len(words)} words, next entry at {limit}"
         for i, word in enumerate(words):
-            assert rom[base + i] is None, f"overlap at {base + i}"
+            assert rom[base + i] is None
             rom[base + i] = word
         used += len(words)
     for i in range(DEPTH):
@@ -259,13 +451,15 @@ def build():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", default="gptp_ucode.hex")
+    ap.add_argument("--mac", type=lambda s: int(s, 0), default=0x02A1B2C3D4E5,
+                    help="station source MAC (48-bit)")
     args = ap.parse_args()
-    rom, used = build()
+    rom, used = build(args.mac)
     with open(args.out, "w", encoding="ascii") as f:
         for word in rom:
             f.write(f"{word:012X}\n")
     print(f"{args.out}: {DEPTH} words, {used} real "
-          f"({100.0 * used / DEPTH:.1f}%), rest deterministic fill")
+          f"({100.0 * used / DEPTH:.1f}%), mac {args.mac:012X}")
 
 
 if __name__ == "__main__":
