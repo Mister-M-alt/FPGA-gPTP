@@ -48,6 +48,14 @@ wires, one clock domain, byte in / byte out:
 WNS at 100 MHz, OOC: **+1.898 ns, 0 failing endpoints**. Zero critical
 warnings in either synthesis log.
 
+**Re-measured after µcode v2 + the bench round (same day):** the engine
+grew a fifth publish word (sync offset) and the timer boot-arm —
+**2,944 LUT** / 2,205 FF / 1.5 tiles / 4 DSP, WNS unchanged. The µCPU is
+byte-identical in area (1,701): µcode revisions cost ROM words, not LUTs,
+exactly as claimed. On the Arty A7-100T bench build the whole plane plus
+MII gaskets, PHC and UART reporter placed at 3,726 LUT with WNS
++0.375 ns — see `docs/BENCH_FIRSTLIGHT.md` for what it did on the wire.
+
 (The µCPU reads 1,855 in context vs 1,701 standalone — cross-boundary
 optimization variance of the same kind the protocol-processor record
 documents in the other direction.)
