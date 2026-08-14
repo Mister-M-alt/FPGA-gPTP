@@ -1,0 +1,482 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kebag Logic
+ * SPDX-License-Identifier: CERN-OHL-W-2.0
+ */
+//---------------------------------------------------------------------------//
+//  File        : KL_gptp_engine.sv
+//  Project     : 802.1AS gPTP protocol processor (time-sync plane)
+//
+//  Description : The time-sync plane, one clock domain, one byte in / one
+//                byte out — the KL_pp_shadow integration shape. Contains:
+//
+//                  KL_gptp_rx_parser  802.1AS receive -> message bank
+//                  KL_gptp_ucpu       micro-coded handlers (grown ISA)
+//                  KL_gptp_tx_slot    PDU build slot + byte serializer
+//                  KL_gptp_timer      ms deadline service, 8 slots
+//
+//                and the engine-owned state the µCPU reaches through its
+//                one state port, region-selected by st_addr[19:16]:
+//
+//                  0  message bank      RO  (parser-written, 32 x 64)
+//                  1  timestamp regs    RO  (0 ingress ts, 1 egress ts)
+//                  2  scratch RAM       RW  (32 x 64, protocol state)
+//                  3  publish bank      RW  (0 gm id, 1 parent id,
+//                                            2 flags, 3 pdelay ns)
+//                  4  PHC control       WO  (0 rate addend, 1 step)
+//                  5  timer arm         WO  (slot = addr, delta ms = data)
+//
+//                gather: sel 0 = live PHC ns snapshot, sel 1 = ms now.
+//
+//                The publish bank IS the software contract this plane
+//                retires (GM identity, asCapable/sync verdicts, peer
+//                delay): what a daemon used to poll and mirror into CSRs
+//                becomes wires, latched by OP_COMMIT.
+//
+//                Events dispatch in arrival order through a 4-deep queue;
+//                parser wins a same-cycle push, an egress-timestamp
+//                return pends until pushed, the timer waits on its ready.
+//                Dispatch is gated on the serializer being idle so a
+//                handler never builds into a slot still on the wire.
+//                r14 carries the frame's ingress timestamp (or the
+//                egress stamp for EV_TX_TS), r13 the PHC at dispatch.
+//---------------------------------------------------------------------------//
+`default_nettype none
+
+module KL_gptp_engine
+  import gptp_ucpu_pkg::*;
+#(
+    parameter string       UCODE_HEX_P = "gptp_ucode.hex",
+    parameter int unsigned CLK_HZ_P    = 100_000_000
+) (
+    input  wire         clk_i,
+    input  wire         rst_n,
+
+    //! RX byte face: pre-classified 0x88F7 frames, DA first, FCS-checked
+    input  wire         rx_valid_i,
+    input  wire  [7:0]  rx_data_i,
+    input  wire         rx_sof_i,
+    input  wire         rx_eof_i,
+    input  wire         rx_err_i,
+    input  wire  [63:0] rx_ts_i,       //! ingress timestamp, stable at sof
+
+    //! TX byte face
+    output logic        tx_valid_o,
+    output logic [7:0]  tx_data_o,
+    output logic        tx_sof_o,
+    output logic        tx_eof_o,
+    input  wire         tx_ready_i,
+
+    //! egress timestamp return for the frame last sent
+    input  wire         txts_valid_i,
+    input  wire  [63:0] txts_ns_i,
+    input  wire  [15:0] txts_seq_i,
+
+    //! PHC face (the parent timestamp_counter's knobs)
+    input  wire  [63:0] phc_ns_i,
+    output logic        phc_addend_we_o,
+    output logic [31:0] phc_addend_o,
+    output logic        phc_step_we_o,
+    output logic [63:0] phc_step_o,
+
+    //! publish bank as wires — the retired software contract
+    output logic [63:0] pub_gm_id_o,
+    output logic [63:0] pub_parent_id_o,
+    output logic [31:0] pub_flags_o,   //! asCapable, sync ok, gm present…
+    output logic [31:0] pub_pdelay_ns_o,
+    output logic        pub_commit_o,
+
+    //! reserved effect strobes (base-ISA compat, unused by gPTP µcode)
+    output logic        eff_nvm_stb_o,
+    output logic  [7:0] eff_nvm_mark_o,
+    output logic        eff_notify_stb_o,
+    output logic  [3:0] eff_notify_class_o,
+
+    //! diagnostics
+    output logic [15:0] dbg_rx_drop_o,
+    output logic [15:0] dbg_ev_drop_o,
+    output logic        dbg_busy_o,
+    output logic  [4:0] dbg_status_o
+);
+
+  // ---------------------------------------------------------- RX parser
+  logic        bank_we_w;
+  logic [4:0]  bank_addr_w;
+  logic [63:0] bank_wdata_w;
+  logic        pev_valid_w;
+  logic [7:0]  pev_code_w;
+  logic [15:0] pev_seq_w;
+
+  KL_gptp_rx_parser u_parser (
+      .clk_i        (clk_i),
+      .rst_n        (rst_n),
+      .rx_valid_i   (rx_valid_i),
+      .rx_data_i    (rx_data_i),
+      .rx_sof_i     (rx_sof_i),
+      .rx_eof_i     (rx_eof_i),
+      .rx_err_i     (rx_err_i),
+      .bank_we_o    (bank_we_w),
+      .bank_addr_o  (bank_addr_w),
+      .bank_wdata_o (bank_wdata_w),
+      .ev_valid_o   (pev_valid_w),
+      .ev_code_o    (pev_code_w),
+      .ev_seq_o     (pev_seq_w),
+      .drop_cnt_o   (dbg_rx_drop_o)
+  );
+
+  // -------------------------------------------------- engine state RAMs
+  (* ram_style = "distributed" *) logic [63:0] bank_r    [0:31];
+  (* ram_style = "distributed" *) logic [63:0] scratch_r [0:31];
+
+  always_ff @(posedge clk_i) begin : bank_write
+    if (bank_we_w) bank_r[bank_addr_w] <= bank_wdata_w;
+  end
+
+  logic [63:0] rxts_r, txts_r;
+  always_ff @(posedge clk_i) begin : ts_latch
+    if (!rst_n) begin
+      rxts_r <= '0;
+      txts_r <= '0;
+    end else begin
+      if (rx_valid_i && rx_sof_i) rxts_r <= rx_ts_i;
+      if (txts_valid_i)           txts_r <= txts_ns_i;
+    end
+  end
+
+  // ------------------------------------------------------------- timer
+  logic        tmr_arm_we_w;
+  logic [2:0]  tmr_arm_slot_w;
+  logic [31:0] tmr_arm_delta_w;
+  logic [31:0] ms_now_w;
+  logic        tev_valid_w;
+  logic [2:0]  tev_slot_w;
+  logic        tev_ready_w;
+
+  KL_gptp_timer #(
+      .CLK_HZ_P (CLK_HZ_P),
+      .SLOTS_P  (8)
+  ) u_timer (
+      .clk_i          (clk_i),
+      .rst_n          (rst_n),
+      .arm_we_i       (tmr_arm_we_w),
+      .arm_slot_i     (tmr_arm_slot_w),
+      .arm_delta_ms_i (tmr_arm_delta_w),
+      .ms_now_o       (ms_now_w),
+      .ev_valid_o     (tev_valid_w),
+      .ev_slot_o      (tev_slot_w),
+      .ev_ready_i     (tev_ready_w)
+  );
+
+  // ------------------------------------------------------- event queue
+  //! 4 deep, {code, seq, aux}; parser wins a same-cycle push, a TX
+  //! timestamp return pends, the timer waits on its own ready
+  logic [39:0] evq_r [0:3];
+  logic [1:0]  evq_wp_r, evq_rp_r;
+  logic [2:0]  evq_lvl_r;
+  logic [15:0] ev_drop_r;
+  logic        txts_pend_r;
+  logic [15:0] txts_pend_seq_r;
+
+  logic evq_full_w, evq_empty_w;
+  assign evq_full_w  = (evq_lvl_r == 3'd4);
+  assign evq_empty_w = (evq_lvl_r == 3'd0);
+
+  logic        push_w;
+  logic [39:0] push_data_w;
+  always_comb begin : push_arb
+    push_w      = 1'b0;
+    push_data_w = '0;
+    tev_ready_w = 1'b0;
+    if (pev_valid_w) begin
+      push_w      = !evq_full_w;
+      push_data_w = {pev_code_w, pev_seq_w, 16'd0};
+    end else if (txts_pend_r) begin
+      push_w      = !evq_full_w;
+      push_data_w = {EV_TX_TS_C, txts_pend_seq_r, 16'd0};
+    end else if (tev_valid_w) begin
+      push_w      = !evq_full_w;
+      push_data_w = {EV_TMR_C, 16'd0, 13'd0, tev_slot_w};
+      tev_ready_w = !evq_full_w;
+    end
+  end
+
+  logic pop_w;
+
+  always_ff @(posedge clk_i) begin : evq
+    if (!rst_n) begin
+      evq_wp_r        <= '0;
+      evq_rp_r        <= '0;
+      evq_lvl_r       <= '0;
+      ev_drop_r       <= '0;
+      txts_pend_r     <= 1'b0;
+      txts_pend_seq_r <= '0;
+    end else begin
+      if (push_w) begin
+        evq_r[evq_wp_r] <= push_data_w;
+        evq_wp_r        <= evq_wp_r + 2'd1;
+      end
+      if (pop_w) evq_rp_r <= evq_rp_r + 2'd1;
+      evq_lvl_r <= evq_lvl_r + (push_w ? 3'd1 : 3'd0)
+                             - (pop_w  ? 3'd1 : 3'd0);
+
+      if (pev_valid_w && evq_full_w) ev_drop_r <= ev_drop_r + 16'd1;
+
+      if (txts_valid_i) begin
+        txts_pend_r     <= 1'b1;
+        txts_pend_seq_r <= txts_seq_i;
+      end else if (!pev_valid_w && txts_pend_r && !evq_full_w) begin
+        txts_pend_r <= 1'b0;
+      end
+    end
+  end
+
+  assign dbg_ev_drop_o = ev_drop_r;
+
+  // --------------------------------------------------------- dispatch
+  logic [39:0] ev_head_w;
+  assign ev_head_w = evq_r[evq_rp_r];
+
+  //! µPC entry table — matches hdl/ucode/gen_gptp_ucode.py
+  logic [UPC_W_C-1:0] entry_w;
+  always_comb begin : entry_table
+    unique case (ev_head_w[39:32])
+      EV_RX_SYNC_C:     entry_w = UPC_W_C'(16);
+      EV_RX_FOLLOWUP_C: entry_w = UPC_W_C'(64);
+      EV_RX_ANNOUNCE_C: entry_w = UPC_W_C'(128);
+      EV_RX_PDREQ_C:    entry_w = UPC_W_C'(192);
+      EV_RX_PDRESP_C:   entry_w = UPC_W_C'(256);
+      EV_RX_PDRFU_C:    entry_w = UPC_W_C'(320);
+      EV_RX_SIGNAL_C:   entry_w = UPC_W_C'(384);
+      EV_TX_TS_C:       entry_w = UPC_W_C'(448);
+      default:          entry_w = UPC_W_C'(512);   // EV_TMR_C
+    endcase
+  end
+
+  logic disp_ready_w;
+  logic ser_idle_w;
+
+  assign pop_w = !evq_empty_w && disp_ready_w && ser_idle_w;
+
+  logic        disp_valid_r;
+  logic [UPC_W_C-1:0] disp_upc_r;
+  logic [63:0] disp_ev_r, disp_ts0_r, disp_ts1_r;
+
+  always_ff @(posedge clk_i) begin : dispatch
+    if (!rst_n) begin
+      disp_valid_r <= 1'b0;
+      disp_upc_r   <= '0;
+      disp_ev_r    <= '0;
+      disp_ts0_r   <= '0;
+      disp_ts1_r   <= '0;
+    end else begin
+      disp_valid_r <= pop_w;
+      if (pop_w) begin
+        disp_upc_r <= entry_w;
+        disp_ev_r  <= {24'd0, ev_head_w};
+        disp_ts0_r <= (ev_head_w[39:32] == EV_TX_TS_C) ? txts_r
+                    : (ev_head_w[39:32] == EV_TMR_C)
+                        ? {32'd0, ms_now_w}
+                        : rxts_r;
+        disp_ts1_r <= phc_ns_i;
+      end
+    end
+  end
+
+  // ------------------------------------------------------------- µCPU
+  logic        st_req_w, st_we_w, st_name_w;
+  logic [19:0] st_addr_w;
+  logic [63:0] st_wdata_w;
+  logic  [7:0] st_wstrb_w;
+  logic        st_rvalid_r;
+  logic [63:0] st_rdata_r;
+  logic        gx_req_w;
+  logic  [7:0] gx_sel_w;
+  logic        gx_valid_r;
+  logic [63:0] gx_data_r;
+  logic        rb_we_w;
+  logic  [9:0] rb_addr_w;
+  logic [31:0] rb_wdata_w;
+  logic  [3:0] rb_wstrb_w;
+  logic        rb_ready_w;
+  logic        resp_send_w;
+  logic [10:0] resp_len_w;
+  logic  [4:0] resp_status_w;
+  logic        ucpu_tx_ready_w;
+  logic        ucpu_done_w;
+  logic [UPC_W_C-1:0] ucpu_dbg_upc_w;
+  logic        ucpu_dbg_ovf_w;
+
+  KL_gptp_ucpu #(
+      .UCODE_HEX_P (UCODE_HEX_P)
+  ) u_ucpu (
+      .clk_i              (clk_i),
+      .rst_n              (rst_n),
+      .disp_valid_i       (disp_valid_r),
+      .disp_ready_o       (disp_ready_w),
+      .disp_upc_i         (disp_upc_r),
+      .disp_ev_i          (disp_ev_r),
+      .disp_ts0_i         (disp_ts0_r),
+      .disp_ts1_i         (disp_ts1_r),
+      .st_req_o           (st_req_w),
+      .st_we_o            (st_we_w),
+      .st_name_o          (st_name_w),
+      .st_addr_o          (st_addr_w),
+      .st_wdata_o         (st_wdata_w),
+      .st_wstrb_o         (st_wstrb_w),
+      .st_ready_i         (1'b1),
+      .st_rvalid_i        (st_rvalid_r),
+      .st_rdata_i         (st_rdata_r),
+      .st_err_i           (1'b0),
+      .gx_req_o           (gx_req_w),
+      .gx_sel_o           (gx_sel_w),
+      .gx_valid_i         (gx_valid_r),
+      .gx_data_i          (gx_data_r),
+      .lock_held_i        (1'b0),
+      .lock_ctlr_i        (64'd0),
+      .rb_we_o            (rb_we_w),
+      .rb_addr_o          (rb_addr_w),
+      .rb_wdata_o         (rb_wdata_w),
+      .rb_wstrb_o         (rb_wstrb_w),
+      .rb_ready_i         (rb_ready_w),
+      .resp_send_o        (resp_send_w),
+      .resp_len_o         (resp_len_w),
+      .resp_status_o      (resp_status_w),
+      .tx_ready_i         (ucpu_tx_ready_w),
+      .eff_commit_o       (pub_commit_o),
+      .eff_nvm_mark_o     (eff_nvm_mark_o),
+      .eff_nvm_stb_o      (eff_nvm_stb_o),
+      .eff_notify_class_o (eff_notify_class_o),
+      .eff_notify_stb_o   (eff_notify_stb_o),
+      .busy_o             (dbg_busy_o),
+      .done_o             (ucpu_done_w),
+      .dbg_upc_o          (ucpu_dbg_upc_w),
+      .dbg_status_o       (dbg_status_o),
+      .dbg_ovf_o          (ucpu_dbg_ovf_w)
+  );
+
+  // -------------------------------------------- state port region map
+  logic [63:0] pub_gm_r, pub_parent_r;
+  logic [31:0] pub_flags_r, pub_pdelay_r;
+
+  logic [63:0] st_rd_mux_w;
+  always_comb begin : st_read_mux
+    unique case (st_addr_w[19:16])
+      4'd0: st_rd_mux_w = bank_r[st_addr_w[4:0]];
+      4'd1: st_rd_mux_w = st_addr_w[0] ? txts_r : rxts_r;
+      4'd2: st_rd_mux_w = scratch_r[st_addr_w[4:0]];
+      4'd3: begin
+        unique case (st_addr_w[1:0])
+          2'd0: st_rd_mux_w = pub_gm_r;
+          2'd1: st_rd_mux_w = pub_parent_r;
+          2'd2: st_rd_mux_w = {32'd0, pub_flags_r};
+          default: st_rd_mux_w = {32'd0, pub_pdelay_r};
+        endcase
+      end
+      default: st_rd_mux_w = 64'd0;
+    endcase
+  end
+
+  always_ff @(posedge clk_i) begin : st_port
+    if (!rst_n) begin
+      st_rvalid_r     <= 1'b0;
+      st_rdata_r      <= '0;
+      gx_valid_r      <= 1'b0;
+      gx_data_r       <= '0;
+      pub_gm_r        <= '0;
+      pub_parent_r    <= '0;
+      pub_flags_r     <= '0;
+      pub_pdelay_r    <= '0;
+      phc_addend_we_o <= 1'b0;
+      phc_addend_o    <= '0;
+      phc_step_we_o   <= 1'b0;
+      phc_step_o      <= '0;
+      tmr_arm_we_w    <= 1'b0;
+      tmr_arm_slot_w  <= '0;
+      tmr_arm_delta_w <= '0;
+    end else begin
+      phc_addend_we_o <= 1'b0;
+      phc_step_we_o   <= 1'b0;
+      tmr_arm_we_w    <= 1'b0;
+
+      // one-shot read completion
+      st_rvalid_r <= st_req_w && !st_we_w && !st_rvalid_r;
+      if (st_req_w && !st_we_w) st_rdata_r <= st_rd_mux_w;
+
+      // writes: single-cycle, full-width (µcode contract; the byte
+      // strobes exist for the base ISA's sake and are not honoured here)
+      if (st_req_w && st_we_w) begin
+        unique case (st_addr_w[19:16])
+          4'd2: scratch_r[st_addr_w[4:0]] <= st_wdata_w;
+          4'd3: begin
+            unique case (st_addr_w[1:0])
+              2'd0: pub_gm_r     <= st_wdata_w;
+              2'd1: pub_parent_r <= st_wdata_w;
+              2'd2: pub_flags_r  <= st_wdata_w[31:0];
+              default: pub_pdelay_r <= st_wdata_w[31:0];
+            endcase
+          end
+          4'd4: begin
+            if (st_addr_w[0]) begin
+              phc_step_we_o <= 1'b1;
+              phc_step_o    <= st_wdata_w;
+            end else begin
+              phc_addend_we_o <= 1'b1;
+              phc_addend_o    <= st_wdata_w[31:0];
+            end
+          end
+          4'd5: begin
+            tmr_arm_we_w    <= 1'b1;
+            tmr_arm_slot_w  <= st_addr_w[2:0];
+            tmr_arm_delta_w <= st_wdata_w[31:0];
+          end
+          default: ;
+        endcase
+      end
+
+      // gather: atomic snapshots
+      gx_valid_r <= gx_req_w && !gx_valid_r;
+      if (gx_req_w) begin
+        gx_data_r <= (gx_sel_w[3:0] == 4'd1) ? {32'd0, ms_now_w}
+                                             : phc_ns_i;
+      end
+    end
+  end
+
+  assign pub_gm_id_o     = pub_gm_r;
+  assign pub_parent_id_o = pub_parent_r;
+  assign pub_flags_o     = pub_flags_r;
+  assign pub_pdelay_ns_o = pub_pdelay_r;
+
+  // ------------------------------------------------------------ TX slot
+  KL_gptp_tx_slot u_txslot (
+      .clk_i      (clk_i),
+      .rst_n      (rst_n),
+      .rb_we_i    (rb_we_w),
+      .rb_addr_i  (rb_addr_w),
+      .rb_wdata_i (rb_wdata_w),
+      .rb_wstrb_i (rb_wstrb_w),
+      .rb_ready_o (rb_ready_w),
+      .send_i     (resp_send_w),
+      .send_len_i (resp_len_w),
+      .ser_idle_o (ser_idle_w),
+      .tx_valid_o (tx_valid_o),
+      .tx_data_o  (tx_data_o),
+      .tx_sof_o   (tx_sof_o),
+      .tx_eof_o   (tx_eof_o),
+      .tx_ready_i (tx_ready_i)
+  );
+
+  assign ucpu_tx_ready_w = ser_idle_w && rb_ready_w;
+
+  //! resp_status is engine-local bookkeeping; nothing on the wire face
+  //! consumes it (a gPTP PDU carries no status field)
+  logic [4:0] unused_status_w;
+  assign unused_status_w = resp_status_w;
+  logic unused_name_w;
+  assign unused_name_w = st_name_w;
+  logic [2:0] unused_strb_w;
+  assign unused_strb_w = st_wstrb_w[2:0];
+  logic unused_dbg_w;
+  assign unused_dbg_w = ucpu_done_w ^ (^ucpu_dbg_upc_w) ^ ucpu_dbg_ovf_w;
+
+endmodule : KL_gptp_engine
+`default_nettype wire

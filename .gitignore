@@ -1,0 +1,7 @@
+obj_dir/
+*.log
+*.jou
+*.rpt
+ucode.hex
+__pycache__/
+.Xil/
