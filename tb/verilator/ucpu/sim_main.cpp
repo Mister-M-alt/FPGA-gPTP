@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
     if ((uint32_t)b == 0) b |= 1;        // DIVU: µcode guards div-by-0
 
     rec.clear();
-    dut->disp_upc_i  = 768;
+    dut->disp_upc_i  = 704;
     dut->disp_ev_i   = 0x0102030405060708ull;
     dut->disp_ts0_i  = a;                // -> r14
     dut->disp_ts1_i  = b;                // -> r13

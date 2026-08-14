@@ -84,6 +84,7 @@ module KL_gptp_engine
     output logic [31:0] pub_flags_o,   //! asCapable, sync ok, gm present…
     output logic [31:0] pub_pdelay_ns_o,
     output logic [31:0] pub_offset_o,  //! last sync offset, ns (signed)
+    output logic [63:0] pub_annq_o,    //! last received announce vector, raw
     output logic        pub_commit_o,
 
     //! reserved effect strobes (base-ISA compat, unused by gPTP µcode)
@@ -263,10 +264,17 @@ module KL_gptp_engine
 
   logic disp_ready_w;
   logic ser_idle_w;
+  logic disp_valid_r;
 
-  assign pop_w = !evq_empty_w && disp_ready_w && ser_idle_w;
+  //! one pop per accepted dispatch: the µCPU acknowledges by leaving
+  //! IDLE (disp_ready falls) one cycle after valid — popping again while
+  //! valid is still up would clobber the preload operands mid-handshake
+  //! and silently eat the second event (the bug the 44-check engine
+  //! suite caught: become-master ran with a TX-timestamp event's
+  //! operands and the timestamp event vanished)
+  assign pop_w = !evq_empty_w && disp_ready_w && ser_idle_w &&
+                 !disp_valid_r;
 
-  logic        disp_valid_r;
   logic [UPC_W_C-1:0] disp_upc_r;
   logic [63:0] disp_ev_r, disp_ts0_r, disp_ts1_r;
 
@@ -278,7 +286,8 @@ module KL_gptp_engine
       disp_ts0_r   <= '0;
       disp_ts1_r   <= '0;
     end else begin
-      disp_valid_r <= pop_w;
+      if (pop_w)               disp_valid_r <= 1'b1;
+      else if (!disp_ready_w)  disp_valid_r <= 1'b0;   // accepted
       if (pop_w) begin
         disp_upc_r <= entry_w;
         disp_ev_r  <= {24'd0, ev_head_w};
@@ -364,7 +373,7 @@ module KL_gptp_engine
   );
 
   // -------------------------------------------- state port region map
-  logic [63:0] pub_gm_r, pub_parent_r;
+  logic [63:0] pub_gm_r, pub_parent_r, pub_annq_r;
   logic [31:0] pub_flags_r, pub_pdelay_r, pub_offset_r;
 
   logic [63:0] st_rd_mux_w;
@@ -380,6 +389,7 @@ module KL_gptp_engine
           3'd2: st_rd_mux_w = {32'd0, pub_flags_r};
           3'd3: st_rd_mux_w = {32'd0, pub_pdelay_r};
           3'd4: st_rd_mux_w = {32'd0, pub_offset_r};
+          3'd5: st_rd_mux_w = pub_annq_r;
           default: st_rd_mux_w = 64'd0;
         endcase
       end
@@ -404,6 +414,7 @@ module KL_gptp_engine
       pub_flags_r     <= '0;
       pub_pdelay_r    <= '0;
       pub_offset_r    <= '0;
+      pub_annq_r      <= '0;
       boot_done_r     <= 1'b0;
       boot_cnt_r      <= '0;
       phc_addend_we_o <= 1'b0;
@@ -444,6 +455,7 @@ module KL_gptp_engine
               3'd2: pub_flags_r  <= st_wdata_w[31:0];
               3'd3: pub_pdelay_r <= st_wdata_w[31:0];
               3'd4: pub_offset_r <= st_wdata_w[31:0];
+              3'd5: pub_annq_r   <= st_wdata_w;
               default: ;
             endcase
           end
@@ -479,6 +491,7 @@ module KL_gptp_engine
   assign pub_flags_o     = pub_flags_r;
   assign pub_pdelay_ns_o = pub_pdelay_r;
   assign pub_offset_o    = pub_offset_r;
+  assign pub_annq_o      = pub_annq_r;
 
   // ------------------------------------------------------------ TX slot
   KL_gptp_tx_slot u_txslot (

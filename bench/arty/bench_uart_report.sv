@@ -29,6 +29,7 @@ module bench_uart_report #(
 
     input  wire  [63:0] gm_i,
     input  wire  [63:0] parent_i,
+    input  wire  [63:0] annq_i,
     input  wire  [7:0]  flags_i,
     input  wire  [31:0] pdelay_i,
     input  wire  [31:0] offset_i,
@@ -44,7 +45,7 @@ module bench_uart_report #(
   localparam int unsigned DIV_C = CLK_HZ_P / BAUD_P;
 
   // ---- field table: {label, width-in-nibbles, source} --------------------
-  localparam int unsigned NFIELDS_C = 11;
+  localparam int unsigned NFIELDS_C = 12;
   logic [7:0]  sec_r;
   logic [63:0] fld_w [0:NFIELDS_C-1];
   logic [7:0]  lbl_w [0:NFIELDS_C-1];
@@ -54,14 +55,15 @@ module bench_uart_report #(
     lbl_w[0]  = "S"; nib_w[0]  = 5'd2;  fld_w[0]  = {56'd0, sec_r};
     lbl_w[1]  = "G"; nib_w[1]  = 5'd16; fld_w[1]  = gm_i;
     lbl_w[2]  = "P"; nib_w[2]  = 5'd16; fld_w[2]  = parent_i;
-    lbl_w[3]  = "F"; nib_w[3]  = 5'd2;  fld_w[3]  = {56'd0, flags_i};
-    lbl_w[4]  = "D"; nib_w[4]  = 5'd8;  fld_w[4]  = {32'd0, pdelay_i};
-    lbl_w[5]  = "O"; nib_w[5]  = 5'd8;  fld_w[5]  = {32'd0, offset_i};
-    lbl_w[6]  = "R"; nib_w[6]  = 5'd4;  fld_w[6]  = {48'd0, rxf_i};
-    lbl_w[7]  = "C"; nib_w[7]  = 5'd4;  fld_w[7]  = {48'd0, crcbad_i};
-    lbl_w[8]  = "Q"; nib_w[8]  = 5'd4;  fld_w[8]  = {48'd0, pdrop_i};
-    lbl_w[9]  = "E"; nib_w[9]  = 5'd4;  fld_w[9]  = {48'd0, evdrop_i};
-    lbl_w[10] = "T"; nib_w[10] = 5'd4;  fld_w[10] = {48'd0, txf_i};
+    lbl_w[3]  = "A"; nib_w[3]  = 5'd16; fld_w[3]  = annq_i;
+    lbl_w[4]  = "F"; nib_w[4]  = 5'd2;  fld_w[4]  = {56'd0, flags_i};
+    lbl_w[5]  = "D"; nib_w[5]  = 5'd8;  fld_w[5]  = {32'd0, pdelay_i};
+    lbl_w[6]  = "O"; nib_w[6]  = 5'd8;  fld_w[6]  = {32'd0, offset_i};
+    lbl_w[7]  = "R"; nib_w[7]  = 5'd4;  fld_w[7]  = {48'd0, rxf_i};
+    lbl_w[8]  = "C"; nib_w[8]  = 5'd4;  fld_w[8]  = {48'd0, crcbad_i};
+    lbl_w[9]  = "Q"; nib_w[9]  = 5'd4;  fld_w[9]  = {48'd0, pdrop_i};
+    lbl_w[10] = "E"; nib_w[10] = 5'd4;  fld_w[10] = {48'd0, evdrop_i};
+    lbl_w[11] = "T"; nib_w[11] = 5'd4;  fld_w[11] = {48'd0, txf_i};
   end
 
   // ---- 1 Hz trigger ------------------------------------------------------

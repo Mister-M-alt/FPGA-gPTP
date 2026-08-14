@@ -202,7 +202,7 @@ module bench_arty_top (
   end
 
   // ------------------------------------------------------------ engine
-  logic [63:0] pub_gm_w, pub_parent_w;
+  logic [63:0] pub_gm_w, pub_parent_w, pub_annq_w;
   logic [31:0] pub_flags_w, pub_pd_w, pub_off_w;
   logic [15:0] pdrop_w, evdrop_w;
 
@@ -236,6 +236,7 @@ module bench_arty_top (
       .pub_flags_o        (pub_flags_w),
       .pub_pdelay_ns_o    (pub_pd_w),
       .pub_offset_o       (pub_off_w),
+      .pub_annq_o         (pub_annq_w),
       .pub_commit_o       (),
       .eff_nvm_stb_o      (),
       .eff_nvm_mark_o     (),
@@ -253,6 +254,7 @@ module bench_arty_top (
       .rst_n     (rst_n),
       .gm_i      (pub_gm_w),
       .parent_i  (pub_parent_w),
+      .annq_i    (pub_annq_w),
       .flags_i   (pub_flags_w[7:0]),
       .pdelay_i  (pub_pd_w),
       .offset_i  (pub_off_w),
