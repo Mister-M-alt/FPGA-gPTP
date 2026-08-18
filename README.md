@@ -18,10 +18,14 @@ two-node subset, Announce with path trace, two-step Sync + Follow_Up,
 bilateral BMCA interop with third-party silicon on the bench), v4 the
 asCapable ladder, the sync/Follow_Up receipt timeouts and
 neighborRateRatio with the Milan v1.2 Table 4.1/4.2 profile numbers,
-mutation-proven in the engine suite. Still ahead as further revisions on
-this same ROM: stepsRemoved tie-breaks, the multiple-responder cease
-rule, and the PHC servo (the plane is still observe-only: it publishes
-the offset and never steers the clock).
+mutation-proven in the engine suite, and v5 the PHC servo: observe-only
+is retired. Offsets beyond 20 us (the linuxptp first_step_threshold
+default) re-base the clock in one adjtime write per the GM-loss DLL
+policy, smaller ones drive a clock-aware PI addend (kp 3/4, ki 1/4 of
+the normalized gain: critically damped), and the engine suite proves
+lock closed-loop against a +100 ppm master. Still ahead as further
+revisions on this same ROM: stepsRemoved tie-breaks and the
+multiple-responder cease rule; then the parent-side integration.
 
 ## Why a µCPU with an ALU
 

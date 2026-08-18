@@ -1,7 +1,34 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""gPTP µcode ROM image generator -- v4, the asCapable round.
+"""gPTP µcode ROM image generator -- v5, the servo round.
+
+v4 gave the plane its verdicts; v5 makes it act on them: the PHC servo
+lands and observe-only retires. On every accepted Sync + Follow_Up as
+slave, the measured offset drives the parent `timestamp_counter`'s two
+knobs through the engine's PHC region:
+
+  * |offset| > 20 us (the linuxptp first_step_threshold default):
+    STEP -- one adjtime write of -offset re-bases the clock at once,
+    and the addend is rewritten to the bare integrator: the rate
+    estimate survives the step while the stale proportional term (moot
+    after a re-base) is dropped. This is the DLL policy of the GM-loss
+    design (the parent's GM_LOSS_RECOVERY.md): a running ptp4l slews a
+    60 s cliff for 40 minutes; the fabric servo re-bases in one write.
+  * otherwise: SLEW -- a PI controller in Q8.24 addend units. The loop
+    gain is CLOCK-AWARE: the generator computes the ns-to-addend factor
+    from --clk-hz (an addend unit is worth clk/8/2^24 ns of phase per
+    125 ms sync interval), so kp = 3/4 and ki = 1/4 of the normalized
+    gain hold at any clock and the closed loop is (z - 1/2)^2,
+    critically damped. The integrator clamps at +-200 ppm so a
+    pathological peer cannot wind it up.
+
+The addend sign: offset is local minus master, so the correction is its
+negation. A frequency-offset master converges to zero phase error (the
+integrator carries the rate); the engine suite proves it closed-loop
+against a +140 ppm master, deliberately above half the clamp.
+
+--- v4, the asCapable round ---
 
 v3 made the plane a bilateral BMCA participant and a transmitting
 grandmaster; the bench interop round then listed what still separated it
@@ -45,8 +72,7 @@ two-pass assembler (sizes first, then bases), so a leg outgrowing the
 
 Still deliberately out (each a later round): stepsRemoved tie-breaks
 (two-node link), the multiple-responder cease rule of Milan 4.2.6.2.5,
-sourcePortIdentity matching on Sync, and the PHC servo (observe-only:
-the offset is published, the clock never steered).
+and sourcePortIdentity matching on Sync.
 """
 
 import argparse
@@ -80,6 +106,7 @@ S_FUORG = 9                              # 0xC2000001 (info-TLV org tail)
 S_MYPV = 10                              # our {p1, cq, p2, 16'0} vector
 S_PDGOT = 11                             # exchange seen since last req
 S_NR3, S_NR4, S_NRR = 12, 13, 14         # nrr window + Q2.30 ratio
+S_INTG = 15                              # servo integrator, addend units
 S_T1, S_T4, S_PEND = 16, 17, 18
 S_RQCID, S_TICK, S_RQSEQ, S_RQPN, S_INIT, S_MYSEQ = 19, 20, 21, 22, 23, 24
 S_CID, S_1E9, S_HDR8, S_SALO = 25, 26, 27, 28
@@ -97,6 +124,23 @@ ASCAP_UP_C = 2                  # exchanges to asCapable, 4.2.6.2.4 in [2,5]
 LOST_N_C = 3                    # allowedLostResponses, 802.1AS-2011 10.2.4.1
 SYNC_RTO_MS_C = 375             # syncReceiptTimeout, Table 4.2
 FU_RTO_MS_C = 125               # followUpReceiptTimeout, Table 4.2
+
+# ---- servo constants (clock-aware, set by set_servo_gains) -----------------
+STEP_NS_C = 20000               # linuxptp first_step_threshold default, ns
+GAIN_S_C = 6                    # ns -> addend units: (off * GAIN_M) >> 6
+GAIN_M_C = 86                   # for the 100 MHz default; see set_servo_gains
+ILIM_C = 33554                  # integrator clamp = +-200 ppm at that clock
+
+
+def set_servo_gains(clk_hz):
+    """An addend unit adds 2^-24 ns per tick; one 125 ms sync interval is
+    clk/8 ticks, so one unit is clk/8/2^24 ns of phase per interval. The
+    PI shifts assume normalized gain, hence M/2^6 = 2^24/(clk/8)."""
+    global GAIN_M_C, ILIM_C
+    GAIN_M_C = round((1 << 24) * 64 * 8 / clk_hz)
+    ILIM_C = round(200 * (1 << 24) * 1000 / clk_hz)
+    assert 0 < GAIN_M_C < (1 << 24), GAIN_M_C
+    assert 2 * ILIM_C + 1 < (1 << 24), ILIM_C
 
 # publish flags bits
 FL_PRESENT_C, FL_AMGM_C, FL_ASCAP_C, FL_SYNCOK_C = 1, 2, 4, 8
@@ -306,13 +350,74 @@ def prog_rx_followup(base):
     p.emit("ALU", rd=RA, ra=RD_, rb=RA, cnd=ALU_SUB)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_OFFSET, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_PUB | 4, fmt=FMT_Q)
+    p.emit("BR", label=LB["SERVO"])
+    p.label("out")
+    p.emit("END")
+    return p
+
+
+def prog_leg_servo(base):
+    """Accepted Sync+FU as slave; RA = offset (local minus master).
+    Step-vs-slew into the PHC region, then the receipt-timeout tail."""
+    p = Prog(base)
+    # ---- the servo: offset is local minus master, correction negates --
+    # step when |offset| > 20 us, i.e. (offset + 20000) u> 40000
+    p.emit("ALU", rd=RT, ra=RA, rb=0, cnd=ALU_ADD, imm=STEP_NS_C)
+    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="sv_lo")
+    p.emit("BR", label="sv_step")
+    p.label("sv_lo")
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=2 * STEP_NS_C + 1)
+    p.emit("BRS", cnd=BRS_LT, label="sv_slew")
+    p.label("sv_step")
+    p.emit("ALU", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          # -offset
+    p.emit("WRST", ra=RB, imm=RG_PHC | 1, fmt=FMT_Q)         # adjtime
+    # the rate estimate survives the step AND becomes the whole addend:
+    # the re-base just made the stale proportional term moot
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_INTG, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=R0, rb=RC, cnd=ALU_SUB)
+    p.emit("WRST", ra=RC, imm=RG_PHC | 0, fmt=FMT_Q)
+    p.emit("BR", label="sv_done")
+    p.label("sv_slew")
+    p.emit("MOVE", rd=RB, ra=0, imm=GAIN_M_C)
+    p.emit("MD", rd=RT, ra=RA, rb=RB, cnd=MD_MULS)           # off * M
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SAR, imm=GAIN_S_C)
+    p.emit("ALU", rd=RB, ra=RT, rb=0, cnd=ALU_SAR, imm=2)    # ki term
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_INTG, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=RC, rb=RB, cnd=ALU_ADD)
+    # clamp the integrator to +-ILIM: (I + ILIM) u<= 2*ILIM
+    p.emit("MOVE", rd=RU, ra=0, imm=ILIM_C)
+    p.emit("ALU", rd=RB, ra=RC, rb=RU, cnd=ALU_ADD)
+    p.emit("ALU", rd=RW, ra=RB, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("CMP", ra=RW, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="sv_cl")
+    p.emit("BR", label="sv_sat")
+    p.label("sv_cl")
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=2 * ILIM_C + 1)
+    p.emit("BRS", cnd=BRS_LT, label="sv_iok")
+    p.label("sv_sat")
+    p.emit("ALU", rd=RW, ra=RC, rb=0, cnd=ALU_SHR, imm=63)
+    p.emit("CMP", ra=RW, rb=0, fmt=FMT_D, imm=1)
+    p.emit("BRS", cnd=BRS_Z, label="sv_neg")
+    p.emit("MOVE", rd=RC, ra=0, imm=ILIM_C)
+    p.emit("BR", label="sv_iok")
+    p.label("sv_neg")
+    p.emit("ALU", rd=RC, ra=R0, rb=RU, cnd=ALU_SUB)          # -ILIM
+    p.label("sv_iok")
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_INTG, fmt=FMT_Q)
+    p.emit("ALU", rd=RB, ra=RT, rb=0, cnd=ALU_SAR, imm=2)
+    p.emit("ALU", rd=RT, ra=RT, rb=RB, cnd=ALU_SUB)          # kp = 3/4
+    p.emit("ALU", rd=RT, ra=RT, rb=RC, cnd=ALU_ADD)          # + I
+    p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)          # negate
+    p.emit("WRST", ra=RT, imm=RG_PHC | 0, fmt=FMT_Q)         # adjfine
+    p.label("sv_done")
     p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   # consumed
     p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
     p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)         # sync watch
     p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)          # FU watch off
     e_flags(p, orm=FL_SYNCOK_C)
     p.emit("COMMIT")
-    p.label("out")
     p.emit("END")
     return p
 
@@ -455,7 +560,7 @@ def prog_tmr(base, mac):
     e_const(p, RC, 0xC2000001)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_FUORG, fmt=FMT_Q)
     for s in (S_SYNCTS, S_OFFSET, S_AMGM, S_PDELAY, S_T2, S_SSEQFLY,
-              S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NR4, S_NRR,
+              S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NR4, S_NRR, S_INTG,
               S_T1, S_T4, S_PEND, S_TICK, S_MYSEQ, S_SSEQ, S_ASEQ):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
@@ -792,7 +897,7 @@ LEG_FNS = [
     ("RFU", prog_leg_rfu), ("SYNCFU", prog_leg_syncfu),
     ("SYNCTX", prog_leg_synctx), ("ANNTX", prog_leg_anntx),
     ("PDPOST", prog_leg_pdpost), ("SRTO", prog_leg_srto),
-    ("FUTO", prog_leg_futo),
+    ("FUTO", prog_leg_futo), ("SERVO", prog_leg_servo),
 ]
 
 
@@ -858,9 +963,12 @@ def main():
     ap.add_argument("--mac", type=lambda s: int(s, 0), default=0x02A1B2C3D4E5)
     ap.add_argument("--p1", type=int, default=248,
                     help="our announced priority1 (lower wins BTCA)")
+    ap.add_argument("--clk-hz", type=int, default=100_000_000,
+                    help="engine clock; sets the servo's ns-to-addend gain")
     args = ap.parse_args()
     global P1_C
     P1_C = args.p1
+    set_servo_gains(args.clk_hz)
     rom, used = build(args.mac)
     with open(args.out, "w", encoding="ascii") as f:
         for word in rom:
