@@ -8,16 +8,20 @@ Pdelay roles, the PHC servo, and the publication surface (GM identity,
 asCapable, sync verdict, peer delay) — as one clock domain of fabric,
 byte in / byte out, in the `KL_pp_shadow` integration shape.
 
-**Status: resource-validation skeleton.** The round that created this repo
-(2026-08-14) exists to answer one question with a measurement instead of an
-estimate: *what does the gPTP plane cost on the ship part?* Everything
-structural is real and verified — the grown-ISA µCPU, the 802.1AS receive
-parser, the TX build slot, the timer service, the engine region map — and
-the µcode entry handlers are honest first cuts that exercise every new
-datapath. The 802.1AS state machines of record (BTCA, asCapable ladder,
-receipt timeouts, the Milan v1.2 Table 4.1/4.2 profile numbers) land as
-µcode revisions on this same ROM; they are NOT here yet, and nothing in
-this repo claims otherwise.
+**Status: the state machines are landing as µcode revisions.** The round
+that created this repo (2026-08-14) priced the plane on the ship part;
+everything structural (the grown-ISA µCPU, the 802.1AS receive parser,
+the TX build slot, the timer service, the engine region map) is real and
+verified. Since then the ROM has grown through bench-proven revisions:
+v2 both Pdelay roles + announce adopt, v3 grandmaster capability (BTCA
+two-node subset, Announce with path trace, two-step Sync + Follow_Up,
+bilateral BMCA interop with third-party silicon on the bench), v4 the
+asCapable ladder, the sync/Follow_Up receipt timeouts and
+neighborRateRatio with the Milan v1.2 Table 4.1/4.2 profile numbers,
+mutation-proven in the engine suite. Still ahead as further revisions on
+this same ROM: stepsRemoved tie-breaks, the multiple-responder cease
+rule, and the PHC servo (the plane is still observe-only: it publishes
+the offset and never steers the clock).
 
 ## Why a µCPU with an ALU
 
@@ -47,12 +51,13 @@ so its OOC delta against the 1,070-LUT anchor prices the ISA growth alone.
 | `hdl/ucode/` | `gen_gptp_ucode.py` — ROM image generator (entry table mirrored by the engine) |
 | `tb/verilator/ucpu/` | arithmetic battery vs an independent C++ model (mutation-proven) |
 | `tb/verilator/parser/` | 802.1AS field extraction + drop arms (mutation-proven) |
+| `tb/verilator/engine/` | whole-plane round-trip vs a scripted peer + spec-formula pdelay model (mutation-proven) |
 | `syn/ooc/` | the measurement instrument + `docs/RESOURCE_VALIDATION.md`'s numbers |
 
 ## Run everything
 
 ```sh
-make            # both Verilator suites (exit 0 = PASS)
+make            # all three Verilator suites (exit 0 = PASS)
 make lint       # verilator --lint-only on the engine top
 syn/ooc/run.sh  # Vivado 2026.1 OOC measurement into syn/ooc/work/
 ```
