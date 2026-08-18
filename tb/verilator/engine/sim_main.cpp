@@ -154,14 +154,18 @@ static struct {
   uint64_t nr3 = 0, nr4 = 0, nrr = 0;
   int64_t d = 0;
   int count = 0;
+  bool stale_skip = false;       // last window rejected as > 2^32 ns
 } pdm;
 
 static void model_exchange(uint64_t t1, uint64_t t2, uint64_t t3,
                            uint64_t t4) {
+  pdm.stale_skip = false;
   if (pdm.nr3 != 0) {
     uint64_t num = t3 - pdm.nr3, den = t4 - pdm.nr4;
     if ((den >> 32) == 0 && (den & 0xFFFFFFFFull) != 0)
       pdm.nrr = (num << 30) / (den & 0xFFFFFFFFull);
+    else
+      pdm.stale_skip = true;
   }
   pdm.nr3 = t3; pdm.nr4 = t4;
   uint64_t turn = t4 - t1;
@@ -431,6 +435,14 @@ int main(int argc, char **argv) {
          248ull);
 
   // ---- 9: better announce -> adopt, sync stops --------------------------
+  // a rogue Sync heard while still master would leave a stale ingress
+  // stamp; adopt must void it so it cannot pair with a post-adopt FU
+  {
+    Frame f = ptp(0x0, 0x0101, 0, 0x0208, 10);
+    f.ts(0);
+    send_frame(f.b, 19000000000ull);
+    run(2000);
+  }
   const uint64_t GMID = 0x00AACCFFFE010203ull;
   {
     Frame f = ptp(0xB, 10, 0, 0x0008, 30);
@@ -459,6 +471,14 @@ int main(int argc, char **argv) {
   expect("sync-ok low before sync", dut->pub_flags_o & FL_SYNCOK, 0);
   const uint64_t TRX = 20000000000ull, ORIGIN = 19999000000ull,
                  CORR_NS = 1000ull;
+  {
+    // an FU pairing with the pre-adopt rogue Sync must find nothing
+    Frame g = ptp(0x8, 0x0101, CORR_NS << 16, 0x0000, 10);
+    g.ts(ORIGIN - 1000000000ull);
+    send_frame(g.b, TRX - 999999500ull);
+    run(6000);
+  }
+  expect("rogue sync voided on adopt", (uint32_t)dut->pub_offset_o, 0);
   {
     Frame f = ptp(0x0, 0x0102, 0, 0x0208, 10);
     f.ts(0);
@@ -542,10 +562,30 @@ int main(int argc, char **argv) {
     expect("two goods recover", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
   }
 
-  // ---- 16: three lost responses -> asCapable falls ----------------------
+  // ---- 16: lost responses clear asCapable at the FOURTH -----------------
+  // 802.1AS-2011 11.2.12.4: the count must EXCEED allowedLostResponses=3
   pd_mode = PD_OFF;
+  size_t off_mark = txf.size();
   expect("lost responses clear capable",
          wait_flags(FL_ASCAP, 0, 12000000ull), 1);
+  {
+    int reqs = 0;
+    for (size_t i = off_mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) reqs++;
+    expect("fall at the fourth lost", reqs == 4 || reqs == 5, 1);
+  }
+
+  // ---- 17: a window wider than 2^32 ns must not update the ratio --------
+  // the OFF span above left > 4.3 s between answered exchanges; the
+  // first answer after it takes the staleness path in model and DUT
+  pd_mode = PD_NORMAL;
+  {
+    int base = pdm.count;
+    expect("post-gap exchange ran", wait_exchanges(base + 1, 4000000ull), 1);
+    run(4000);
+  }
+  expect("gap took the stale path", pdm.stale_skip, 1);
+  expect("stale window skips ratio", dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;

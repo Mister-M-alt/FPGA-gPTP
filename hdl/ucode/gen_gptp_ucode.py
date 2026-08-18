@@ -10,8 +10,9 @@ ROM words on the same engine (zero RTL change):
 
   * The asCapable ladder (802.1AS-2011 10.2.4.1 with the Milan v1.2
     profile): asCapable rises after 2 successful Pdelay Resp + Resp_FU
-    exchanges (Milan 4.2.6.2.4 bounds it in [2, 5]); it falls when 3
-    consecutive Pdelay_Reqs go unanswered (allowedLostResponses default)
+    exchanges (Milan 4.2.6.2.4 bounds it in [2, 5]); it falls when the
+    count of consecutive unanswered Pdelay_Reqs EXCEEDS
+    allowedLostResponses = 3 (802.1AS-2011 11.2.12.4: at the fourth)
     or when the measured neighborPropDelay exceeds
     neighborPropDelayThresh = 800 ns (Milan 4.2.6.1.1, copper), with the
     Milan 4.2.6.2.7 floor: negative delays down to -80 ns do NOT clear
@@ -486,7 +487,9 @@ def prog_tmr(base, mac):
     p.emit("RDST", rd=RB, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
     p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=1)
     p.emit("WRST", ra=RB, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
-    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=LOST_N_C)
+    # 802.1AS-2011 11.2.12.4: the verdict falls when the count EXCEEDS
+    # allowedLostResponses -- at the fourth, not the third
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=LOST_N_C + 1)
     p.emit("BRS", cnd=BRS_LT, label="pd_go")
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
     e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
@@ -539,6 +542,7 @@ def prog_btca(base):
     p.emit("RDST", rd=RC, imm=RG_BANK | 2, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)
     e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)     # slave; sync unproven
+    p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)  # no stale pair
     p.emit("WRST", ra=0, imm=RG_TMR | 1, fmt=FMT_Q)   # sync TX off
     p.emit("WRST", ra=0, imm=RG_TMR | 3, fmt=FMT_Q)   # announce TX off
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
