@@ -4,7 +4,7 @@
 // KL_gptp_ucpu arithmetic battery.
 //
 // Drives the µCPU directly (no wrap needed: every observable is a port),
-// dispatching the TB battery µprogram at entry 768 with random and directed
+// dispatching the TB battery µprogram at entry 704 with random and directed
 // operand pairs preloaded into r14/r13. The program computes twelve results
 // (ADD/SUB/AND/OR/XOR/SHL/SHR/SAR/MULS/DIVU + two immediate forms) and
 // writes each to scratch words 0..11 through the state port; this harness

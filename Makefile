@@ -8,6 +8,7 @@ all: tb lint
 tb:
 	$(MAKE) -C tb/verilator/ucpu
 	$(MAKE) -C tb/verilator/parser
+	$(MAKE) -C tb/verilator/engine
 
 lint:
 	verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL \
@@ -23,4 +24,5 @@ ooc:
 clean:
 	$(MAKE) -C tb/verilator/ucpu clean
 	$(MAKE) -C tb/verilator/parser clean
+	$(MAKE) -C tb/verilator/engine clean
 	rm -rf syn/ooc/work

@@ -1,43 +1,51 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""gPTP µcode ROM image generator — v3, the grandmaster round.
+"""gPTP µcode ROM image generator -- v4, the asCapable round.
 
-v2 made the plane a correct pdelay peer and announce listener; the bench
-against a real peer then demonstrated the spec's point (802.1AS-2011
-5.3.1 / 10.1.2): a node that never transmits Announce never enters the
-best-master contest, and a strict peer never sees a master candidate
-opposite it. v3 adds Grandmaster Capability per 5.3.1 a)+c):
+v3 made the plane a bilateral BMCA participant and a transmitting
+grandmaster; the bench interop round then listed what still separated it
+from the 802.1AS state machines of record. v4 lands three of those as
+ROM words on the same engine (zero RTL change):
 
-  * BTCA-lite (10.3): lexicographic priority-vector compare
-    {priority1, clockQuality, priority2} then grandmasterIdentity,
-    incoming Announce vs our own vector. stepsRemoved tie-breaks are
-    deliberately out (single point-to-point link, no topology), so this
-    is the two-node subset of 10.3 — the full comparison lands with the
-    multi-announcer round.
-  * PortAnnounceTransmit (10.3.13): when master, Announce every 1 s
-    (Milan Table 4.1) with the 10.5.3 path trace TLV carrying our
-    clockIdentity. Our vector: priority1 248 (Milan 4.2.6.2.1
-    GM-capable), clockClass 248, clockAccuracy 0xFE, variance 0x436A,
-    priority2 248.
-  * ClockMasterSyncSend + PortSyncSyncSend (10.2.8/10.2.11): when
-    master, two-step Sync every 125 ms + Follow_Up carrying the sync's
-    egress timestamp as preciseOriginTimestamp and the 11.4.4.3
-    Follow_Up information TLV.
-  * Role transitions: announce receipt timeout (3 s, Milan Table 4.2)
-    with no better announce -> become master; a better announce at any
-    time -> become slave (adopt, cadences disarmed); a worse announce ->
-    stay master. The received priority vector is published raw
-    (publish word 5) so the bench UART shows what the peer claims.
+  * The asCapable ladder (802.1AS-2011 10.2.4.1 with the Milan v1.2
+    profile): asCapable rises after 2 successful Pdelay Resp + Resp_FU
+    exchanges (Milan 4.2.6.2.4 bounds it in [2, 5]); it falls when 3
+    consecutive Pdelay_Reqs go unanswered (allowedLostResponses default)
+    or when the measured neighborPropDelay exceeds
+    neighborPropDelayThresh = 800 ns (Milan 4.2.6.1.1, copper), with the
+    Milan 4.2.6.2.7 floor: negative delays down to -80 ns do NOT clear
+    it. asCapable is publish-flags bit 2, and it gates what the spec
+    says it gates: Announce processing, the master TX cadences, and the
+    become-master transition. Both Pdelay roles keep running regardless
+    (they are how asCapable is EARNED back).
+  * The receipt timeouts of Milan Table 4.2 beyond announce (v3):
+    syncReceiptTimeout 375 ms (timer slot 4) clears the sync-ok verdict
+    (flags bit 3, set on each completed Sync+Follow_Up as slave);
+    followUpReceiptTimeout 125 ms (timer slot 5) invalidates a Sync
+    whose Follow_Up never came, so a late Follow_Up is discarded
+    instead of pairing with a stale ingress timestamp.
+  * neighborRateRatio (802.1AS-2011 11.2.15.3, successive-response
+    form): nrr = (t3_n - t3_prev) / (t4_n - t4_prev) as a Q2.30
+    fixed-point ratio (OP_MULDIV earns its LUTs here), and the link
+    delay becomes D = (nrr*(t4-t1) - (t3-t2)) / 2. Windows wider than
+    2^32 ns (a silent peer) skip the update rather than divide stale.
 
-Entry table (mirrored by KL_gptp_engine): 16 SYNC · 64 FOLLOWUP ·
+Publish flags: bit0 gm_present, bit1 am_gm, bit2 asCapable, bit3
+sync_ok. Every writer read-modify-writes so the verdicts compose.
+
+Fixed entry table (mirrored by KL_gptp_engine): 16 SYNC · 64 FOLLOWUP ·
 128 ANNOUNCE · 192 PDELAY_REQ · 256 PDELAY_RESP · 320 PDELAY_RESP_FU ·
 384 SIGNALING · 448 TX_TS · 512 TIMER (slot 0 init+pdelay, 1 sync TX,
-2 announce receipt timeout -> become master, 3 announce TX) ·
-704 TB battery · 768.. shared legs (BTCA, become-master, FU builders,
-sync/announce builders).
+2 announce receipt, 3 announce TX, 4 sync receipt, 5 FU receipt) ·
+704 TB battery. Shared legs are auto-packed into the free gaps by a
+two-pass assembler (sizes first, then bases), so a leg outgrowing the
+768.. tail is a solved problem instead of a manual repack.
 
-Observe-only servo still: the PHC is never steered this round.
+Still deliberately out (each a later round): stepsRemoved tie-breaks
+(two-node link), the multiple-responder cease rule of Milan 4.2.6.2.5,
+sourcePortIdentity matching on Sync, and the PHC servo (observe-only:
+the offset is published, the clock never steered).
 """
 
 import argparse
@@ -66,8 +74,11 @@ RG_BANK, RG_TS, RG_SCR, RG_PUB, RG_PHC, RG_TMR = (
 # ---- scratch map -----------------------------------------------------------
 S_SYNCTS, S_HDR, S_OFFSET, S_AMGM = 0, 1, 2, 3
 S_PDELAY, S_T2, S_SSEQFLY = 4, 5, 6
-S_FUORG = 9                      # 0xC2000001 (info-TLV org tail)
-S_MYPV = 10                      # our {p1, cq, p2, 16'0} compare vector
+S_PDOK, S_PDLOST = 7, 8                  # asCapable ladder counters
+S_FUORG = 9                              # 0xC2000001 (info-TLV org tail)
+S_MYPV = 10                              # our {p1, cq, p2, 16'0} vector
+S_PDGOT = 11                             # exchange seen since last req
+S_NR3, S_NR4, S_NRR = 12, 13, 14         # nrr window + Q2.30 ratio
 S_T1, S_T4, S_PEND = 16, 17, 18
 S_RQCID, S_TICK, S_RQSEQ, S_RQPN, S_INIT, S_MYSEQ = 19, 20, 21, 22, 23, 24
 S_CID, S_1E9, S_HDR8, S_SALO = 25, 26, 27, 28
@@ -78,14 +89,24 @@ P1_C, P2_C = 248, 248
 CQ_C = 0xF8FE436A               # class 248, accuracy 0xFE, variance 0x436A
 UTC_OFF_C = 37
 
+# ---- Milan v1.2 profile numbers --------------------------------------------
+NPD_HI_C = 800                  # neighborPropDelayThresh ns, 4.2.6.1.1
+NPD_LO_C = 80                   # negative-delay floor ns, 4.2.6.2.7
+ASCAP_UP_C = 2                  # exchanges to asCapable, 4.2.6.2.4 in [2,5]
+LOST_N_C = 3                    # allowedLostResponses, 802.1AS-2011 10.2.4.1
+SYNC_RTO_MS_C = 375             # syncReceiptTimeout, Table 4.2
+FU_RTO_MS_C = 125               # followUpReceiptTimeout, Table 4.2
+
+# publish flags bits
+FL_PRESENT_C, FL_AMGM_C, FL_ASCAP_C, FL_SYNCOK_C = 1, 2, 4, 8
+
 # ---- register conventions --------------------------------------------------
 R0, RA, RB, RC, RD_, RT, RU, RSEC, RNS, RP = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
 RV, RW = 10, 11
 REV, RTS0, RTS1 = 15, 14, 13
 
-# shared-leg entry points (768..1023), packed to measured sizes
-L_BTCA, L_BECOME, L_RFU, L_SYNCFU, L_SYNCTX, L_ANNTX = (
-    768, 806, 820, 862, 912, 959)
+# shared-leg bases: filled by the packing pass, referenced through LB[]
+LB = {}
 
 
 def w(op, rd=0, ra=0, rb=0, fmt=0, cnd=0, imm=0):
@@ -158,6 +179,26 @@ def e_guard_init(p, end_label):
     p.emit("BRS", cnd=BRS_Z, label="run")
     p.emit("BR", label=end_label)
     p.label("run")
+
+
+def e_flags(p, andm=None, orm=None):
+    """Read-modify-write the publish flags word (clobbers RT)."""
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    if andm is not None:
+        p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=andm)
+    if orm:
+        p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_OR, imm=orm)
+    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+
+
+def e_flag_gate(p, mask, want, tag, out_label):
+    """Fall through when (flags & mask) == want, else branch out."""
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=mask)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=want)
+    p.emit("BRS", cnd=BRS_Z, label=f"fg_{tag}")
+    p.emit("BR", label=out_label)
+    p.label(f"fg_{tag}")
 
 
 def e_hdr(p, mtype, flags, seq_reg, logint, msglen):
@@ -237,6 +278,11 @@ def prog_rx_sync(base):
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_BANK | 0, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_HDR, fmt=FMT_Q)
+    # only an adopted slave starts the follow-up watch (Table 4.2)
+    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C, FL_PRESENT_C, "sl", "out")
+    p.emit("MOVE", rd=RT, ra=0, imm=FU_RTO_MS_C)
+    p.emit("WRST", ra=RT, imm=RG_TMR | 5, fmt=FMT_Q)
+    p.label("out")
     p.emit("END")
     return p
 
@@ -244,21 +290,26 @@ def prog_rx_sync(base):
 def prog_rx_followup(base):
     p = Prog(base)
     e_guard_init(p, "out")
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_AMGM, fmt=FMT_Q)
-    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=0)
-    p.emit("BRS", cnd=BRS_Z, label="slave")
-    p.emit("BR", label="out")                        # masters ignore sync
-    p.label("slave")
+    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C, FL_PRESENT_C, "sl", "out")
+    # a Sync must be pending and valid: the FU-receipt timeout zeroes it,
+    # so a Follow_Up later than 125 ms pairs with nothing and is dropped
+    p.emit("RDST", rd=RD_, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
+    p.emit("CMP", ra=RD_, rb=0, fmt=FMT_Q, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="out")
     e_full_ts(p, RA)
     p.emit("RDST", rd=RB, imm=RG_BANK | 1, fmt=FMT_Q)
     p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_SAR, imm=16)
     p.emit("ALU", rd=RA, ra=RA, rb=RB, cnd=ALU_ADD)
     p.emit("RDST", rd=RB, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
     p.emit("ALU", rd=RA, ra=RA, rb=RB, cnd=ALU_ADD)
-    p.emit("RDST", rd=RB, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
-    p.emit("ALU", rd=RA, ra=RB, rb=RA, cnd=ALU_SUB)
+    p.emit("ALU", rd=RA, ra=RD_, rb=RA, cnd=ALU_SUB)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_OFFSET, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_PUB | 4, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   # consumed
+    p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
+    p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)         # sync watch
+    p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)          # FU watch off
+    e_flags(p, orm=FL_SYNCOK_C)
     p.emit("COMMIT")
     p.label("out")
     p.emit("END")
@@ -268,13 +319,15 @@ def prog_rx_followup(base):
 def prog_rx_announce(base):
     p = Prog(base)
     e_guard_init(p, "out")
+    # 802.1AS: a port that is not asCapable does not enter the contest
+    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "out")
     p.emit("RDST", rd=RA, imm=RG_BANK | 8, fmt=FMT_Q)   # their {utc,p1,cq,p2}
     p.emit("WRST", ra=RA, imm=RG_PUB | 5, fmt=FMT_Q)    # publish raw: bench
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_SHL, imm=16)  # {p1,cq,p2,0}
     p.emit("RDST", rd=RB, imm=RG_BANK | 9, fmt=FMT_Q)   # their gm identity
     p.emit("RDST", rd=RV, imm=RG_SCR | S_MYPV, fmt=FMT_Q)
     p.emit("RDST", rd=RW, imm=RG_SCR | S_CID, fmt=FMT_Q)
-    p.emit("BR", label=L_BTCA)
+    p.emit("BR", label=LB["BTCA"])
     p.label("out")
     p.emit("END")
     return p
@@ -330,17 +383,8 @@ def prog_rx_pdrfu(base):
     p.emit("BRS", cnd=BRS_Z, label="mine")
     p.emit("BR", label="out")
     p.label("mine")
-    e_full_ts(p, RC)
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_T4, fmt=FMT_Q)
-    p.emit("RDST", rd=RB, imm=RG_SCR | S_T1, fmt=FMT_Q)
-    p.emit("ALU", rd=RD_, ra=RA, rb=RB, cnd=ALU_SUB)
-    p.emit("RDST", rd=RB, imm=RG_SCR | S_T2, fmt=FMT_Q)
-    p.emit("ALU", rd=RC, ra=RC, rb=RB, cnd=ALU_SUB)
-    p.emit("ALU", rd=RD_, ra=RD_, rb=RC, cnd=ALU_SUB)
-    p.emit("ALU", rd=RD_, ra=RD_, rb=0, cnd=ALU_SHR, imm=1)
-    p.emit("WRST", ra=RD_, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
-    p.emit("WRST", ra=RD_, imm=RG_PUB | 3, fmt=FMT_Q)
-    p.emit("COMMIT")
+    e_full_ts(p, RC)                                    # RC = t3
+    p.emit("BR", label=LB["PDPOST"])
     p.label("out")
     p.emit("END")
     return p
@@ -358,9 +402,9 @@ def prog_tx_ts(base):
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
     p.emit("BRS", cnd=BRS_Z, label="t1")
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=2)
-    p.emit("BRS", cnd=BRS_Z, label=L_RFU)
+    p.emit("BRS", cnd=BRS_Z, label=LB["RFU"])
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=3)
-    p.emit("BRS", cnd=BRS_Z, label=L_SYNCFU)
+    p.emit("BRS", cnd=BRS_Z, label=LB["SYNCFU"])
     p.emit("END")
     p.label("t1")
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_T1, fmt=FMT_Q)
@@ -379,11 +423,15 @@ def prog_tmr(base, mac):
     p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="slot0")
     p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=1)
-    p.emit("BRS", cnd=BRS_Z, label=L_SYNCTX)
+    p.emit("BRS", cnd=BRS_Z, label=LB["SYNCTX"])
     p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=2)
-    p.emit("BRS", cnd=BRS_Z, label=L_BECOME)
+    p.emit("BRS", cnd=BRS_Z, label=LB["BECGATE"])
     p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=3)
-    p.emit("BRS", cnd=BRS_Z, label=L_ANNTX)
+    p.emit("BRS", cnd=BRS_Z, label=LB["ANNTX"])
+    p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=4)
+    p.emit("BRS", cnd=BRS_Z, label=LB["SRTO"])
+    p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=5)
+    p.emit("BRS", cnd=BRS_Z, label=LB["FUTO"])
     p.emit("END")
     p.label("slot0")
     p.emit("RDST", rd=RA, imm=RG_SCR | S_INIT, fmt=FMT_Q)
@@ -406,6 +454,7 @@ def prog_tmr(base, mac):
     e_const(p, RC, 0xC2000001)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_FUORG, fmt=FMT_Q)
     for s in (S_SYNCTS, S_OFFSET, S_AMGM, S_PDELAY, S_T2, S_SSEQFLY,
+              S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NR4, S_NRR,
               S_T1, S_T4, S_PEND, S_TICK, S_MYSEQ, S_SSEQ, S_ASEQ):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
@@ -423,6 +472,27 @@ def prog_tmr(base, mac):
     p.emit("BRS", cnd=BRS_Z, label="send")
     p.emit("END")
     p.label("send")
+    # ---- lost-response accounting (802.1AS-2011 10.2.4.1): before each
+    # new request, judge the last one; skip until a first was ever sent
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="pd_go")
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="pd_lost")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
+    p.emit("BR", label="pd_go")
+    p.label("pd_lost")
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
+    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=1)
+    p.emit("WRST", ra=RB, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=LOST_N_C)
+    p.emit("BRS", cnd=BRS_LT, label="pd_go")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
+    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
+    p.emit("COMMIT")
+    p.label("pd_go")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
     e_hdr(p, 0x2, 0x0000, RA, 0x00, 54)
     p.emit("BFLD", ra=0, fmt=FMT_Q)
@@ -455,7 +525,7 @@ def prog_tb_battery(base):
     return p
 
 
-# ---- shared legs (768..1023) -----------------------------------------------
+# ---- shared legs (auto-packed) ---------------------------------------------
 
 def prog_btca(base):
     """r1 = their vector, r2 = their gmId, r10 = ours, r11 = our CID."""
@@ -468,8 +538,7 @@ def prog_btca(base):
     p.emit("WRST", ra=RB, imm=RG_PUB | 0, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_BANK | 2, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)
-    p.emit("MOVE", rd=RT, ra=0, imm=1)
-    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)  # gm_present, not gm
+    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)     # slave; sync unproven
     p.emit("WRST", ra=0, imm=RG_TMR | 1, fmt=FMT_Q)   # sync TX off
     p.emit("WRST", ra=0, imm=RG_TMR | 3, fmt=FMT_Q)   # announce TX off
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
@@ -480,8 +549,20 @@ def prog_btca(base):
     p.emit("RDST", rd=RA, imm=RG_SCR | S_AMGM, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
     p.emit("BRS", cnd=BRS_Z, label="held")
-    p.emit("BR", label=L_BECOME)
+    p.emit("BR", label=LB["BECOME"])
     p.label("held")
+    p.emit("END")
+    return p
+
+
+def prog_becgate(base):
+    """Announce receipt expiry: only an asCapable port may become master."""
+    p = Prog(base)
+    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "bg", "held")
+    p.emit("BR", label=LB["BECOME"])
+    p.label("held")
+    p.emit("MOVE", rd=RT, ra=0, imm=3000)
+    p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)  # keep watching
     p.emit("END")
     return p
 
@@ -493,14 +574,104 @@ def prog_become(base):
     p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 0, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)
-    p.emit("MOVE", rd=RT, ra=0, imm=3)
-    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)  # present | am_gm
+    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now
     p.emit("MOVE", rd=RT, ra=0, imm=2)
     p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)  # announce now
     p.emit("WRST", ra=0, imm=RG_TMR | 2, fmt=FMT_Q)   # stop the watch
+    p.emit("WRST", ra=0, imm=RG_TMR | 4, fmt=FMT_Q)   # a master expects
+    p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)   #   no sync
     p.emit("COMMIT")
+    p.emit("END")
+    return p
+
+
+def prog_leg_pdpost(base):
+    """Pdelay exchange complete; RC = t3. neighborRateRatio, corrected
+    link delay, the threshold verdict and the asCapable ladder."""
+    p = Prog(base)
+    p.emit("RDST", rd=RD_, imm=RG_SCR | S_T4, fmt=FMT_Q)
+    # ---- nrr window (802.1AS-2011 11.2.15.3) ----
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_NR3, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_Q, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="save")           # first exchange
+    p.emit("ALU", rd=RA, ra=RC, rb=RA, cnd=ALU_SUB)  # num = t3 - prev3
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_NR4, fmt=FMT_Q)
+    p.emit("ALU", rd=RB, ra=RD_, rb=RB, cnd=ALU_SUB)  # den = t4 - prev4
+    p.emit("ALU", rd=RT, ra=RB, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="den32")
+    p.emit("BR", label="save")                       # stale window: skip
+    p.label("den32")
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="save")           # zero window
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_SHL, imm=30)
+    p.emit("MD", rd=RV, ra=RA, rb=RB, cnd=MD_DIVU)   # Q2.30 ratio
+    p.emit("WRST", ra=RV, imm=RG_SCR | S_NRR, fmt=FMT_Q)
+    p.label("save")
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_NR3, fmt=FMT_Q)
+    p.emit("WRST", ra=RD_, imm=RG_SCR | S_NR4, fmt=FMT_Q)
+    # ---- corrected D = (nrr*(t4-t1) - (t3-t2)) / 2 ----
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_T1, fmt=FMT_Q)
+    p.emit("ALU", rd=RB, ra=RD_, rb=RB, cnd=ALU_SUB)  # turn = t4 - t1
+    p.emit("RDST", rd=RV, imm=RG_SCR | S_NRR, fmt=FMT_Q)
+    p.emit("CMP", ra=RV, rb=0, fmt=FMT_Q, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="uncorr")         # no ratio yet
+    p.emit("MD", rd=RB, ra=RV, rb=RB, cnd=MD_MULS)
+    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_SHR, imm=30)
+    p.label("uncorr")
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_T2, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=RC, rb=RT, cnd=ALU_SUB)  # resid = t3 - t2
+    p.emit("ALU", rd=RD_, ra=RB, rb=RC, cnd=ALU_SUB)
+    p.emit("ALU", rd=RD_, ra=RD_, rb=0, cnd=ALU_SAR, imm=1)
+    p.emit("WRST", ra=RD_, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
+    p.emit("WRST", ra=RD_, imm=RG_PUB | 3, fmt=FMT_Q)
+    # ---- verdict: good iff -80 <= D <= 800, i.e. (D + 80) u<= 880 ----
+    p.emit("ALU", rd=RT, ra=RD_, rb=0, cnd=ALU_ADD, imm=NPD_LO_C)
+    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="lowck")
+    p.emit("BR", label="bad")
+    p.label("lowck")
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=NPD_HI_C + NPD_LO_C + 1)
+    p.emit("BRS", cnd=BRS_LT, label="good")
+    p.emit("BR", label="bad")
+    p.label("good")
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_ADD, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=ASCAP_UP_C)
+    p.emit("BRS", cnd=BRS_LT, label="done")          # Milan: not before 2
+    e_flags(p, orm=FL_ASCAP_C)
+    p.emit("BR", label="done")
+    p.label("bad")
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)  # it DID answer
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
+    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
+    p.label("done")
+    p.emit("COMMIT")
+    p.emit("END")
+    return p
+
+
+def prog_leg_srto(base):
+    """Sync receipt timeout (375 ms): the sync-ok verdict falls."""
+    p = Prog(base)
+    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
+    p.emit("COMMIT")
+    p.emit("END")
+    return p
+
+
+def prog_leg_futo(base):
+    """Follow_Up receipt timeout (125 ms): the pending Sync is void."""
+    p = Prog(base)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
     p.emit("END")
     return p
 
@@ -548,12 +719,14 @@ def prog_leg_synctx(base):
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_SCR | S_AMGM, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
-    p.emit("BRS", cnd=BRS_Z, label="go")
+    p.emit("BRS", cnd=BRS_Z, label="gm")
     p.emit("END")
-    p.label("go")
+    p.label("gm")
+    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "skip")
     p.emit("RDST", rd=RB, imm=RG_SCR | S_PEND, fmt=FMT_Q)
     p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="build")
+    p.label("skip")
     p.emit("END")                                    # skip this beat
     p.label("build")
     p.emit("RDST", rd=RA, imm=RG_SCR | S_SSEQ, fmt=FMT_Q)
@@ -576,7 +749,12 @@ def prog_leg_anntx(base):
     p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_SCR | S_AMGM, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
-    p.emit("BRS", cnd=BRS_Z, label="go")
+    p.emit("BRS", cnd=BRS_Z, label="gm")
+    p.emit("END")
+    p.label("gm")
+    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "skip")
+    p.emit("BR", label="go")
+    p.label("skip")
     p.emit("END")
     p.label("go")
     p.emit("RDST", rd=RA, imm=RG_SCR | S_ASEQ, fmt=FMT_Q)
@@ -603,26 +781,65 @@ def prog_leg_anntx(base):
     return p
 
 
+# ---- build: fixed entries + auto-packed shared legs ------------------------
+
+LEG_FNS = [
+    ("BTCA", prog_btca), ("BECOME", prog_become), ("BECGATE", prog_becgate),
+    ("RFU", prog_leg_rfu), ("SYNCFU", prog_leg_syncfu),
+    ("SYNCTX", prog_leg_synctx), ("ANNTX", prog_leg_anntx),
+    ("PDPOST", prog_leg_pdpost), ("SRTO", prog_leg_srto),
+    ("FUTO", prog_leg_futo),
+]
+
+
 def build(mac):
-    entries = [
+    fixed = [
         (16, prog_rx_sync), (64, prog_rx_followup), (128, prog_rx_announce),
         (192, prog_rx_pdreq), (256, prog_rx_pdresp), (320, prog_rx_pdrfu),
         (384, prog_rx_signal), (448, prog_tx_ts),
         (512, lambda b: prog_tmr(b, mac)), (704, prog_tb_battery),
-        (L_BTCA, prog_btca), (L_BECOME, prog_become),
-        (L_RFU, prog_leg_rfu), (L_SYNCFU, prog_leg_syncfu),
-        (L_SYNCTX, prog_leg_synctx), (L_ANNTX, prog_leg_anntx),
     ]
+
+    # pass 1: measure (word counts are independent of branch targets)
+    for name, _ in LEG_FNS:
+        LB[name] = 0
+    fixed_sz = [(b, len(fn(b).words())) for b, fn in fixed]
+    leg_sz = [(name, len(fn(0).words())) for name, fn in LEG_FNS]
+
+    # a fixed program must not run into the next fixed entry
+    fbases = sorted(b for b, _ in fixed) + [DEPTH]
+    for b, sz in fixed_sz:
+        nxt = min(x for x in fbases if x > b)
+        assert b + sz <= nxt, f"fixed {b} is {sz} words, next entry {nxt}"
+
+    # free gaps between fixed programs (µPC 0..15 stays clear)
+    gaps = []
+    prev_end = 16
+    for b, sz in sorted(fixed_sz):
+        if b > prev_end:
+            gaps.append([prev_end, b])
+        prev_end = b + sz
+    if prev_end < DEPTH:
+        gaps.append([prev_end, DEPTH])
+
+    # first-fit decreasing; every leg must land
+    for name, sz in sorted(leg_sz, key=lambda x: -x[1]):
+        for g in gaps:
+            if g[1] - g[0] >= sz:
+                LB[name] = g[0]
+                g[0] += sz
+                break
+        else:
+            raise AssertionError(f"leg {name} ({sz} words) does not fit")
+
+    # pass 2: emit with real bases
     rom = [None] * DEPTH
     used = 0
-    ends = sorted(b for b, _ in entries) + [DEPTH]
-    for base, fn in entries:
+    progs = fixed + [(LB[name], fn) for name, fn in LEG_FNS]
+    for base, fn in progs:
         words = fn(base).words()
-        limit = min(e for e in ends if e > base)
-        assert base + len(words) <= limit, \
-            f"program at {base} is {len(words)} words, next entry at {limit}"
         for i, word in enumerate(words):
-            assert rom[base + i] is None
+            assert rom[base + i] is None, f"overlap at {base + i}"
             rom[base + i] = word
         used += len(words)
     for i in range(DEPTH):
@@ -644,8 +861,10 @@ def main():
     with open(args.out, "w", encoding="ascii") as f:
         for word in rom:
             f.write(f"{word:012X}\n")
+    legs = " ".join(f"{n}@{LB[n]}" for n, _ in LEG_FNS)
     print(f"{args.out}: {DEPTH} words, {used} real "
           f"({100.0 * used / DEPTH:.1f}%), mac {args.mac:012X}")
+    print(f"legs: {legs}")
 
 
 if __name__ == "__main__":
