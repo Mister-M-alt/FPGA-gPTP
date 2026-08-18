@@ -24,12 +24,14 @@
 // 12  375 ms with no Sync -> syncReceiptTimeout -> sync-ok falls
 //     while still slave
 // 13  a +1 ms offset STEPS the phc by its negation (the DLL re-base;
-//     linuxptp first_step_threshold 20 us) and never touches the addend
+//     linuxptp first_step_threshold 20 us); the addend becomes the
+//     bare surviving integrator
 // 14  a +5 us offset SLEWS: the PI addend matches the exact-integer
 //     mirror, and never steps
-// 15  closed loop: a +100 ppm master, 1 ms ahead, converges -- one
-//     re-base, then the measured offset locks under 200 ns with the
-//     integrator carrying the master's rate
+// 15  closed loop: a +140 ppm master, 1 ms ahead, converges -- one
+//     re-base carrying the surviving integrator as the whole addend,
+//     then the measured offset locks under 200 ns with the integrator
+//     carrying the master's rate (above half the clamp, on purpose)
 // 16  negative pdelay in [-80, 0) -> published signed, asCapable HELD
 //     (Milan 4.2.6.2.7)
 // 17  pdelay over the 800 ns threshold -> asCapable falls
@@ -222,7 +224,8 @@ static void servo_mirror(int64_t off) {
   if (mag > (uint64_t)(2 * SV_STEP_NS)) {
     svm.stepped = true;
     svm.step_val = (uint64_t)(-off);
-    return;                                      // integrator survives
+    svm.addend = -svm.intg;      // the surviving rate estimate, alone
+    return;
   }
   svm.stepped = false;
   int64_t t = (off * SV_GAIN_M) >> SV_GAIN_S;
@@ -565,7 +568,7 @@ int main(int argc, char **argv) {
   }
   expect("late FU dropped", (uint32_t)dut->pub_offset_o, (uint32_t)OFF);
   expect("late FU never steers", steps_seen.size() + adj_seen.size(),
-         1);                                     // only phase 10's step
+         2);                                     // phase 10's step + its -I
   const uint64_t TRX2 = TRX + 2000000000ull, ORIGIN2 = ORIGIN + 1999000000ull;
   {
     Frame f = ptp(0x0, 0x0104, 0, 0x0208, 10);
@@ -604,7 +607,9 @@ int main(int argc, char **argv) {
     expect("step is the negation",
            !steps_seen.empty() && steps_seen.back() == svm.step_val &&
                svm.step_val == (uint64_t)(-1000000ll), 1);
-    expect("a step is not a slew", adj_seen.size(), adj_before);
+    expect("step writes the bare estimate",
+           adj_seen.size() == adj_before + 1 &&
+               adj_seen.back() == (uint32_t)(int32_t)(-svm.intg), 1);
   }
 
   // ---- 14: a +5 us offset SLEWS: the PI addend matches the mirror -------
@@ -633,7 +638,9 @@ int main(int argc, char **argv) {
   // the measured offset to zero with the integrator carrying the rate.
   {
     size_t steps_before = steps_seen.size();
-    uint64_t mst_base = phc() + 1000000ull - cyc * 500ull - cyc / 20ull;
+    int64_t intg_at_entry = svm.intg;            // phase 14's ki deposit
+    uint64_t mst_base =
+        phc() + 1000000ull - cyc * 500ull - cyc * 7ull / 100ull;
     uint16_t sq = 0x0200;
     for (int k = 0; k < 24; k++) {
       if ((k % 8) == 0) {                        // keep the GM elected
@@ -647,7 +654,7 @@ int main(int argc, char **argv) {
         run(4000);
       }
       run_svc(250000);                           // one 125 ms interval
-      uint64_t origin = mst_base + cyc * 500ull + cyc / 20ull;
+      uint64_t origin = mst_base + cyc * 500ull + cyc * 7ull / 100ull;
       uint64_t local_rx = phc() + 150;
       Frame f = ptp(0x0, sq, 0, 0x0208, 10);
       f.ts(0);
@@ -657,17 +664,28 @@ int main(int argc, char **argv) {
       g.ts(origin);
       send_frame(g.b, local_rx + 500);
       run(4000);
+      if (k == 0) {
+        // the one step: its addend write must be the surviving
+        // integrator alone, and that integrator is nonzero here --
+        // a step path that cleared it would write zero instead
+        expect("integrator survives the step",
+               intg_at_entry != 0 && !adj_seen.empty() &&
+                   adj_seen.back() ==
+                       (uint32_t)(int32_t)(-intg_at_entry), 1);
+      }
       sq++;
     }
     expect("one re-base then lock", steps_seen.size(), steps_before + 1);
     int32_t final_off = (int32_t)dut->pub_offset_o;
     expect("measured offset converged",
            final_off > -200 && final_off < 200, 1);
-    // ideal rate correction for +100 ppm at 2 MHz: +0.05 ns/tick
-    // = +838,861 addend units; the integrator must carry it
+    // ideal rate correction for +140 ppm at 2 MHz: +0.07 ns/tick
+    // = +1,174,405 addend units. The target sits ABOVE half the
+    // +-200 ppm integrator clamp on purpose: a clamp mutation to
+    // ILIM/2 cannot carry this master and fails the lock
     int32_t final_adj = (int32_t)phc_adj;
     expect("addend carries the master's rate",
-           final_adj > 755000 && final_adj < 923000, 1);
+           final_adj > 1056965 && final_adj < 1291846, 1);
   }
 
   // ---- 16: negative pdelay inside the Milan floor is accepted -----------

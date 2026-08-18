@@ -9,11 +9,12 @@ slave, the measured offset drives the parent `timestamp_counter`'s two
 knobs through the engine's PHC region:
 
   * |offset| > 20 us (the linuxptp first_step_threshold default):
-    STEP -- one adjtime write of -offset re-bases the clock at once.
-    This is the DLL policy of the GM-loss design (the parent's
-    GM_LOSS_RECOVERY.md): a running ptp4l slews a 60 s cliff for 40
-    minutes; the fabric servo re-bases in one write and KEEPS its rate
-    estimate (the integrator survives a step).
+    STEP -- one adjtime write of -offset re-bases the clock at once,
+    and the addend is rewritten to the bare integrator: the rate
+    estimate survives the step while the stale proportional term (moot
+    after a re-base) is dropped. This is the DLL policy of the GM-loss
+    design (the parent's GM_LOSS_RECOVERY.md): a running ptp4l slews a
+    60 s cliff for 40 minutes; the fabric servo re-bases in one write.
   * otherwise: SLEW -- a PI controller in Q8.24 addend units. The loop
     gain is CLOCK-AWARE: the generator computes the ns-to-addend factor
     from --clk-hz (an addend unit is worth clk/8/2^24 ns of phase per
@@ -25,7 +26,7 @@ knobs through the engine's PHC region:
 The addend sign: offset is local minus master, so the correction is its
 negation. A frequency-offset master converges to zero phase error (the
 integrator carries the rate); the engine suite proves it closed-loop
-against a +100 ppm master.
+against a +140 ppm master, deliberately above half the clamp.
 
 --- v4, the asCapable round ---
 
@@ -372,7 +373,12 @@ def prog_leg_servo(base):
     p.label("sv_step")
     p.emit("ALU", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          # -offset
     p.emit("WRST", ra=RB, imm=RG_PHC | 1, fmt=FMT_Q)         # adjtime
-    p.emit("BR", label="sv_done")                # rate estimate survives
+    # the rate estimate survives the step AND becomes the whole addend:
+    # the re-base just made the stale proportional term moot
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_INTG, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=R0, rb=RC, cnd=ALU_SUB)
+    p.emit("WRST", ra=RC, imm=RG_PHC | 0, fmt=FMT_Q)
+    p.emit("BR", label="sv_done")
     p.label("sv_slew")
     p.emit("MOVE", rd=RB, ra=0, imm=GAIN_M_C)
     p.emit("MD", rd=RT, ra=RA, rb=RB, cnd=MD_MULS)           # off * M
