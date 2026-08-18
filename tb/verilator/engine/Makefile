@@ -19,7 +19,7 @@ run: gptp_ucode.hex
 	./obj_dir/Vengine_sim
 
 gptp_ucode.hex: $(RTL_DIR)/ucode/gen_gptp_ucode.py
-	python3 $< -o $@
+	python3 $< --clk-hz 2000000 -o $@
 
 clean:
 	rm -rf obj_dir gptp_ucode.hex

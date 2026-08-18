@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kebag Logic
 // SPDX-License-Identifier: CERN-OHL-W-2.0
 //
-// KL_gptp_engine protocol round-trip -- v4, the asCapable round.
+// KL_gptp_engine protocol round-trip -- v5, the servo round.
 //
 //  1  boot cadence -> our Pdelay_Req, byte-validated; asCapable LOW
 //  2  one good exchange (D = 600 ns) -> pdelay published, asCapable
@@ -23,13 +23,21 @@
 //     still lands
 // 12  375 ms with no Sync -> syncReceiptTimeout -> sync-ok falls
 //     while still slave
-// 13  negative pdelay in [-80, 0) -> published signed, asCapable HELD
+// 13  a +1 ms offset STEPS the phc by its negation (the DLL re-base;
+//     linuxptp first_step_threshold 20 us) and never touches the addend
+// 14  a +5 us offset SLEWS: the PI addend matches the exact-integer
+//     mirror, and never steps
+// 15  closed loop: a +100 ppm master, 1 ms ahead, converges -- one
+//     re-base, then the measured offset locks under 200 ns with the
+//     integrator carrying the master's rate
+// 16  negative pdelay in [-80, 0) -> published signed, asCapable HELD
 //     (Milan 4.2.6.2.7)
-// 14  pdelay over the 800 ns threshold -> asCapable falls
+// 17  pdelay over the 800 ns threshold -> asCapable falls
 //     (neighborPropDelayThresh, Milan 4.2.6.1.1)
-// 15  recovery needs TWO good exchanges again, not one
-// 16  the peer goes silent -> 3 lost responses -> asCapable falls
-//     (allowedLostResponses, 802.1AS-2011 10.2.4.1)
+// 18  recovery needs TWO good exchanges again, not one
+// 19  the peer goes silent -> the FOURTH lost response clears asCapable
+//     (allowedLostResponses, 802.1AS-2011 11.2.12.4)
+// 20  a ratio window wider than 2^32 ns is skipped, not divided stale
 //
 // All frames and expectations built independently from 802.1AS-2011 +
 // Milan v1.2 4.2.6. The pdelay model mirrors the SPEC formula in exact
@@ -98,7 +106,15 @@ static bool in_tx = false;
 static bool auto_txts = false;
 static int auto_pend = -1;
 
-static uint64_t phc() { return cyc * 500ull; }   // 2 MHz -> 500 ns/cycle
+// ---- the PHC: a live timestamp_counter model the servo can steer ----------
+// Q24 accumulator, 500 ns nominal per tick (2 MHz); adjfine addend and
+// adjtime steps applied exactly as the parent counter would
+static unsigned __int128 phc_acc = 0;
+static int32_t phc_adj = 0;
+static std::vector<uint64_t> steps_seen;         // every adjtime write
+static std::vector<uint32_t> adj_seen;           // every adjfine write
+
+static uint64_t phc() { return (uint64_t)(phc_acc >> 24); }
 
 static void tick() {
   if (auto_pend >= 0 && !dut->txts_valid_i) {
@@ -110,7 +126,17 @@ static void tick() {
   }
   dut->clk_i = 0; dut->eval();
   dut->clk_i = 1; dut->eval();
-  dut->phc_ns_i = cyc * 500ull;
+  if (dut->phc_addend_we_o) {
+    phc_adj = (int32_t)dut->phc_addend_o;
+    adj_seen.push_back(dut->phc_addend_o);
+  }
+  if (dut->phc_step_we_o) {
+    steps_seen.push_back(dut->phc_step_o);
+    phc_acc += (unsigned __int128)(
+        (__int128)(int64_t)dut->phc_step_o << 24);
+  }
+  phc_acc += (unsigned __int128)(uint64_t)((500ll << 24) + phc_adj);
+  dut->phc_ns_i = phc();
   if (dut->tx_valid_o) {
     if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
     if (in_tx) cur.push_back(dut->tx_data_o);
@@ -177,6 +203,33 @@ static void model_exchange(uint64_t t1, uint64_t t2, uint64_t t3,
   }
   pdm.d = ((int64_t)(corr - (t3 - t2))) >> 1;
   pdm.count++;
+}
+
+// ---- servo mirror: the ROM's step-vs-slew in exact integer form -----------
+// constants match gen_gptp_ucode.py at --clk-hz 2000000
+static const int64_t SV_STEP_NS = 20000;
+static const int64_t SV_GAIN_M = 4295, SV_GAIN_S = 6;
+static const int64_t SV_ILIM = 1677722;          // 200 ppm at 2 MHz
+static struct {
+  int64_t intg = 0;
+  bool stepped = false;                          // last sample stepped
+  uint64_t step_val = 0;
+  int64_t addend = 0;
+} svm;
+
+static void servo_mirror(int64_t off) {
+  uint64_t mag = (uint64_t)(off + SV_STEP_NS);
+  if (mag > (uint64_t)(2 * SV_STEP_NS)) {
+    svm.stepped = true;
+    svm.step_val = (uint64_t)(-off);
+    return;                                      // integrator survives
+  }
+  svm.stepped = false;
+  int64_t t = (off * SV_GAIN_M) >> SV_GAIN_S;
+  svm.intg += (t >> 2);
+  if (svm.intg > SV_ILIM) svm.intg = SV_ILIM;
+  if (svm.intg < -SV_ILIM) svm.intg = -SV_ILIM;
+  svm.addend = -((t - (t >> 2)) + svm.intg);
 }
 
 // ---- auto peer: answers every Pdelay_Req the DUT transmits ----------------
@@ -492,6 +545,10 @@ int main(int argc, char **argv) {
   const uint64_t OFF = TRX - (ORIGIN + CORR_NS + (uint64_t)pdm.d);
   expect("pub offset", (uint32_t)dut->pub_offset_o, (uint32_t)OFF);
   expect("sync-ok rose", dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
+  servo_mirror((int64_t)OFF);
+  expect("big offset re-bases the phc",
+         !steps_seen.empty() && svm.stepped &&
+             steps_seen.back() == svm.step_val, 1);
 
   // ---- 11: a Follow_Up later than 125 ms pairs with nothing -------------
   // the lone pair's origin is skewed -777 ns so a wrong pairing would
@@ -507,6 +564,8 @@ int main(int argc, char **argv) {
     run(6000);
   }
   expect("late FU dropped", (uint32_t)dut->pub_offset_o, (uint32_t)OFF);
+  expect("late FU never steers", steps_seen.size() + adj_seen.size(),
+         1);                                     // only phase 10's step
   const uint64_t TRX2 = TRX + 2000000000ull, ORIGIN2 = ORIGIN + 1999000000ull;
   {
     Frame f = ptp(0x0, 0x0104, 0, 0x0208, 10);
@@ -520,6 +579,7 @@ int main(int argc, char **argv) {
   }
   const uint64_t OFF2 = TRX2 - (ORIGIN2 + CORR_NS + (uint64_t)pdm.d);
   expect("next pair lands", (uint32_t)dut->pub_offset_o, (uint32_t)OFF2);
+  servo_mirror((int64_t)OFF2);
 
   // ---- 12: syncReceiptTimeout (375 ms) -> sync-ok falls -----------------
   expect("sync-ok falls on timeout",
@@ -527,7 +587,90 @@ int main(int argc, char **argv) {
   expect("still slave at the verdict", dut->pub_flags_o & 3, FL_PRESENT);
   expect("timeout keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
 
-  // ---- 13: negative pdelay inside the Milan floor is accepted -----------
+  // ---- 13: a +1 ms offset STEPS the phc by its negation -----------------
+  {
+    size_t adj_before = adj_seen.size();
+    const uint64_t TRX3 = 30000000000ull;
+    const uint64_t ORG3 = TRX3 - CORR_NS - (uint64_t)pdm.d - 1000000ull;
+    Frame f = ptp(0x0, 0x0105, 0, 0x0208, 10);
+    f.ts(0);
+    send_frame(f.b, TRX3);
+    run(2000);
+    Frame g = ptp(0x8, 0x0105, CORR_NS << 16, 0x0000, 10);
+    g.ts(ORG3);
+    send_frame(g.b, TRX3 + 500);
+    run(6000);
+    servo_mirror(1000000);
+    expect("step is the negation",
+           !steps_seen.empty() && steps_seen.back() == svm.step_val &&
+               svm.step_val == (uint64_t)(-1000000ll), 1);
+    expect("a step is not a slew", adj_seen.size(), adj_before);
+  }
+
+  // ---- 14: a +5 us offset SLEWS: the PI addend matches the mirror -------
+  {
+    size_t steps_before = steps_seen.size();
+    const uint64_t TRX4 = 31000000000ull;
+    const uint64_t ORG4 = TRX4 - CORR_NS - (uint64_t)pdm.d - 5000ull;
+    Frame f = ptp(0x0, 0x0106, 0, 0x0208, 10);
+    f.ts(0);
+    send_frame(f.b, TRX4);
+    run(2000);
+    Frame g = ptp(0x8, 0x0106, CORR_NS << 16, 0x0000, 10);
+    g.ts(ORG4);
+    send_frame(g.b, TRX4 + 500);
+    run(6000);
+    servo_mirror(5000);
+    expect("slew addend matches the PI mirror",
+           !adj_seen.empty() &&
+               adj_seen.back() == (uint32_t)(int32_t)svm.addend, 1);
+    expect("a slew is not a step", steps_seen.size(), steps_before);
+  }
+
+  // ---- 15: closed loop -- a +100 ppm master converges to lock -----------
+  // the master clock runs independent of our phc: 1 ms ahead at start,
+  // +0.05 ns per cycle faster. The first pair steps; the PI then drives
+  // the measured offset to zero with the integrator carrying the rate.
+  {
+    size_t steps_before = steps_seen.size();
+    uint64_t mst_base = phc() + 1000000ull - cyc * 500ull - cyc / 20ull;
+    uint16_t sq = 0x0200;
+    for (int k = 0; k < 24; k++) {
+      if ((k % 8) == 0) {                        // keep the GM elected
+        Frame a = ptp(0xB, (uint16_t)(20 + k), 0, 0x0008, 30);
+        for (int i = 0; i < 10; i++) a.u8(0);
+        a.u16(0xFFC4); a.u8(0);
+        a.u8(100); a.u32(OUR_CQ); a.u8(248);
+        a.u64(GMID);
+        a.u16(0); a.u8(0xA0);
+        send_frame(a.b, phc() + 150);
+        run(4000);
+      }
+      run_svc(250000);                           // one 125 ms interval
+      uint64_t origin = mst_base + cyc * 500ull + cyc / 20ull;
+      uint64_t local_rx = phc() + 150;
+      Frame f = ptp(0x0, sq, 0, 0x0208, 10);
+      f.ts(0);
+      send_frame(f.b, local_rx);
+      run(1000);
+      Frame g = ptp(0x8, sq, 0, 0x0000, 10);
+      g.ts(origin);
+      send_frame(g.b, local_rx + 500);
+      run(4000);
+      sq++;
+    }
+    expect("one re-base then lock", steps_seen.size(), steps_before + 1);
+    int32_t final_off = (int32_t)dut->pub_offset_o;
+    expect("measured offset converged",
+           final_off > -200 && final_off < 200, 1);
+    // ideal rate correction for +100 ppm at 2 MHz: +0.05 ns/tick
+    // = +838,861 addend units; the integrator must carry it
+    int32_t final_adj = (int32_t)phc_adj;
+    expect("addend carries the master's rate",
+           final_adj > 755000 && final_adj < 923000, 1);
+  }
+
+  // ---- 16: negative pdelay inside the Milan floor is accepted -----------
   pd_mode = PD_NEG;
   {
     int base = pdm.count;
@@ -539,7 +682,7 @@ int main(int argc, char **argv) {
          pdm.d < 0 && pdm.d >= -80, 1);
   expect("neg keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
 
-  // ---- 14: over the 800 ns threshold -> asCapable falls -----------------
+  // ---- 17: over the 800 ns threshold -> asCapable falls -----------------
   pd_mode = PD_FAR;
   {
     int base = pdm.count;
@@ -550,7 +693,7 @@ int main(int argc, char **argv) {
   expect("far pdelay over thresh", pdm.d > 800, 1);
   expect("threshold clears capable", dut->pub_flags_o & FL_ASCAP, 0);
 
-  // ---- 15: recovery takes two good exchanges again ----------------------
+  // ---- 18: recovery takes two good exchanges again ----------------------
   pd_mode = PD_NORMAL;
   {
     int base = pdm.count;
@@ -562,7 +705,7 @@ int main(int argc, char **argv) {
     expect("two goods recover", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
   }
 
-  // ---- 16: lost responses clear asCapable at the FOURTH -----------------
+  // ---- 19: lost responses clear asCapable at the FOURTH -----------------
   // 802.1AS-2011 11.2.12.4: the count must EXCEED allowedLostResponses=3
   pd_mode = PD_OFF;
   size_t off_mark = txf.size();
@@ -575,7 +718,7 @@ int main(int argc, char **argv) {
     expect("fall at the fourth lost", reqs == 4 || reqs == 5, 1);
   }
 
-  // ---- 17: a window wider than 2^32 ns must not update the ratio --------
+  // ---- 20: a window wider than 2^32 ns must not update the ratio --------
   // the OFF span above left > 4.3 s between answered exchanges; the
   // first answer after it takes the staleness path in model and DUT
   pd_mode = PD_NORMAL;
