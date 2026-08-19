@@ -1070,6 +1070,71 @@ int main(int argc, char **argv) {
     expect("the cease survives reset and resumes", resumed, 1);
   }
 
+  // ---- 29: a chasing Follow_Up cannot steal the Resp's arrival ----------
+  // resp and resp-FU sent BACK-TO-BACK (no gap): the resp's event
+  // dispatches while the FU's sof is already latching -- a single
+  // ingress-ts register hands the resp the FU's arrival time and skews
+  // the delay by half the gap (the parent fabric bench's finding);
+  // the per-bank stamp keeps each frame's own
+  {
+    pd_mode = PD_SKIP;
+    tx_seen = txf.size();
+    std::vector<uint8_t> rq = wait_tx(0x2, 4000000);
+    expect("a request to chase", !rq.empty(), 1);
+    uint16_t seq = rq.empty() ? 0
+                 : (uint16_t)((rq[44] << 8) | rq[45]);
+    size_t rqi = tx_seen - 1;
+    for (int k = 0; k < 400 && txns[rqi] == 0; k++) tick();
+    uint64_t t1 = txns[rqi];
+    uint64_t t2 = peer_ns(t1 + 300), t3 = t2 + 20000, t4 = t1 + 21200;
+    Frame f = ptp(0x3, seq, 0, 0x0200, 20);
+    f.ts(t2); f.u64(OUR_CID); f.u16(1);
+    Frame g = ptp(0xA, seq, 0, 0x0000, 20);
+    g.ts(t3); g.u64(OUR_CID); g.u16(1);
+    send_frame(f.b, t4);
+    send_frame(g.b, t4 + 100000);        // the chaser, zero-gap
+    run(6000);
+    model_exchange(t1, t2, t3, t4);
+    expect("chased resp keeps its own stamp",
+           dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
+    pd_mode = PD_NORMAL;
+  }
+
+  // ---- 30: a runt chaser cannot poison the predecessor's stamp ----------
+  // (the review's probe): a valid resp followed zero-gap by a 1-byte
+  // fragment with a wild rx_ts -- the parser drops the runt without an
+  // event, so its eof would land before the resp's bank flip; the
+  // length-qualified commit refuses it
+  {
+    pd_mode = PD_SKIP;
+    tx_seen = txf.size();
+    std::vector<uint8_t> rq = wait_tx(0x2, 4000000);
+    expect("a request for the runt test", !rq.empty(), 1);
+    uint16_t seq = rq.empty() ? 0
+                 : (uint16_t)((rq[44] << 8) | rq[45]);
+    size_t rqi = tx_seen - 1;
+    for (int k = 0; k < 400 && txns[rqi] == 0; k++) tick();
+    uint64_t t1 = txns[rqi];
+    uint64_t t2 = peer_ns(t1 + 300), t3 = t2 + 20000, t4 = t1 + 21200;
+    Frame f = ptp(0x3, seq, 0, 0x0200, 20);
+    f.ts(t2); f.u64(OUR_CID); f.u16(1);
+    send_frame(f.b, t4);
+    std::vector<uint8_t> runt = {0xEE, 0xEE};
+    send_frame(runt, t4 + 100000);       // the poison attempt, zero-gap
+    // (two bytes: a 1-byte fragment's commit would only rewrite the
+    // stale staging value -- the 2-byte shape is the one that lands
+    // the runt's own stamp without the length qualification)
+    run(400);
+    Frame g = ptp(0xA, seq, 0, 0x0000, 20);
+    g.ts(t3); g.u64(OUR_CID); g.u16(1);
+    send_frame(g.b, t4 + 1000);
+    run(6000);
+    model_exchange(t1, t2, t3, t4);
+    expect("runt cannot poison the stamp",
+           dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
+    pd_mode = PD_NORMAL;
+  }
+
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;
   return fails ? 1 : 0;

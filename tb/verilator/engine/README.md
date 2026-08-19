@@ -41,8 +41,10 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 26 | a ratio window wider than 2^32 ns is skipped, not divided stale |
 | 27 | the Milan 4.2.6.2.5 cease rule: three multi-identity intervals stop Pdelay_Req and drop asCapable, the cadence countdown resumes them, the ladder re-earns; SAME-identity duplicates are not a storm; replayed forged response pairs cannot climb mid-cease |
 | 28 | a warm reset during a cease still resumes: the countdown lives in reset-surviving scratch and the boot re-arms the cadence |
+| 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
+| 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All thirty-one planted mutations (ladder trigger, both pdelay
+All thirty-three planted mutations (ladder trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
 sync void, a dead step threshold, both servo sign errors, a dead
@@ -52,8 +54,10 @@ parent update, a zeroed origin gather, a reverted consumption gate, a
 removed dispatch seq guard, a dropped become-side best reset, a
 swapped vector/identity compare order, a 30-interval cease threshold,
 duplicates counted as a storm, a dead resume countdown, a removed
-mid-cease completion gate, and one RTL mutation: the read bank tied to
-the write bank) turn the run red.
+mid-cease completion gate, and three RTL mutations: the read bank
+tied to the write bank, the ingress stamp reverted to a single
+register, and the runt length qualification removed) turn the run
+red.
 
 ```sh
 make        # regenerates gptp_ucode.hex from hdl/ucode/, builds, runs
