@@ -124,25 +124,30 @@ the most expensive option and is now measurably unjustified.
 
 ## The v7 engine re-measured: the second bank and the 64-word scratch
 
-v7 deliberately ended the zero-RTL era (the ucode rounds v2..v6 changed
-nothing above): the message bank ping-pongs (2 x 32 x 64 -- each
-accepted frame lands in the bank its event names, retiring the
+v7 is the first structural revision of the ENGINE CORE since the
+skeleton was priced -- the bench rounds' own re-measures above (2,944
+at first light, 2,995 at the grandmaster round) already moved the
+engine, so the honest baseline is the latest prior record, not the
+skeleton. What changed: the message bank ping-pongs (2 x 32 x 64 --
+each accepted frame lands in the bank its event names, retiring the
 torn-read window the v6 announce guard could only narrow) and the
 scratch doubles to 64 words for the Milan 4.2.6.2.5 cease-rule state.
 Same instrument, Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100 MHz,
 2026-08-19:
 
-| | v1 record | v7 | delta |
+| | v3 record (grandmaster round) | v7 | delta |
 |---|---|---|---|
-| Slice LUTs | 2,878 (2,594 logic + 284 LUTRAM) | **3,046** (2,720 + 326) | **+168** |
-| Registers | 2,164 | 2,270 | +106 |
+| Slice LUTs | 2,995 | **3,046** (2,720 logic + 326 LUTRAM) | **+51** |
+| Registers | 2,269 | 2,270 | +1 |
 | BRAM tiles | 1.5 | 1.5 | 0 |
 | DSP48E1 | 4 | 4 | 0 |
-| WNS at 100 MHz, OOC | +1.949 ns | **+1.898 ns, met** | -0.051 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
 
-The µCPU itself is byte-identical (1,701 LUT / +1.949 ns): the ISA has
-not moved since the skeleton; seven ucode revisions and one storage
-revision later the plane prices at **3,046 LUT** against the parent's
-budget. Verification at this measurement: ucpu 768 / parser 31 /
-engine 158 checks, twenty-nine planted mutations red (one of them RTL:
-the read bank tied to the write bank), lint clean.
++51 LUT squares with doubling two 64-bit-wide distributed RAMs (+42
+LUTRAM) plus the bank-select mux and one select flop. The µCPU itself
+is byte-identical (1,701 LUT / +1.949 ns): the ISA has not moved since
+the skeleton; seven ucode revisions later the plane prices at
+**3,046 LUT** against the parent's budget. Verification at this
+measurement: ucpu 768 / parser 31 / engine 162 checks, thirty-one
+planted mutations red (one of them RTL: the read bank tied to the
+write bank), lint clean.

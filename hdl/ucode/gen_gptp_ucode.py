@@ -13,11 +13,14 @@ missing Milan v1.2 4.2.6 behavior lands:
     answered by responses from MORE THAN ONE clock identity, for three
     successive requests, stops Pdelay_Req transmission (the storm
     guard for daisy-chained non-AVB switches). Entering the cease
-    clears asCapable and the ladder; a 5-minute timer (slot 6; the
-    --cease-ms argument exists so a bench can shorten it) resumes
-    transmission, and asCapable re-earns through the ladder as ever.
-    Link/port toggles also resume per the spec -- in this engine that
-    is the integration's reset, which reinitializes everything.
+    clears asCapable and the ladder, and the pdelay COMPLETION path is
+    gated too -- a forged or late exchange cannot climb the ladder
+    while ceased. The resume is a CADENCE COUNTDOWN in scratch (the
+    --cease-ms argument, 5 minutes by default, in 1 s cadence beats):
+    scratch survives a warm reset and the engine's boot re-arms the
+    cadence, so a reset during a cease still completes it -- a
+    timer-armed resume would die with the reset and strand the cease
+    until a bitstream reload (the review's stranded-cease finding).
     Duplicate responses from the SAME identity are not a storm.
 
 --- v6, the full-compare round ---
@@ -178,6 +181,7 @@ S_CID, S_1E9, S_HDR8, S_SALO = 25, 26, 27, 28
 S_SSEQ, S_ASEQ, S_ANNBODY = 29, 30, 31
 # the widened half (the engine's 64-word scratch, v7)
 S_RSP1, S_IVMULTI, S_MULTI, S_CEASE = 32, 33, 34, 35
+S_CEASECNT = 36                          # cadence beats to resume
 # S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
 # (steps ranks BELOW the identity in 10.3.5, so it never joins the
 # packed compare -- the pv compare masks the low 16 first)
@@ -196,6 +200,7 @@ SYNC_RTO_MS_C = 375             # syncReceiptTimeout, Table 4.2
 FU_RTO_MS_C = 125               # followUpReceiptTimeout, Table 4.2
 CEASE_N_C = 3                   # successive multi-answered reqs, 4.2.6.2.5
 CEASE_MS_C = 300_000            # resume after 5 min (--cease-ms overrides)
+                                # counted down in 1 s cadence beats
 
 # ---- servo constants (clock-aware, set by set_servo_gains) -----------------
 STEP_NS_C = 20000               # linuxptp first_step_threshold default, ns
@@ -668,8 +673,6 @@ def prog_tmr(base, mac):
     p.emit("BRS", cnd=BRS_Z, label=LB["SRTO"])
     p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=5)
     p.emit("BRS", cnd=BRS_Z, label=LB["FUTO"])
-    p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=6)
-    p.emit("BRS", cnd=BRS_Z, label=LB["RESUME"])
     p.emit("END")
     p.label("slot0")
     p.emit("RDST", rd=RA, imm=RG_SCR | S_INIT, fmt=FMT_Q)
@@ -697,7 +700,7 @@ def prog_tmr(base, mac):
     for s in (S_SYNCTS, S_PDELAY, S_T2, S_SSEQFLY,
               S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NR4, S_NRR, S_INTG,
               S_T1, S_T4, S_PEND, S_MYSEQ, S_SSEQ, S_ASEQ,
-              S_RSP1, S_IVMULTI, S_MULTI, S_CEASE):
+              S_RSP1, S_IVMULTI, S_MULTI, S_CEASE, S_CEASECNT):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_INIT, fmt=FMT_Q)
@@ -717,7 +720,16 @@ def prog_tmr(base, mac):
     p.emit("BRS", cnd=BRS_Z, label="quiet")
     p.emit("BR", label="storm_ck")
     p.label("quiet")
+    # the countdown to resume: reset-proof (scratch survives, the boot
+    # re-arms this cadence), one beat per second
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_CEASECNT, fmt=FMT_Q)
+    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_SUB, imm=1)
+    p.emit("WRST", ra=RB, imm=RG_SCR | S_CEASECNT, fmt=FMT_Q)
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="resume")
     p.emit("END")
+    p.label("resume")
+    p.emit("BR", label=LB["RESUME"])
     p.label("storm_ck")
     p.emit("RDST", rd=RB, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
     p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=1)
@@ -730,11 +742,11 @@ def prog_tmr(base, mac):
     p.emit("WRST", ra=RC, imm=RG_SCR | S_MULTI, fmt=FMT_Q)
     p.emit("CMP", ra=RC, rb=0, fmt=FMT_D, imm=CEASE_N_C)
     p.emit("BRS", cnd=BRS_LT, label="iv_clear")
-    # cease: stop requesting, drop the verdict, arm the resume timer
+    # cease: stop requesting, drop the verdict, load the countdown
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
-    p.emit("MOVE", rd=RT, ra=0, imm=CEASE_MS_C)
-    p.emit("WRST", ra=RT, imm=RG_TMR | 6, fmt=FMT_Q)
+    p.emit("MOVE", rd=RT, ra=0, imm=max(1, CEASE_MS_C // 1000))
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_CEASECNT, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
     e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
     p.emit("COMMIT")
@@ -920,6 +932,13 @@ def prog_leg_pdpost(base):
     """Pdelay exchange complete; RC = t3. neighborRateRatio, corrected
     link delay, the threshold verdict and the asCapable ladder."""
     p = Prog(base)
+    # ceased: no exchange may climb the ladder (a forged or straggling
+    # response pair must not re-raise asCapable mid-cease)
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="live")
+    p.emit("END")
+    p.label("live")
     p.emit("RDST", rd=RD_, imm=RG_SCR | S_T4, fmt=FMT_Q)
     # ---- nrr window (802.1AS-2011 11.2.15.3) ----
     p.emit("RDST", rd=RA, imm=RG_SCR | S_NR3, fmt=FMT_Q)
@@ -988,25 +1007,26 @@ def prog_leg_pdpost(base):
     return p
 
 
-def prog_leg_srto(base):
-    """Sync receipt timeout (375 ms): the sync-ok verdict falls."""
-    p = Prog(base)
-    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
-    p.emit("COMMIT")
-    p.emit("END")
-    return p
-
-
 def prog_leg_resume(base):
-    """Cease expiry (or its bench-shortened stand-in): requests resume;
-    asCapable re-earns through the ladder as ever."""
+    """The cease countdown reached zero: requests resume; asCapable
+    re-earns through the ladder as ever (PDGOT set: no phantom lost)."""
     p = Prog(base)
     p.emit("WRST", ra=0, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_MULTI, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
-    p.emit("WRST", ra=0, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
+    p.emit("END")
+    return p
+
+
+def prog_leg_srto(base):
+    """Sync receipt timeout (375 ms): the sync-ok verdict falls."""
+    p = Prog(base)
+    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
+    p.emit("COMMIT")
     p.emit("END")
     return p
 

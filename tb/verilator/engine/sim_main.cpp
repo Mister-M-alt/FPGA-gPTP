@@ -996,6 +996,32 @@ int main(int argc, char **argv) {
     for (size_t i = mark; i < txf.size(); i++)
       if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) reqs++;
     expect("ceased: no requests", reqs, 0);
+    // forged Resp+Resp_FU pairs echoing our identity must not climb
+    // the ladder while ceased (the completion path is gated). A real
+    // forger replays against the LAST genuine request: the engine
+    // computes the turnaround from its stored t1, so the forgery must
+    // reuse it or self-defeat on the delay range
+    uint64_t t1_last = 0;
+    for (size_t i = txf.size(); i-- > 0;)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2 && txns[i]) {
+        t1_last = txns[i];
+        break;
+      }
+    expect("a genuine t1 to replay against", t1_last != 0, 1);
+    for (int k = 0; k < 2; k++) {
+      uint64_t t1f = t1_last, t2f = peer_ns(t1f + 300),
+               t3f = t2f + 20000, t4f = t1f + 21200;
+      Frame f = ptp(0x3, (uint16_t)(0x999 + k), 0, 0x0200, 20);
+      f.ts(t2f); f.u64(OUR_CID); f.u16(1);
+      send_frame(f.b, t4f);
+      run(2000);
+      Frame g = ptp(0xA, (uint16_t)(0x999 + k), 0, 0x0000, 20);
+      g.ts(t3f); g.u64(OUR_CID); g.u16(1);
+      send_frame(g.b, t4f + 1000);
+      run(4000);
+    }
+    expect("forged pairs cannot climb mid-cease",
+           dut->pub_flags_o & FL_ASCAP, 0);
     pd_mode = PD_NORMAL;
     size_t mark2 = txf.size();
     bool resumed = false;
@@ -1019,6 +1045,29 @@ int main(int argc, char **argv) {
     expect("duplicates are not a storm",
            dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     pd_mode = PD_NORMAL;
+  }
+
+  // ---- 28: a warm reset during a cease still resumes ---------------------
+  // scratch survives reset and the boot re-arms the cadence, so the
+  // countdown completes; a timer-armed resume died with the reset and
+  // stranded the cease until a bitstream reload (the review's finding)
+  {
+    pd_mode = PD_DUAL;
+    expect("second storm ceases",
+           wait_flags(FL_ASCAP, 0, 16000000ull), 1);
+    run_svc(1000000);                            // eat into the countdown
+    dut->rst_n = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->rst_n = 1;
+    pd_mode = PD_NORMAL;
+    size_t mark = txf.size();
+    bool resumed = false;
+    for (int k = 0; k < 50 && !resumed; k++) {
+      run_svc(200000);
+      for (size_t i = mark; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) resumed = true;
+    }
+    expect("the cease survives reset and resumes", resumed, 1);
   }
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);

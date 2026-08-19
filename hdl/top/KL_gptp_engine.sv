@@ -132,8 +132,10 @@ module KL_gptp_engine
 
   // -------------------------------------------------- engine state RAMs
   //! the message bank ping-pongs: bank_sel_r flips as each accepted
-  //! frame's event is pushed, so the NEXT frame writes the other half
-  //! and a delayed handler still reads the frame its event described
+  //! frame's event is pushed, so the frame a handler's event names
+  //! survives ONE in-flight successor; a third frame within two
+  //! handler latencies reuses the first bank (the announce handler's
+  //! seq guard covers the worst consequence of that depth)
   (* ram_style = "distributed" *) logic [63:0] bank_r    [0:63];
   (* ram_style = "distributed" *) logic [63:0] scratch_r [0:63];
   logic bank_sel_r;

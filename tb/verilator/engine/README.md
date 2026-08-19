@@ -39,9 +39,10 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 24 | recovery needs two good exchanges again |
 | 25 | the FOURTH lost response clears it (802.1AS-2011 11.2.12.4) |
 | 26 | a ratio window wider than 2^32 ns is skipped, not divided stale |
-| 27 | the Milan 4.2.6.2.5 cease rule: three multi-identity intervals stop Pdelay_Req and drop asCapable, the resume timer restarts them, the ladder re-earns; SAME-identity duplicates are not a storm |
+| 27 | the Milan 4.2.6.2.5 cease rule: three multi-identity intervals stop Pdelay_Req and drop asCapable, the cadence countdown resumes them, the ladder re-earns; SAME-identity duplicates are not a storm; replayed forged response pairs cannot climb mid-cease |
+| 28 | a warm reset during a cease still resumes: the countdown lives in reset-surviving scratch and the boot re-arms the cadence |
 
-All twenty-nine planted mutations (ladder trigger, both pdelay
+All thirty-one planted mutations (ladder trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
 sync void, a dead step threshold, both servo sign errors, a dead
@@ -50,8 +51,9 @@ estimate, both pairing bypasses, an inverted steps compare, a dropped
 parent update, a zeroed origin gather, a reverted consumption gate, a
 removed dispatch seq guard, a dropped become-side best reset, a
 swapped vector/identity compare order, a 30-interval cease threshold,
-duplicates counted as a storm, a dead resume timer, and one RTL
-mutation: the read bank tied to the write bank) turn the run red.
+duplicates counted as a storm, a dead resume countdown, a removed
+mid-cease completion gate, and one RTL mutation: the read bank tied to
+the write bank) turn the run red.
 
 ```sh
 make        # regenerates gptp_ucode.hex from hdl/ucode/, builds, runs
