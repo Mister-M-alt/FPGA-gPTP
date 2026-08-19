@@ -1,7 +1,40 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""gPTP µcode ROM image generator -- v5, the servo round.
+"""gPTP µcode ROM image generator -- v6, the full-compare round.
+
+v5 closed the loop; v6 completes the receive-side state machines of
+802.1AS-2011 that the two-node bench let v3 defer:
+
+  * Full BTCA (10.3.4/10.3.5): the plane keeps a BEST-VECTOR record
+    {p1, cq, p2 | stepsRemoved+1, gmIdentity, sourcePortIdentity} --
+    initialized to our own vector, replaced by any better announce,
+    refreshed unconditionally by the CURRENT parent's announces (a
+    parent update, including degradation). The compare is the spec's
+    lexicographic order: priority vector, then grandmasterIdentity,
+    then stepsRemoved (receiver-side +1), then sourcePortIdentity.
+    After every processed announce our own vector contests the best:
+    losing adopts (with the sync-ok verdict cleared ONLY on a GM
+    change -- v5 cleared it on every parent refresh, a 1 Hz flicker
+    this round retires), winning becomes master, and become resets
+    the best record to ourselves.
+  * Sync/Follow_Up pairing (11.4.4): the Follow_Up must match the
+    pending Sync's sequenceId AND sourcePortIdentity, or it pairs with
+    nothing. The source is held in the master-role slot 6 alias (a
+    slave never runs the sync-TX builder), voided at adoption.
+  * asCapable gates consumption (10.2.4.1): a fall while slave stops
+    Sync/Follow_Up processing -- the servo no longer steers on a link
+    whose delay verdict is dead. Pdelay keeps running; it is how the
+    verdict is earned back.
+  * The Sync originTimestamp carries the live PHC (11.4.3 approximate
+    origin; GATH sel 0 -- the first functional consumer of phc_ns_i,
+    which makes a mis-wired clock snapshot observable on the wire).
+
+Still deliberately out (the scratch-widen round that follows): the
+multiple-responder cease rule of Milan 4.2.6.2.5, which needs more
+per-interval state than the 32-word scratch has left.
+
+--- v5, the servo round ---
 
 v4 gave the plane its verdicts; v5 makes it act on them: the PHC servo
 lands and observe-only retires. On every accepted Sync + Follow_Up as
@@ -99,8 +132,14 @@ RG_BANK, RG_TS, RG_SCR, RG_PUB, RG_PHC, RG_TMR = (
     0x00000, 0x10000, 0x20000, 0x30000, 0x40000, 0x50000)
 
 # ---- scratch map -----------------------------------------------------------
-S_SYNCTS, S_HDR, S_OFFSET, S_AMGM = 0, 1, 2, 3
+# v6 reclaimed three write-only slots (the old S_OFFSET/S_AMGM/S_TICK:
+# pub word 4 is the offset record, flags bit 1 is the role, the tick
+# counter had no reader) for the BTCA best-vector record, and slot 6 is
+# role-exclusive: sync-seq-in-flight while master, the pending Sync's
+# sourcePortIdentity while slave (adopt clears it at the role change).
+S_SYNCTS, S_HDR, S_BESTPV, S_BESTID = 0, 1, 2, 3
 S_PDELAY, S_T2, S_SSEQFLY = 4, 5, 6
+S_SYNCSRC = S_SSEQFLY                    # the slave-role alias
 S_PDOK, S_PDLOST = 7, 8                  # asCapable ladder counters
 S_FUORG = 9                              # 0xC2000001 (info-TLV org tail)
 S_MYPV = 10                              # our {p1, cq, p2, 16'0} vector
@@ -108,9 +147,12 @@ S_PDGOT = 11                             # exchange seen since last req
 S_NR3, S_NR4, S_NRR = 12, 13, 14         # nrr window + Q2.30 ratio
 S_INTG = 15                              # servo integrator, addend units
 S_T1, S_T4, S_PEND = 16, 17, 18
-S_RQCID, S_TICK, S_RQSEQ, S_RQPN, S_INIT, S_MYSEQ = 19, 20, 21, 22, 23, 24
+S_RQCID, S_BESTSRC, S_RQSEQ, S_RQPN, S_INIT, S_MYSEQ = 19, 20, 21, 22, 23, 24
 S_CID, S_1E9, S_HDR8, S_SALO = 25, 26, 27, 28
 S_SSEQ, S_ASEQ, S_ANNBODY = 29, 30, 31
+# S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
+# (steps ranks BELOW the identity in 10.3.5, so it never joins the
+# packed compare -- the pv compare masks the low 16 first)
 
 # ---- our clock vector (Milan defaults) -------------------------------------
 P1_C, P2_C = 248, 248
@@ -323,8 +365,11 @@ def prog_rx_sync(base):
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_BANK | 0, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_HDR, fmt=FMT_Q)
-    # only an adopted slave starts the follow-up watch (Table 4.2)
-    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C, FL_PRESENT_C, "sl", "out")
+    p.emit("RDST", rd=RA, imm=RG_BANK | 2, fmt=FMT_Q)
+    p.emit("WRST", ra=RA, imm=RG_SCR | S_SYNCSRC, fmt=FMT_Q)
+    # only a CAPABLE adopted slave starts the follow-up watch
+    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C,
+                FL_PRESENT_C | FL_ASCAP_C, "sl", "out")
     p.emit("MOVE", rd=RT, ra=0, imm=FU_RTO_MS_C)
     p.emit("WRST", ra=RT, imm=RG_TMR | 5, fmt=FMT_Q)
     p.label("out")
@@ -335,12 +380,32 @@ def prog_rx_sync(base):
 def prog_rx_followup(base):
     p = Prog(base)
     e_guard_init(p, "out")
-    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C, FL_PRESENT_C, "sl", "out")
+    # an asCapable fall stops consumption: the servo must not steer on
+    # a link whose delay verdict is dead (802.1AS-2011 10.2.4.1)
+    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C,
+                FL_PRESENT_C | FL_ASCAP_C, "sl", "out")
     # a Sync must be pending and valid: the FU-receipt timeout zeroes it,
     # so a Follow_Up later than 125 ms pairs with nothing and is dropped
     p.emit("RDST", rd=RD_, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
     p.emit("CMP", ra=RD_, rb=0, fmt=FMT_Q, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="out")
+    # 11.4.4 pairing: the FU must match the pending Sync's sequenceId
+    # and sourcePortIdentity, or it pairs with nothing
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_HDR, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("RDST", rd=RU, imm=RG_BANK | 0, fmt=FMT_Q)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=0xFFFF)
+    p.emit("CMP", ra=RT, rb=RU, fmt=FMT_W)
+    p.emit("BRS", cnd=BRS_Z, label="srcck")
+    p.emit("BR", label="out")
+    p.label("srcck")
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_SYNCSRC, fmt=FMT_Q)
+    p.emit("RDST", rd=RU, imm=RG_BANK | 2, fmt=FMT_Q)
+    p.emit("CMP", ra=RT, rb=RU, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="paired")
+    p.emit("BR", label="out")
+    p.label("paired")
     e_full_ts(p, RA)
     p.emit("RDST", rd=RB, imm=RG_BANK | 1, fmt=FMT_Q)
     p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_SAR, imm=16)
@@ -348,7 +413,6 @@ def prog_rx_followup(base):
     p.emit("RDST", rd=RB, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
     p.emit("ALU", rd=RA, ra=RA, rb=RB, cnd=ALU_ADD)
     p.emit("ALU", rd=RA, ra=RD_, rb=RA, cnd=ALU_SUB)
-    p.emit("WRST", ra=RA, imm=RG_SCR | S_OFFSET, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_PUB | 4, fmt=FMT_Q)
     p.emit("BR", label=LB["SERVO"])
     p.label("out")
@@ -424,6 +488,8 @@ def prog_leg_servo(base):
 
 def prog_rx_announce(base):
     p = Prog(base)
+    p.emit("MOVE", rd=RA, ra=0, imm=0xDEAD)
+    p.emit("WRST", ra=RA, imm=RG_PUB | 5, fmt=FMT_Q)  # BREADCRUMB
     e_guard_init(p, "out")
     # 802.1AS: a port that is not asCapable does not enter the contest
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "out")
@@ -431,8 +497,13 @@ def prog_rx_announce(base):
     p.emit("WRST", ra=RA, imm=RG_PUB | 5, fmt=FMT_Q)    # publish raw: bench
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_SHL, imm=16)  # {p1,cq,p2,0}
     p.emit("RDST", rd=RB, imm=RG_BANK | 9, fmt=FMT_Q)   # their gm identity
-    p.emit("RDST", rd=RV, imm=RG_SCR | S_MYPV, fmt=FMT_Q)
-    p.emit("RDST", rd=RW, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    # snapshot the rest of the announce NOW: the single message bank
+    # belongs to the NEXT frame the moment it arrives, and this handler
+    # is long (the deferred double-bank engine revision retires this)
+    p.emit("RDST", rd=RC, imm=RG_BANK | 10, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_SHR, imm=48)
+    p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_ADD, imm=1)  # steps+1
+    p.emit("RDST", rd=RD_, imm=RG_BANK | 2, fmt=FMT_Q)     # their source
     p.emit("BR", label=LB["BTCA"])
     p.label("out")
     p.emit("END")
@@ -549,19 +620,22 @@ def prog_tmr(base, mac):
     p.emit("WRST", ra=RP, imm=RG_SCR | S_1E9, fmt=FMT_Q)
     e_const(p, RC, cid)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     e_const(p, RC, hdr8)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_HDR8, fmt=FMT_Q)
     e_const(p, RC, salo)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_SALO, fmt=FMT_Q)
     e_const(p, RC, mypv)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_MYPV, fmt=FMT_Q)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)  # steps 0: us
     e_const(p, RC, annbody)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_ANNBODY, fmt=FMT_Q)
     e_const(p, RC, 0xC2000001)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_FUORG, fmt=FMT_Q)
-    for s in (S_SYNCTS, S_OFFSET, S_AMGM, S_PDELAY, S_T2, S_SSEQFLY,
+    for s in (S_SYNCTS, S_PDELAY, S_T2, S_SSEQFLY,
               S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NR4, S_NRR, S_INTG,
-              S_T1, S_T4, S_PEND, S_TICK, S_MYSEQ, S_SSEQ, S_ASEQ):
+              S_T1, S_T4, S_PEND, S_MYSEQ, S_SSEQ, S_ASEQ):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_INIT, fmt=FMT_Q)
@@ -570,9 +644,6 @@ def prog_tmr(base, mac):
     p.label("cadence")
     p.emit("MOVE", rd=RT, ra=0, imm=1000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 0, fmt=FMT_Q)
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_TICK, fmt=FMT_Q)
-    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_ADD, imm=1)
-    p.emit("WRST", ra=RA, imm=RG_SCR | S_TICK, fmt=FMT_Q)
     p.emit("RDST", rd=RB, imm=RG_SCR | S_PEND, fmt=FMT_Q)
     p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="send")
@@ -636,28 +707,71 @@ def prog_tb_battery(base):
 # ---- shared legs (auto-packed) ---------------------------------------------
 
 def prog_btca(base):
-    """r1 = their vector, r2 = their gmId, r10 = ours, r11 = our CID."""
+    """RA = their {p1,cq,p2,16'0}, RB = their gmId; the bank still holds
+    the announce. 10.3.4/10.3.5: a parent update replaces the best
+    unconditionally; anything else must beat it lexicographically --
+    pv, then gmId, then stepsRemoved(+1), then sourcePortIdentity.
+    Afterwards our own vector contests whatever the best now is."""
     p = Prog(base)
-    e_ult64(p, RA, RV, "adopt", "reject", "pv")
-    e_ult64(p, RB, RW, "adopt", "reject", "id")
-    p.emit("BR", label="reject")                     # equal cannot happen
-    p.label("adopt")
-    p.emit("WRST", ra=0, imm=RG_SCR | S_AMGM, fmt=FMT_Q)
-    p.emit("WRST", ra=RB, imm=RG_PUB | 0, fmt=FMT_Q)
-    p.emit("RDST", rd=RC, imm=RG_BANK | 2, fmt=FMT_Q)
-    p.emit("WRST", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)
-    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)     # slave; sync unproven
-    p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)  # no stale pair
-    p.emit("WRST", ra=0, imm=RG_TMR | 1, fmt=FMT_Q)   # sync TX off
-    p.emit("WRST", ra=0, imm=RG_TMR | 3, fmt=FMT_Q)   # announce TX off
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
+    p.emit("CMP", ra=RD_, rb=RT, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="take")                 # parent update
+    p.emit("RDST", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
+    p.emit("ALU", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=16)
+    p.emit("ALU", rd=RV, ra=RV, rb=0, cnd=ALU_SHL, imm=16)  # steps out
+    p.emit("RDST", rd=RW, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
+    e_ult64(p, RA, RV, "take", "ours", "pv")
+    e_ult64(p, RB, RW, "take", "ours", "id")
+    p.emit("RDST", rd=RU, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=0xFFFF)
+    p.emit("CMP", ra=RC, rb=RU, fmt=FMT_W)                 # steps low16
+    p.emit("BRS", cnd=BRS_LT, label="take")
+    p.emit("BRS", cnd=BRS_Z, label="srctie")
+    p.emit("BR", label="ours")
+    p.label("srctie")
+    # NEVER hand RT/RU to e_ult64: they are its scratch registers
+    p.emit("RDST", rd=RW, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
+    e_ult64(p, RD_, RW, "take", "ours", "sp")
+    p.emit("BR", label="take")                             # identical
+    p.label("take")
+    p.emit("ALU", rd=RU, ra=RA, rb=RC, cnd=ALU_OR)         # pv | steps
+    p.emit("WRST", ra=RU, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
+    p.emit("WRST", ra=RB, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
+    p.emit("WRST", ra=RD_, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
+    p.label("ours")
+    # the contest: {mypv, our cid, steps 0} vs the (updated) best
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_MYPV, fmt=FMT_Q)
+    p.emit("RDST", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
+    p.emit("ALU", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=16)
+    p.emit("ALU", rd=RV, ra=RV, rb=0, cnd=ALU_SHL, imm=16)
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    p.emit("RDST", rd=RW, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
+    e_ult64(p, RA, RV, "we_win", "they_win", "opv")
+    e_ult64(p, RB, RW, "we_win", "they_win", "oid")
+    p.emit("RDST", rd=RU, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_W, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="we_win")     # stored steps 0 = us
+    p.label("they_win")
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
+    p.emit("WRST", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)       # parent
+    p.emit("RDST", rd=RT, imm=RG_PUB | 0, fmt=FMT_Q)
+    p.emit("CMP", ra=RT, rb=RW, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="same_gm")
+    # a GM change is the full adoption; a refresh must NOT clear the
+    # sync-ok verdict (v5 flickered it at the parent's announce rate)
+    p.emit("WRST", ra=RW, imm=RG_PUB | 0, fmt=FMT_Q)
+    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCSRC, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_TMR | 1, fmt=FMT_Q)        # sync TX off
+    p.emit("WRST", ra=0, imm=RG_TMR | 3, fmt=FMT_Q)        # ann TX off
+    p.label("same_gm")
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
-    p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)  # receipt timeout
+    p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)       # receipt watch
     p.emit("COMMIT")
     p.emit("END")
-    p.label("reject")                                # ours is better
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_AMGM, fmt=FMT_Q)
-    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
-    p.emit("BRS", cnd=BRS_Z, label="held")
+    p.label("we_win")
+    e_flag_gate(p, FL_AMGM_C, 0, "nm", "held")             # already GM?
     p.emit("BR", label=LB["BECOME"])
     p.label("held")
     p.emit("END")
@@ -678,11 +792,15 @@ def prog_becgate(base):
 
 def prog_become(base):
     p = Prog(base)
-    p.emit("MOVE", rd=RT, ra=0, imm=1)
-    p.emit("WRST", ra=RT, imm=RG_SCR | S_AMGM, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 0, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)
+    # the best-vector record returns to ourselves: a dead parent's
+    # claim expires with the receipt timeout that brought us here
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_MYPV, fmt=FMT_Q)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now
@@ -826,11 +944,7 @@ def prog_leg_synctx(base):
     p = Prog(base)
     p.emit("MOVE", rd=RT, ra=0, imm=125)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_AMGM, fmt=FMT_Q)
-    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
-    p.emit("BRS", cnd=BRS_Z, label="gm")
-    p.emit("END")
-    p.label("gm")
+    e_flag_gate(p, FL_AMGM_C, FL_AMGM_C, "gm", "skip")
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "skip")
     p.emit("RDST", rd=RB, imm=RG_SCR | S_PEND, fmt=FMT_Q)
     p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
@@ -841,8 +955,11 @@ def prog_leg_synctx(base):
     p.emit("RDST", rd=RA, imm=RG_SCR | S_SSEQ, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_SSEQFLY, fmt=FMT_Q)
     e_hdr(p, 0x0, 0x0208, RA, 0xFD, 44)
-    p.emit("BFLD", ra=0, fmt=FMT_Q)                  # originTimestamp
-    p.emit("BFLD", ra=0, fmt=FMT_W)                  #   (10 bytes)
+    # 11.4.3: the two-step Sync's originTimestamp is the approximate
+    # egress time -- the live PHC via gather sel 0 (the first
+    # functional consumer of phc_ns_i)
+    p.emit("GATH", rd=RB, imm=0)
+    e_ts_fields(p, RB)
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_ADD, imm=1)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_SSEQ, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=3)
@@ -856,11 +973,7 @@ def prog_leg_anntx(base):
     p = Prog(base)
     p.emit("MOVE", rd=RT, ra=0, imm=1000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_AMGM, fmt=FMT_Q)
-    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
-    p.emit("BRS", cnd=BRS_Z, label="gm")
-    p.emit("END")
-    p.label("gm")
+    e_flag_gate(p, FL_AMGM_C, FL_AMGM_C, "gm", "skip")
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "skip")
     p.emit("BR", label="go")
     p.label("skip")

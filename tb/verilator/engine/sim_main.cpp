@@ -82,7 +82,8 @@ struct Frame {
 };
 
 static Frame ptp(uint8_t mtype, uint16_t seq, uint64_t corr,
-                 uint16_t flags, uint16_t body_len) {
+                 uint16_t flags, uint16_t body_len,
+                 uint64_t src = PEER_CID) {
   Frame f;
   f.u48(0x0180C200000Eull);
   f.u48(0x0080E1112233ull);
@@ -93,11 +94,12 @@ static Frame ptp(uint8_t mtype, uint16_t seq, uint64_t corr,
   f.u16(flags);
   f.u64(corr);
   f.u32(0);
-  f.u64(PEER_CID); f.u16(1);
+  f.u64(src); f.u16(1);
   f.u16(seq);
   f.u8(0x05); f.u8(0x7F);
   return f;
 }
+
 
 static VKL_gptp_engine *dut;
 static uint64_t cyc = 0;
@@ -316,6 +318,32 @@ static std::vector<uint8_t> wait_tx(int mtype, uint64_t max_cycles,
   printf("FAIL wait_tx type %d: timeout\n", mtype);
   fails++; checks++;
   return {};
+}
+
+// a sync+FU pair from `src`; returns the offset the plane should see
+static void sync_pair(uint16_t seq, uint64_t local_rx, uint64_t origin,
+                      uint64_t src = PEER_CID) {
+  Frame f = ptp(0x0, seq, 0, 0x0208, 10, src);
+  f.ts(0);
+  send_frame(f.b, local_rx);
+  run(2000);
+  Frame g = ptp(0x8, seq, 0, 0x0000, 10, src);
+  g.ts(origin);
+  send_frame(g.b, local_rx + 500);
+  run(6000);
+}
+
+// an announce carrying {p1, gmid, steps} from `src`
+static void announce(uint16_t seq, uint8_t p1, uint64_t gmid,
+                     uint16_t steps, uint64_t src) {
+  Frame a = ptp(0xB, seq, 0, 0x0008, 30, src);
+  for (int i = 0; i < 10; i++) a.u8(0);
+  a.u16(0xFFC4); a.u8(0);
+  a.u8(p1); a.u32(OUR_CQ); a.u8(248);
+  a.u64(gmid);
+  a.u16(steps); a.u8(0xA0);
+  send_frame(a.b, 5000000);
+  run(6000);
 }
 
 static uint64_t fld48(const std::vector<uint8_t> &f, size_t o) {
@@ -688,7 +716,131 @@ int main(int argc, char **argv) {
            final_adj > 1056965 && final_adj < 1291846, 1);
   }
 
-  // ---- 16: negative pdelay inside the Milan floor is accepted -----------
+  // ---- 16: a Follow_Up with the wrong sequenceId pairs with nothing -----
+  const uint64_t TRX6 = 40000000000ull;
+  {
+    uint32_t off_before = dut->pub_offset_o;
+    Frame f = ptp(0x0, 0x0400, 0, 0x0208, 10);
+    f.ts(0);
+    send_frame(f.b, TRX6);
+    run(2000);
+    Frame g = ptp(0x8, 0x0401, 0, 0x0000, 10);   // wrong seq
+    g.ts(TRX6 - 5000);
+    send_frame(g.b, TRX6 + 500);
+    run(6000);
+    expect("mismatched seq dropped", dut->pub_offset_o, off_before);
+    Frame h = ptp(0x8, 0x0400, 0, 0x0000, 10);   // the right one
+    h.ts(TRX6 - 5000);
+    send_frame(h.b, TRX6 + 600);
+    run(6000);
+    const uint64_t OFF6 = TRX6 - (TRX6 - 5000 + (uint64_t)pdm.d);
+    expect("matching FU still lands", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF6);
+  }
+
+  // ---- 17: a Follow_Up from the wrong source pairs with nothing ---------
+  const uint64_t IMPOSTOR = 0x00DEADFFFE000001ull;
+  {
+    uint32_t off_before = dut->pub_offset_o;
+    Frame f = ptp(0x0, 0x0410, 0, 0x0208, 10);
+    f.ts(0);
+    send_frame(f.b, TRX6 + 1000000000ull);
+    run(2000);
+    Frame g = ptp(0x8, 0x0410, 0, 0x0000, 10, IMPOSTOR);
+    g.ts(TRX6 + 1000000000ull - 7000);
+    send_frame(g.b, TRX6 + 1000000500ull);
+    run(6000);
+    expect("impostor FU dropped", dut->pub_offset_o, off_before);
+    Frame h = ptp(0x8, 0x0410, 0, 0x0000, 10);
+    h.ts(TRX6 + 1000000000ull - 7000);
+    send_frame(h.b, TRX6 + 1000000600ull);
+    run(6000);
+    const uint64_t OFF7 = 7000 - (uint64_t)pdm.d;
+    expect("paired FU still lands", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF7);
+  }
+
+  // ---- 18: gmId tie -> stepsRemoved -> sourcePortIdentity ---------------
+  // same GM and vector through a second announcer with a LOWER source
+  // identity: the source tiebreak switches the parent; sync-ok and the
+  // GM identity hold (no adoption flicker)
+  const uint64_t SRC2 = 0x0011223344556677ull;
+  {
+    expect("sync-ok up before the switch",
+           dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
+    announce(40, 100, GMID, 0, SRC2);
+    expect("source tiebreak switches parent", dut->pub_parent_id_o, SRC2);
+    expect("gm survives the switch", dut->pub_gm_id_o, GMID);
+    expect("no flicker on the switch",
+           dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
+    // a LONGER path to the same GM loses on stepsRemoved
+    announce(41, 100, GMID, 1, 0x00F0F0FFFE000001ull);
+    expect("longer path rejected", dut->pub_parent_id_o, SRC2);
+    // and a SHORTER path wins on stepsRemoved BEFORE the source
+    // tiebreak: the parent re-roots deeper, then a higher-identity
+    // announcer with fewer hops takes over
+    announce(46, 100, GMID, 3, SRC2);
+    const uint64_t SRC5 = 0x00F1F1FFFE000009ull;
+    announce(47, 100, GMID, 1, SRC5);
+    expect("shorter path wins", dut->pub_parent_id_o, SRC5);
+  }
+
+  // ---- 19: the parent degrades below us -> immediate takeover -----------
+  // 10.3.5: a parent update replaces the best; ours now wins the
+  // contest and become-master runs WITHOUT waiting any timeout
+  {
+    announce(42, 250, 0xAABBCCFFFE010203ull, 0, 0x00F1F1FFFE000009ull);
+    expect("degraded parent yields NOW", dut->pub_flags_o & 3,
+           FL_PRESENT | FL_AMGM);
+    expect("gm is us again", dut->pub_gm_id_o, OUR_CID);
+  }
+
+  // ---- 20: the Sync originTimestamp carries the live PHC ----------------
+  // 11.4.3 approximate origin via gather sel 0 -- the first functional
+  // consumer of phc_ns_i, observable on the wire
+  {
+    tx_seen = txf.size();
+    std::vector<uint8_t> sy = wait_tx(0x0, 800000);
+    if (!sy.empty()) {
+      uint64_t origin = fld48(sy, 48) * 1000000000ull + fld32(sy, 54);
+      uint64_t now = phc();
+      int64_t d = (int64_t)(now - origin);
+      expect("origin is the live clock", d >= 0 && d < 300000, 1);
+    }
+  }
+
+  // ---- 21: an asCapable fall stops sync consumption ---------------------
+  {
+    announce(43, 100, GMID, 0, PEER_CID);        // adopt again
+    expect("re-adopted", dut->pub_flags_o & 3, FL_PRESENT);
+    sync_pair(0x0500, TRX6 + 5000000000ull, TRX6 + 5000000000ull - 4000);
+    const uint64_t OFF_A = 4000 - (uint64_t)pdm.d;
+    expect("baseline pair lands", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF_A);
+    pd_mode = PD_FAR;
+    {
+      int base = pdm.count;
+      expect("far exchange ran", wait_exchanges(base + 1, 4000000ull), 1);
+      run(4000);
+    }
+    expect("capable fell", dut->pub_flags_o & FL_ASCAP, 0);
+    size_t writes = steps_seen.size() + adj_seen.size();
+    sync_pair(0x0501, TRX6 + 6000000000ull, TRX6 + 6000000000ull - 9000);
+    expect("uncapable pair dropped", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF_A);
+    expect("uncapable pair never steers",
+           steps_seen.size() + adj_seen.size(), writes);
+    pd_mode = PD_NORMAL;
+    announce(44, 100, GMID, 0, PEER_CID);        // keep the GM elected
+    expect("capable again", wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    announce(45, 100, GMID, 0, PEER_CID);
+    sync_pair(0x0502, TRX6 + 9000000000ull, TRX6 + 9000000000ull - 6000);
+    const uint64_t OFF_C = 6000 - (uint64_t)pdm.d;
+    expect("recovered pair lands", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF_C);
+  }
+
+  // ---- 22: negative pdelay inside the Milan floor is accepted -----------
   pd_mode = PD_NEG;
   {
     int base = pdm.count;
@@ -700,7 +852,7 @@ int main(int argc, char **argv) {
          pdm.d < 0 && pdm.d >= -80, 1);
   expect("neg keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
 
-  // ---- 17: over the 800 ns threshold -> asCapable falls -----------------
+  // ---- 23: over the 800 ns threshold -> asCapable falls -----------------
   pd_mode = PD_FAR;
   {
     int base = pdm.count;
@@ -711,7 +863,7 @@ int main(int argc, char **argv) {
   expect("far pdelay over thresh", pdm.d > 800, 1);
   expect("threshold clears capable", dut->pub_flags_o & FL_ASCAP, 0);
 
-  // ---- 18: recovery takes two good exchanges again ----------------------
+  // ---- 24: recovery takes two good exchanges again ----------------------
   pd_mode = PD_NORMAL;
   {
     int base = pdm.count;
@@ -723,7 +875,7 @@ int main(int argc, char **argv) {
     expect("two goods recover", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
   }
 
-  // ---- 19: lost responses clear asCapable at the FOURTH -----------------
+  // ---- 25: lost responses clear asCapable at the FOURTH -----------------
   // 802.1AS-2011 11.2.12.4: the count must EXCEED allowedLostResponses=3
   pd_mode = PD_OFF;
   size_t off_mark = txf.size();
@@ -736,7 +888,7 @@ int main(int argc, char **argv) {
     expect("fall at the fourth lost", reqs == 4 || reqs == 5, 1);
   }
 
-  // ---- 20: a window wider than 2^32 ns must not update the ratio --------
+  // ---- 26: a window wider than 2^32 ns must not update the ratio --------
   // the OFF span above left > 4.3 s between answered exchanges; the
   // first answer after it takes the staleness path in model and DUT
   pd_mode = PD_NORMAL;

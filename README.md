@@ -23,9 +23,15 @@ is retired. Offsets beyond 20 us (the linuxptp first_step_threshold
 default) re-base the clock in one adjtime write per the GM-loss DLL
 policy, smaller ones drive a clock-aware PI addend (kp 3/4, ki 1/4 of
 the normalized gain: critically damped), and the engine suite proves
-lock closed-loop against a +100 ppm master. Still ahead as further
-revisions on this same ROM: stepsRemoved tie-breaks and the
-multiple-responder cease rule; then the parent-side integration.
+lock closed-loop against a +140 ppm master, and v6 the full-compare
+round: BTCA against a stored best vector (parent updates, stepsRemoved
+and sourcePortIdentity tie-breaks, immediate takeover on parent
+degradation), Sync/Follow_Up sequence-and-source pairing, asCapable
+gating sync consumption, and the Sync originTimestamp carrying the
+live PHC. Still ahead on this ROM: the Milan 4.2.6.2.5
+multiple-responder cease rule (it needs the scratch widen) and a second
+message bank in the engine (a frame arriving during a long handler
+still overwrites the one bank); then the parent-side integration.
 
 ## Why a µCPU with an ALU
 
