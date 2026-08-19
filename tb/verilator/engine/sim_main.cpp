@@ -3,43 +3,28 @@
 //
 // KL_gptp_engine protocol round-trip -- v5, the servo round.
 //
-//  1  boot cadence -> our Pdelay_Req, byte-validated; asCapable LOW
-//  2  one good exchange (D = 600 ns) -> pdelay published, asCapable
-//     STILL low (Milan 4.2.6.2.4: not before the second exchange)
-//  3  peer Pdelay_Req -> our two-step Resp + Resp_FU, byte-validated
-//  4  the auto-responder peer comes up (drift +2^-13) -> the second
-//     exchange raises asCapable; pub pdelay matches the nrr-corrected
-//     integer model exactly
-//  5  no announce heard -> announce receipt timeout -> BECOME MASTER
-//     (which the ladder now gates on asCapable)
-//  6  our Announce byte-validated (vector, gm id, path trace TLV)
-//  7  our two-step Sync + Follow_Up byte-validated; FU origin = the
-//     egress timestamp this harness returned for that exact Sync
-//  8  worse announce (p1=250) -> BTCA rejects, we stay master
-//  9  better announce (p1=100) -> BTCA adopts, sync TX stops
-// 10  as slave: peer Sync + Follow_Up -> pub_offset; sync-ok rises
-// 11  a Sync whose Follow_Up is 135 ms late pairs with NOTHING
-//     (followUpReceiptTimeout 125 ms voided it); the next proper pair
-//     still lands
-// 12  375 ms with no Sync -> syncReceiptTimeout -> sync-ok falls
-//     while still slave
-// 13  a +1 ms offset STEPS the phc by its negation (the DLL re-base;
-//     linuxptp first_step_threshold 20 us); the addend becomes the
-//     bare surviving integrator
-// 14  a +5 us offset SLEWS: the PI addend matches the exact-integer
-//     mirror, and never steps
-// 15  closed loop: a +140 ppm master, 1 ms ahead, converges -- one
-//     re-base carrying the surviving integrator as the whole addend,
-//     then the measured offset locks under 200 ns with the integrator
-//     carrying the master's rate (above half the clamp, on purpose)
-// 16  negative pdelay in [-80, 0) -> published signed, asCapable HELD
-//     (Milan 4.2.6.2.7)
-// 17  pdelay over the 800 ns threshold -> asCapable falls
-//     (neighborPropDelayThresh, Milan 4.2.6.1.1)
-// 18  recovery needs TWO good exchanges again, not one
-// 19  the peer goes silent -> the FOURTH lost response clears asCapable
-//     (allowedLostResponses, 802.1AS-2011 11.2.12.4)
-// 20  a ratio window wider than 2^32 ns is skipped, not divided stale
+//  1..4   pdelay bring-up: byte-exact both roles, asCapable at the
+//         second good exchange and not the first (Milan 4.2.6.2.4)
+//  5..9   grandmaster life: timeout become (asCapable-gated), Announce/
+//         Sync/Follow_Up byte-exact, BTCA both directions, adoption
+// 10..12  slave sync path: offset, sync-ok verdict, the 125 ms
+//         Follow_Up and 375 ms sync receipt timeouts (Table 4.2)
+// 13..15  the servo: step-vs-slew at 20 us, the PI addend against an
+//         exact-integer mirror, closed-loop lock on a +140 ppm master
+//         (one re-base carrying the surviving integrator)
+// 16..17  Sync/Follow_Up pairing by sequenceId AND source (11.4.4)
+// 18,18b  BTCA tie-breaks: steps then source switch the parent with no
+//         sync-ok flicker; a torn-bank delayed dispatch is dropped by
+//         the closing seq guard instead of seizing mastership
+// 19..21  parent degradation yields mastership immediately (10.3.5);
+//         the Sync origin carries the live PHC (gather consumes
+//         phc_ns_i); an asCapable fall stops consumption and steering
+// 21b,21c become resets the best record (no ghost GM after a quiet
+//         ride to mastership); the priority vector outranks the
+//         identity in the compare order
+// 22..26  the pdelay verdict tail: the Milan floor, the threshold,
+//         two-exchange recovery, the fourth lost response, the stale
+//         ratio window
 //
 // All frames and expectations built independently from 802.1AS-2011 +
 // Milan v1.2 4.2.6. The pdelay model mirrors the SPEC formula in exact
@@ -785,6 +770,36 @@ int main(int argc, char **argv) {
     expect("shorter path wins", dut->pub_parent_id_o, SRC5);
   }
 
+  // ---- 18b: a delayed dispatch must not act on a torn bank --------------
+  // a pdelay-req occupies the uCPU; a worse announce and then a Sync
+  // from the CURRENT PARENT arrive zero-gap. Sync frames never write
+  // the announce bank words, so the delayed announce dispatch reads
+  // the announce's worse vector with the SYNC's source: without the
+  // closing seq guard that torn read is a parent-update take of a
+  // worse vector, our vector wins, and the plane wrongfully seizes
+  // mastership (the review's R8 failure mode, made deterministic)
+  {
+    Frame q = ptp(0x2, 0x7777, 0, 0x0000, 20);
+    q.u64(0); q.u16(0); q.ts(0);
+    q.b.resize(68);
+    send_frame(q.b, phc() + 150);
+    Frame a = ptp(0xB, 60, 0, 0x0008, 30, 0x00A0A0FFFE000011ull);
+    for (int i = 0; i < 10; i++) a.u8(0);
+    a.u16(0xFFC4); a.u8(0);
+    a.u8(200); a.u32(OUR_CQ); a.u8(248);
+    a.u64(0x00A0A0FFFE0000AAull);
+    a.u16(0); a.u8(0xA0);
+    Frame sy = ptp(0x0, 0x7778, 0, 0x0208, 10, 0x00F1F1FFFE000009ull);
+    sy.ts(0);
+    send_frame(a.b, phc() + 300);
+    send_frame(sy.b, phc() + 400);               // zero-gap, parent src
+    run(20000);
+    expect("no wrongful takeover", dut->pub_flags_o & FL_AMGM, 0);
+    expect("gm undisturbed by the race", dut->pub_gm_id_o, GMID);
+    expect("parent undisturbed by the race", dut->pub_parent_id_o,
+           0x00F1F1FFFE000009ull);
+  }
+
   // ---- 19: the parent degrades below us -> immediate takeover -----------
   // 10.3.5: a parent update replaces the best; ours now wins the
   // contest and become-master runs WITHOUT waiting any timeout
@@ -838,6 +853,30 @@ int main(int argc, char **argv) {
     const uint64_t OFF_C = 6000 - (uint64_t)pdm.d;
     expect("recovered pair lands", (uint32_t)dut->pub_offset_o,
            (uint32_t)OFF_C);
+  }
+
+  // ---- 21b: become resets the best record -- no ghost GM ----------------
+  // announce silence rides out the receipt timeout (pdelay keeps
+  // asCapable alive), the plane becomes master, and the DEAD parent's
+  // record must be gone: a mediocre newcomer (worse than the ghost,
+  // better than us) must be ADOPTED, not lose to a ghost
+  const uint64_t NEWGM = 0x00BEEFFFFE000002ull;
+  const uint64_t NEWSRC = 0x00BEEFFFFE000001ull;
+  {
+    expect("quiet ride to mastership",
+           wait_flags(FL_AMGM, FL_AMGM, 8000000ull), 1);
+    expect("gm is us after the quiet", dut->pub_gm_id_o, OUR_CID);
+    announce(70, 150, NEWGM, 0, NEWSRC);
+    expect("newcomer adopted, no ghost", dut->pub_gm_id_o, NEWGM);
+    expect("newcomer is the parent", dut->pub_parent_id_o, NEWSRC);
+  }
+
+  // ---- 21c: the priority vector outranks the identity -------------------
+  // worse pv, lower gmId: 10.3.5 compares the vector FIRST, so this
+  // must be rejected -- a swapped compare order would adopt it
+  {
+    announce(71, 160, 0x0000000000000005ull, 0, 0x00C0FFEE00000001ull);
+    expect("vector outranks identity", dut->pub_gm_id_o, NEWGM);
   }
 
   // ---- 22: negative pdelay inside the Milan floor is accepted -----------

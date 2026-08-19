@@ -30,9 +30,16 @@ v5 closed the loop; v6 completes the receive-side state machines of
     origin; GATH sel 0 -- the first functional consumer of phc_ns_i,
     which makes a mis-wired clock snapshot observable on the wire).
 
+Identity scope: "sourcePortIdentity" in the pairing and the BTCA
+tiebreak is the clockIdentity alone; the 16-bit portNumber (bank w3)
+never joins a compare -- honest for single-port end stations, revisit
+with any multi-port work.
+
 Still deliberately out (the scratch-widen round that follows): the
 multiple-responder cease rule of Milan 4.2.6.2.5, which needs more
-per-interval state than the 32-word scratch has left.
+per-interval state than the 32-word scratch has left, and the second
+message bank in the engine that retires the torn-read window the
+announce seq guard narrows.
 
 --- v5, the servo round ---
 
@@ -362,14 +369,15 @@ def e_ult64(p, ra, rb, less_label, geq_label, tag):
 
 def prog_rx_sync(base):
     p = Prog(base)
+    # gate FIRST: a rogue Sync heard while master must not touch the
+    # slot-6 alias (it holds OUR in-flight FU sequence in that role)
+    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C,
+                FL_PRESENT_C | FL_ASCAP_C, "sl", "out")
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_BANK | 0, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_HDR, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_BANK | 2, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_SYNCSRC, fmt=FMT_Q)
-    # only a CAPABLE adopted slave starts the follow-up watch
-    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C,
-                FL_PRESENT_C | FL_ASCAP_C, "sl", "out")
     p.emit("MOVE", rd=RT, ra=0, imm=FU_RTO_MS_C)
     p.emit("WRST", ra=RT, imm=RG_TMR | 5, fmt=FMT_Q)
     p.label("out")
@@ -488,8 +496,6 @@ def prog_leg_servo(base):
 
 def prog_rx_announce(base):
     p = Prog(base)
-    p.emit("MOVE", rd=RA, ra=0, imm=0xDEAD)
-    p.emit("WRST", ra=RA, imm=RG_PUB | 5, fmt=FMT_Q)  # BREADCRUMB
     e_guard_init(p, "out")
     # 802.1AS: a port that is not asCapable does not enter the contest
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "out")
@@ -503,7 +509,24 @@ def prog_rx_announce(base):
     p.emit("RDST", rd=RC, imm=RG_BANK | 10, fmt=FMT_Q)
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_SHR, imm=48)
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_ADD, imm=1)  # steps+1
+    p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_AND, imm=0xFFFF)
     p.emit("RDST", rd=RD_, imm=RG_BANK | 2, fmt=FMT_Q)     # their source
+    # the snapshot closes by proving the bank still belongs to THIS
+    # event: a delayed dispatch behind a busy handler would otherwise
+    # read the NEXT frame and hand its source a parent-update take
+    # (the wrongful-takeover race). The event word carries the seq;
+    # a mismatch drops the announce -- the 1 Hz cadence resends. The
+    # ~6-tick torn window between the bank's src and seq writes stands
+    # until the second message bank lands in the engine.
+    p.emit("RDST", rd=RT, imm=RG_BANK | 0, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=0xFFFF)
+    p.emit("ALU", rd=RU, ra=REV, rb=0, cnd=ALU_SHR, imm=16)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=0xFFFF)
+    p.emit("CMP", ra=RT, rb=RU, fmt=FMT_W)
+    p.emit("BRS", cnd=BRS_Z, label="mine")
+    p.emit("BR", label="out")
+    p.label("mine")
     p.emit("BR", label=LB["BTCA"])
     p.label("out")
     p.emit("END")
@@ -763,6 +786,13 @@ def prog_btca(base):
     e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)
     p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCSRC, fmt=FMT_Q)
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=3)
+    p.emit("BRS", cnd=BRS_Z, label="vfu")
+    p.emit("BR", label="pk")
+    p.label("vfu")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PEND, fmt=FMT_Q)   # FU build void
+    p.label("pk")
     p.emit("WRST", ra=0, imm=RG_TMR | 1, fmt=FMT_Q)        # sync TX off
     p.emit("WRST", ra=0, imm=RG_TMR | 3, fmt=FMT_Q)        # ann TX off
     p.label("same_gm")
