@@ -17,9 +17,14 @@
 //                and the engine-owned state the µCPU reaches through its
 //                one state port, region-selected by st_addr[19:16]:
 //
-//                  0  message bank      RO  (parser-written, 32 x 64)
+//                  0  message bank      RO  (parser-written, PING-PONG
+//                                            2 x 32 x 64: each accepted
+//                                            frame lands in the bank its
+//                                            event names, so a handler
+//                                            delayed behind another never
+//                                            reads a successor's frame)
 //                  1  timestamp regs    RO  (0 ingress ts, 1 egress ts)
-//                  2  scratch RAM       RW  (32 x 64, protocol state)
+//                  2  scratch RAM       RW  (64 x 64, protocol state)
 //                  3  publish bank      RW  (0 gm id, 1 parent id,
 //                                            2 flags, 3 pdelay ns)
 //                  4  PHC control       WO  (0 rate addend, 1 step)
@@ -126,20 +131,31 @@ module KL_gptp_engine
   );
 
   // -------------------------------------------------- engine state RAMs
-  (* ram_style = "distributed" *) logic [63:0] bank_r    [0:31];
-  (* ram_style = "distributed" *) logic [63:0] scratch_r [0:31];
+  //! the message bank ping-pongs: bank_sel_r flips as each accepted
+  //! frame's event is pushed, so the frame a handler's event names
+  //! survives ONE in-flight successor; a third frame within two
+  //! handler latencies reuses the first bank (the announce handler's
+  //! seq guard covers the worst consequence of that depth)
+  (* ram_style = "distributed" *) logic [63:0] bank_r    [0:63];
+  (* ram_style = "distributed" *) logic [63:0] scratch_r [0:63];
+  logic bank_sel_r;
 
   //! LUTRAM has no reset; the bitstream's initial state is the reset.
   //! µcode's init-once flag (scratch S_INIT) DEPENDS on this being zero.
   initial begin : ram_poweron
-    for (int i = 0; i < 32; i++) begin
+    for (int i = 0; i < 64; i++) begin
       bank_r[i]    = '0;
       scratch_r[i] = '0;
     end
   end
 
   always_ff @(posedge clk_i) begin : bank_write
-    if (bank_we_w) bank_r[bank_addr_w] <= bank_wdata_w;
+    if (!rst_n) begin
+      bank_sel_r <= 1'b0;
+    end else begin
+      if (bank_we_w) bank_r[{bank_sel_r, bank_addr_w}] <= bank_wdata_w;
+      if (pev_valid_w && !evq_full_w) bank_sel_r <= !bank_sel_r;
+    end
   end
 
   logic [63:0] rxts_r, txts_r;
@@ -199,7 +215,7 @@ module KL_gptp_engine
     tev_ready_w = 1'b0;
     if (pev_valid_w) begin
       push_w      = !evq_full_w;
-      push_data_w = {pev_code_w, pev_seq_w, 16'd0};
+      push_data_w = {pev_code_w, pev_seq_w, 15'd0, bank_sel_r};
     end else if (txts_pend_r) begin
       push_w      = !evq_full_w;
       push_data_w = {EV_TX_TS_C, txts_pend_seq_r, 16'd0};
@@ -277,6 +293,7 @@ module KL_gptp_engine
 
   logic [UPC_W_C-1:0] disp_upc_r;
   logic [63:0] disp_ev_r, disp_ts0_r, disp_ts1_r;
+  logic        disp_bank_r;
 
   always_ff @(posedge clk_i) begin : dispatch
     if (!rst_n) begin
@@ -285,11 +302,13 @@ module KL_gptp_engine
       disp_ev_r    <= '0;
       disp_ts0_r   <= '0;
       disp_ts1_r   <= '0;
+      disp_bank_r  <= 1'b0;
     end else begin
       if (pop_w)               disp_valid_r <= 1'b1;
       else if (!disp_ready_w)  disp_valid_r <= 1'b0;   // accepted
       if (pop_w) begin
-        disp_upc_r <= entry_w;
+        disp_upc_r  <= entry_w;
+        disp_bank_r <= ev_head_w[0];
         disp_ev_r  <= {24'd0, ev_head_w};
         disp_ts0_r <= (ev_head_w[39:32] == EV_TX_TS_C) ? txts_r
                     : (ev_head_w[39:32] == EV_TMR_C)
@@ -379,9 +398,9 @@ module KL_gptp_engine
   logic [63:0] st_rd_mux_w;
   always_comb begin : st_read_mux
     unique case (st_addr_w[19:16])
-      4'd0: st_rd_mux_w = bank_r[st_addr_w[4:0]];
+      4'd0: st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
       4'd1: st_rd_mux_w = st_addr_w[0] ? txts_r : rxts_r;
-      4'd2: st_rd_mux_w = scratch_r[st_addr_w[4:0]];
+      4'd2: st_rd_mux_w = scratch_r[st_addr_w[5:0]];
       4'd3: begin
         unique case (st_addr_w[2:0])
           3'd0: st_rd_mux_w = pub_gm_r;
@@ -447,7 +466,7 @@ module KL_gptp_engine
       // strobes exist for the base ISA's sake and are not honoured here)
       if (st_req_w && st_we_w) begin
         unique case (st_addr_w[19:16])
-          4'd2: scratch_r[st_addr_w[4:0]] <= st_wdata_w;
+          4'd2: scratch_r[st_addr_w[5:0]] <= st_wdata_w;
           4'd3: begin
             unique case (st_addr_w[2:0])
               3'd0: pub_gm_r     <= st_wdata_w;

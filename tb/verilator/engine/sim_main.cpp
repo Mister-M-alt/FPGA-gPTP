@@ -14,17 +14,21 @@
 //         (one re-base carrying the surviving integrator)
 // 16..17  Sync/Follow_Up pairing by sequenceId AND source (11.4.4)
 // 18,18b  BTCA tie-breaks: steps then source switch the parent with no
-//         sync-ok flicker; a torn-bank delayed dispatch is dropped by
-//         the closing seq guard instead of seizing mastership
+//         sync-ok flicker; a delayed dispatch reads the frame its event
+//         names (the second bank), so a worse announce rejects cleanly
 // 19..21  parent degradation yields mastership immediately (10.3.5);
 //         the Sync origin carries the live PHC (gather consumes
 //         phc_ns_i); an asCapable fall stops consumption and steering
 // 21b,21c become resets the best record (no ghost GM after a quiet
 //         ride to mastership); the priority vector outranks the
 //         identity in the compare order
+// 21d     the delayed-dispatch shape with a BETTER announce adopts:
+//         the torn-read window is retired by the second bank
 // 22..26  the pdelay verdict tail: the Milan floor, the threshold,
 //         two-exchange recovery, the fourth lost response, the stale
 //         ratio window
+// 27      the Milan 4.2.6.2.5 cease rule: storm, silence, resume,
+//         re-earn -- and same-identity duplicates are not a storm
 //
 // All frames and expectations built independently from 802.1AS-2011 +
 // Milan v1.2 4.2.6. The pdelay model mirrors the SPEC formula in exact
@@ -225,7 +229,8 @@ static void servo_mirror(int64_t off) {
 // ---- auto peer: answers every Pdelay_Req the DUT transmits ----------------
 // peer clock runs at +2^-13 (~122 ppm) against ours; turnaround fields are
 // constants of the mode, the ingress stamp is t1 + wire turnaround.
-enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP };
+enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_DUAL,
+              PD_DUP };
 static PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
 static size_t pd_seen = 0;
 
@@ -256,6 +261,14 @@ static void service_pdelay() {
     f.ts(t2); f.u64(OUR_CID); f.u16(1);
     send_frame(f.b, t4);
     run(400);
+    if (pd_mode == PD_DUAL || pd_mode == PD_DUP) {
+      uint64_t src2 = (pd_mode == PD_DUAL) ? 0x0077770077FE0077ull
+                                           : PEER_CID;
+      Frame d = ptp(0x3, seq, 0, 0x0200, 20, src2);
+      d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
+      send_frame(d.b, t4 + 80);
+      run(400);
+    }
     Frame g = ptp(0xA, seq, 0, 0x0000, 20);
     g.ts(t3); g.u64(OUR_CID); g.u16(1);
     send_frame(g.b, t4 + 1000);
@@ -879,6 +892,33 @@ int main(int argc, char **argv) {
     expect("vector outranks identity", dut->pub_gm_id_o, NEWGM);
   }
 
+  // ---- 21d: the second bank makes the torn case PROCESS -----------------
+  // the same delayed-dispatch shape as 18b, but with a BETTER announce:
+  // each frame now owns the bank its event names, so the announce's
+  // words survive its successor and the plane ADOPTS instead of
+  // dropping -- the v6 seq guard stays as belt-and-braces
+  const uint64_t GMC = 0x00CAFEFFFE000003ull;
+  {
+    Frame q = ptp(0x2, 0x7779, 0, 0x0000, 20);
+    q.u64(0); q.u16(0); q.ts(0);
+    q.b.resize(68);
+    send_frame(q.b, phc() + 150);
+    Frame a = ptp(0xB, 72, 0, 0x0008, 30, 0x00CAFEFFFE000004ull);
+    for (int i = 0; i < 10; i++) a.u8(0);
+    a.u16(0xFFC4); a.u8(0);
+    a.u8(80); a.u32(OUR_CQ); a.u8(248);
+    a.u64(GMC);
+    a.u16(0); a.u8(0xA0);
+    Frame sy = ptp(0x0, 0x777A, 0, 0x0208, 10, NEWSRC);
+    sy.ts(0);
+    send_frame(a.b, phc() + 300);
+    send_frame(sy.b, phc() + 400);               // zero-gap, parent src
+    run(20000);
+    expect("torn better announce adopts", dut->pub_gm_id_o, GMC);
+    expect("its announcer is the parent", dut->pub_parent_id_o,
+           0x00CAFEFFFE000004ull);
+  }
+
   // ---- 22: negative pdelay inside the Milan floor is accepted -----------
   pd_mode = PD_NEG;
   {
@@ -938,6 +978,97 @@ int main(int argc, char **argv) {
   }
   expect("gap took the stale path", pdm.stale_skip, 1);
   expect("stale window skips ratio", dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
+
+  // ---- 27: the multiple-responder cease rule (Milan 4.2.6.2.5) ----------
+  // three successive requests each answered by two distinct identities
+  // stop Pdelay_Req transmission and drop asCapable; the (bench-
+  // shortened) resume timer restarts requests and the ladder re-earns
+  {
+    pd_mode = PD_NORMAL;                         // regain capable first
+    expect("capable before the storm",
+           wait_flags(FL_ASCAP, FL_ASCAP, 6000000ull), 1);
+    pd_mode = PD_DUAL;
+    expect("storm clears capable... eventually",
+           wait_flags(FL_ASCAP, 0, 16000000ull), 1);
+    size_t mark = txf.size();
+    run_svc(5000000);                            // 2.5 s of silence?
+    int reqs = 0;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) reqs++;
+    expect("ceased: no requests", reqs, 0);
+    // forged Resp+Resp_FU pairs echoing our identity must not climb
+    // the ladder while ceased (the completion path is gated). A real
+    // forger replays against the LAST genuine request: the engine
+    // computes the turnaround from its stored t1, so the forgery must
+    // reuse it or self-defeat on the delay range
+    uint64_t t1_last = 0;
+    for (size_t i = txf.size(); i-- > 0;)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2 && txns[i]) {
+        t1_last = txns[i];
+        break;
+      }
+    expect("a genuine t1 to replay against", t1_last != 0, 1);
+    for (int k = 0; k < 2; k++) {
+      uint64_t t1f = t1_last, t2f = peer_ns(t1f + 300),
+               t3f = t2f + 20000, t4f = t1f + 21200;
+      Frame f = ptp(0x3, (uint16_t)(0x999 + k), 0, 0x0200, 20);
+      f.ts(t2f); f.u64(OUR_CID); f.u16(1);
+      send_frame(f.b, t4f);
+      run(2000);
+      Frame g = ptp(0xA, (uint16_t)(0x999 + k), 0, 0x0000, 20);
+      g.ts(t3f); g.u64(OUR_CID); g.u16(1);
+      send_frame(g.b, t4f + 1000);
+      run(4000);
+    }
+    expect("forged pairs cannot climb mid-cease",
+           dut->pub_flags_o & FL_ASCAP, 0);
+    pd_mode = PD_NORMAL;
+    size_t mark2 = txf.size();
+    bool resumed = false;
+    for (int k = 0; k < 40 && !resumed; k++) {
+      run_svc(200000);
+      for (size_t i = mark2; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) resumed = true;
+    }
+    expect("resume timer restarts requests", resumed, 1);
+    expect("the ladder re-earns",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    // duplicates from the SAME identity are not a storm (4.2.6.2.5
+    // says multiple CLOCK IDENTITIES): four dup-answered intervals
+    // must leave capable standing
+    pd_mode = PD_DUP;
+    {
+      int base = pdm.count;
+      expect("dup intervals ran", wait_exchanges(base + 4, 12000000ull), 1);
+      run(4000);
+    }
+    expect("duplicates are not a storm",
+           dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    pd_mode = PD_NORMAL;
+  }
+
+  // ---- 28: a warm reset during a cease still resumes ---------------------
+  // scratch survives reset and the boot re-arms the cadence, so the
+  // countdown completes; a timer-armed resume died with the reset and
+  // stranded the cease until a bitstream reload (the review's finding)
+  {
+    pd_mode = PD_DUAL;
+    expect("second storm ceases",
+           wait_flags(FL_ASCAP, 0, 16000000ull), 1);
+    run_svc(1000000);                            // eat into the countdown
+    dut->rst_n = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->rst_n = 1;
+    pd_mode = PD_NORMAL;
+    size_t mark = txf.size();
+    bool resumed = false;
+    for (int k = 0; k < 50 && !resumed; k++) {
+      run_svc(200000);
+      for (size_t i = mark; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) resumed = true;
+    }
+    expect("the cease survives reset and resumes", resumed, 1);
+  }
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;
