@@ -158,13 +158,29 @@ module KL_gptp_engine
     end
   end
 
-  logic [63:0] rxts_r, txts_r;
+  //! the ingress timestamp ping-pongs WITH the message bank: a single
+  //! register loses the race when the next frame's sof lands before the
+  //! previous frame's event dispatches (a fabric FIFO delivers frames
+  //! back-to-back; the parent integration found the resp's handler
+  //! reading the chasing follow-up's arrival time). Two steps: the sof
+  //! stamp STAGES, and the frame's own EOF commits it into the bank the
+  //! frame occupies. The eof is strictly earlier than any successor's
+  //! sof on a byte face, and strictly earlier than the event push (fin
+  //! settles a cycle late), so the commit can never read a chaser's
+  //! stamp and the event's bank bit names the committed slot.
+  logic [63:0] rxts_stage_r;
+  logic [63:0] rxts_bank_r [0:1];
+  logic [63:0] txts_r;
   always_ff @(posedge clk_i) begin : ts_latch
     if (!rst_n) begin
-      rxts_r <= '0;
-      txts_r <= '0;
+      rxts_stage_r   <= '0;
+      rxts_bank_r[0] <= '0;
+      rxts_bank_r[1] <= '0;
+      txts_r         <= '0;
     end else begin
-      if (rx_valid_i && rx_sof_i) rxts_r <= rx_ts_i;
+      if (rx_valid_i && rx_sof_i) rxts_stage_r <= rx_ts_i;
+      if (rx_valid_i && rx_eof_i)
+        rxts_bank_r[bank_sel_r] <= rx_sof_i ? rx_ts_i : rxts_stage_r;
       if (txts_valid_i)           txts_r <= txts_ns_i;
     end
   end
@@ -313,7 +329,7 @@ module KL_gptp_engine
         disp_ts0_r <= (ev_head_w[39:32] == EV_TX_TS_C) ? txts_r
                     : (ev_head_w[39:32] == EV_TMR_C)
                         ? {32'd0, ms_now_w}
-                        : rxts_r;
+                        : rxts_bank_r[ev_head_w[0]];
         disp_ts1_r <= phc_ns_i;
       end
     end
@@ -399,7 +415,8 @@ module KL_gptp_engine
   always_comb begin : st_read_mux
     unique case (st_addr_w[19:16])
       4'd0: st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
-      4'd1: st_rd_mux_w = st_addr_w[0] ? txts_r : rxts_r;
+      4'd1: st_rd_mux_w = st_addr_w[0] ? txts_r
+                                       : rxts_bank_r[disp_bank_r];
       4'd2: st_rd_mux_w = scratch_r[st_addr_w[5:0]];
       4'd3: begin
         unique case (st_addr_w[2:0])
