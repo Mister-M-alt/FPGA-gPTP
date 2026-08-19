@@ -1,7 +1,26 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""gPTP µcode ROM image generator -- v6, the full-compare round.
+"""gPTP µcode ROM image generator -- v7, the cease-rule round.
+
+The round that deliberately ends the zero-RTL era: the engine grows a
+SECOND message bank (each accepted frame lands in the bank its event
+names, retiring the torn-read window the v6 announce guard could only
+narrow) and the scratch doubles to 64 words. On that room, the last
+missing Milan v1.2 4.2.6 behavior lands:
+
+  * The multiple-responder cease rule (4.2.6.2.5): a Pdelay_Req
+    answered by responses from MORE THAN ONE clock identity, for three
+    successive requests, stops Pdelay_Req transmission (the storm
+    guard for daisy-chained non-AVB switches). Entering the cease
+    clears asCapable and the ladder; a 5-minute timer (slot 6; the
+    --cease-ms argument exists so a bench can shorten it) resumes
+    transmission, and asCapable re-earns through the ladder as ever.
+    Link/port toggles also resume per the spec -- in this engine that
+    is the integration's reset, which reinitializes everything.
+    Duplicate responses from the SAME identity are not a storm.
+
+--- v6, the full-compare round ---
 
 v5 closed the loop; v6 completes the receive-side state machines of
 802.1AS-2011 that the two-node bench let v3 defer:
@@ -157,6 +176,8 @@ S_T1, S_T4, S_PEND = 16, 17, 18
 S_RQCID, S_BESTSRC, S_RQSEQ, S_RQPN, S_INIT, S_MYSEQ = 19, 20, 21, 22, 23, 24
 S_CID, S_1E9, S_HDR8, S_SALO = 25, 26, 27, 28
 S_SSEQ, S_ASEQ, S_ANNBODY = 29, 30, 31
+# the widened half (the engine's 64-word scratch, v7)
+S_RSP1, S_IVMULTI, S_MULTI, S_CEASE = 32, 33, 34, 35
 # S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
 # (steps ranks BELOW the identity in 10.3.5, so it never joins the
 # packed compare -- the pv compare masks the low 16 first)
@@ -173,6 +194,8 @@ ASCAP_UP_C = 2                  # exchanges to asCapable, 4.2.6.2.4 in [2,5]
 LOST_N_C = 3                    # allowedLostResponses, 802.1AS-2011 10.2.4.1
 SYNC_RTO_MS_C = 375             # syncReceiptTimeout, Table 4.2
 FU_RTO_MS_C = 125               # followUpReceiptTimeout, Table 4.2
+CEASE_N_C = 3                   # successive multi-answered reqs, 4.2.6.2.5
+CEASE_MS_C = 300_000            # resume after 5 min (--cease-ms overrides)
 
 # ---- servo constants (clock-aware, set by set_servo_gains) -----------------
 STEP_NS_C = 20000               # linuxptp first_step_threshold default, ns
@@ -569,6 +592,19 @@ def prog_rx_pdresp(base):
     e_full_ts(p, RA)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_T2, fmt=FMT_Q)
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_T4, fmt=FMT_Q)
+    # 4.2.6.2.5 bookkeeping: a SECOND distinct responder identity in
+    # one request interval marks it multi (duplicates are not a storm)
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
+    p.emit("RDST", rd=RC, imm=RG_BANK | 2, fmt=FMT_Q)
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_Q, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="rsp1")
+    p.emit("CMP", ra=RB, rb=RC, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="out")
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
+    p.emit("BR", label="out")
+    p.label("rsp1")
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
     p.label("out")
     p.emit("END")
     return p
@@ -632,6 +668,8 @@ def prog_tmr(base, mac):
     p.emit("BRS", cnd=BRS_Z, label=LB["SRTO"])
     p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=5)
     p.emit("BRS", cnd=BRS_Z, label=LB["FUTO"])
+    p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=6)
+    p.emit("BRS", cnd=BRS_Z, label=LB["RESUME"])
     p.emit("END")
     p.label("slot0")
     p.emit("RDST", rd=RA, imm=RG_SCR | S_INIT, fmt=FMT_Q)
@@ -658,7 +696,8 @@ def prog_tmr(base, mac):
     p.emit("WRST", ra=RC, imm=RG_SCR | S_FUORG, fmt=FMT_Q)
     for s in (S_SYNCTS, S_PDELAY, S_T2, S_SSEQFLY,
               S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NR4, S_NRR, S_INTG,
-              S_T1, S_T4, S_PEND, S_MYSEQ, S_SSEQ, S_ASEQ):
+              S_T1, S_T4, S_PEND, S_MYSEQ, S_SSEQ, S_ASEQ,
+              S_RSP1, S_IVMULTI, S_MULTI, S_CEASE):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_INIT, fmt=FMT_Q)
@@ -672,6 +711,39 @@ def prog_tmr(base, mac):
     p.emit("BRS", cnd=BRS_Z, label="send")
     p.emit("END")
     p.label("send")
+    # ---- the cease rule (Milan 4.2.6.2.5): while ceased, no requests
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
+    p.emit("BRS", cnd=BRS_Z, label="quiet")
+    p.emit("BR", label="storm_ck")
+    p.label("quiet")
+    p.emit("END")
+    p.label("storm_ck")
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=1)
+    p.emit("BRS", cnd=BRS_Z, label="was_multi")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_MULTI, fmt=FMT_Q)   # streak over
+    p.emit("BR", label="iv_clear")
+    p.label("was_multi")
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_MULTI, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_ADD, imm=1)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_MULTI, fmt=FMT_Q)
+    p.emit("CMP", ra=RC, rb=0, fmt=FMT_D, imm=CEASE_N_C)
+    p.emit("BRS", cnd=BRS_LT, label="iv_clear")
+    # cease: stop requesting, drop the verdict, arm the resume timer
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
+    p.emit("MOVE", rd=RT, ra=0, imm=CEASE_MS_C)
+    p.emit("WRST", ra=RT, imm=RG_TMR | 6, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
+    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
+    p.emit("COMMIT")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
+    p.emit("END")
+    p.label("iv_clear")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
     # ---- lost-response accounting (802.1AS-2011 10.2.4.1): before each
     # new request, judge the last one; skip until a first was ever sent
     p.emit("RDST", rd=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
@@ -925,6 +997,20 @@ def prog_leg_srto(base):
     return p
 
 
+def prog_leg_resume(base):
+    """Cease expiry (or its bench-shortened stand-in): requests resume;
+    asCapable re-earns through the ladder as ever."""
+    p = Prog(base)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_MULTI, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
+    p.emit("END")
+    return p
+
+
 def prog_leg_futo(base):
     """Follow_Up receipt timeout (125 ms): the pending Sync is void."""
     p = Prog(base)
@@ -1041,6 +1127,7 @@ LEG_FNS = [
     ("SYNCTX", prog_leg_synctx), ("ANNTX", prog_leg_anntx),
     ("PDPOST", prog_leg_pdpost), ("SRTO", prog_leg_srto),
     ("FUTO", prog_leg_futo), ("SERVO", prog_leg_servo),
+    ("RESUME", prog_leg_resume),
 ]
 
 
@@ -1108,7 +1195,12 @@ def main():
                     help="our announced priority1 (lower wins BTCA)")
     ap.add_argument("--clk-hz", type=int, default=100_000_000,
                     help="engine clock; sets the servo's ns-to-addend gain")
+    ap.add_argument("--cease-ms", type=int, default=300_000,
+                    help="cease-rule resume delay (Milan: 5 minutes)")
     args = ap.parse_args()
+    global CEASE_MS_C
+    CEASE_MS_C = args.cease_ms
+    assert 0 < CEASE_MS_C < (1 << 24), CEASE_MS_C
     global P1_C
     P1_C = args.p1
     set_servo_gains(args.clk_hz)
