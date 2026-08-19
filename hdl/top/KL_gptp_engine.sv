@@ -168,19 +168,31 @@ module KL_gptp_engine
   //! sof on a byte face, and strictly earlier than the event push (fin
   //! settles a cycle late), so the commit can never read a chaser's
   //! stamp and the event's bank bit names the committed slot.
+  //! ...and the commit is qualified on frame length >= 3 bytes: a 1-2
+  //! byte runt's eof can land inside the two-cycle window before the
+  //! PREDECESSOR's bank flip (the parser drops runts without an event,
+  //! so no flip follows) and would poison the predecessor's stamp. No
+  //! event-carrying frame is ever that short, and a >= 3-byte frame's
+  //! eof always postdates the flip window.
   logic [63:0] rxts_stage_r;
   logic [63:0] rxts_bank_r [0:1];
   logic [63:0] txts_r;
+  logic [1:0]  rxts_len_r;
   always_ff @(posedge clk_i) begin : ts_latch
     if (!rst_n) begin
       rxts_stage_r   <= '0;
       rxts_bank_r[0] <= '0;
       rxts_bank_r[1] <= '0;
       txts_r         <= '0;
+      rxts_len_r     <= 2'd0;
     end else begin
+      if (rx_valid_i) begin
+        if (rx_sof_i)                rxts_len_r <= 2'd1;
+        else if (rxts_len_r != 2'd3) rxts_len_r <= rxts_len_r + 2'd1;
+      end
       if (rx_valid_i && rx_sof_i) rxts_stage_r <= rx_ts_i;
-      if (rx_valid_i && rx_eof_i)
-        rxts_bank_r[bank_sel_r] <= rx_sof_i ? rx_ts_i : rxts_stage_r;
+      if (rx_valid_i && rx_eof_i && !rx_sof_i && (rxts_len_r >= 2'd2))
+        rxts_bank_r[bank_sel_r] <= rxts_stage_r;
       if (txts_valid_i)           txts_r <= txts_ns_i;
     end
   end
