@@ -1119,8 +1119,11 @@ int main(int argc, char **argv) {
     Frame f = ptp(0x3, seq, 0, 0x0200, 20);
     f.ts(t2); f.u64(OUR_CID); f.u16(1);
     send_frame(f.b, t4);
-    std::vector<uint8_t> runt = {0xEE};
+    std::vector<uint8_t> runt = {0xEE, 0xEE};
     send_frame(runt, t4 + 100000);       // the poison attempt, zero-gap
+    // (two bytes: a 1-byte fragment's commit would only rewrite the
+    // stale staging value -- the 2-byte shape is the one that lands
+    // the runt's own stamp without the length qualification)
     run(400);
     Frame g = ptp(0xA, seq, 0, 0x0000, 20);
     g.ts(t3); g.u64(OUR_CID); g.u16(1);
