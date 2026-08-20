@@ -1,12 +1,13 @@
 <!-- SPDX-License-Identifier: CERN-OHL-W-2.0 -->
 # gptp-processor — the 802.1AS time-sync plane
 
-The gPTP sibling of the `protocol-processor` submodule: a micro-coded
-engine intended to take over the duties `ptp4l` + `milan-statd` perform on
-the milan-fpga soft core today — BTCA, Announce, Sync/Follow_Up, both
-Pdelay roles, the PHC servo, and the publication surface (GM identity,
-asCapable, sync verdict, peer delay) — as one clock domain of fabric,
-byte in / byte out, in the `KL_pp_shadow` integration shape.
+The gPTP sibling of the `protocol-processor` submodule: a micro-coded engine
+integrated into `milan-fpga` through `KL_gptp_shadow`. In the parent product
+shape it owns the duties formerly performed by `ptp4l` + `milan-statd` —
+BTCA, Announce, Sync/Follow_Up, both Pdelay roles, the PHC servo, and the
+publication surface (GM identity, asCapable, sync verdict, peer delay) — as
+one clock domain of fabric, byte in / byte out. The parent retains the
+software owner only as an explicit option-off comparison build.
 
 **Status: the state machines are landing as µcode revisions.** The round
 that created this repo (2026-08-14) priced the plane on the ship part;
@@ -58,8 +59,15 @@ neighborPropDelay and dropping asCapable (#8): both Pdelay receive
 handlers now pair per 802.1AS-2011 11.2.15.3, a Pdelay_Resp taken only
 for the outstanding request's sequenceId and never again once its
 exchange has completed, a Follow_Up only behind that Pdelay_Resp and
-from its sender (+32 ROM words, zero LUT). Next: the parent-side
-integration.
+from its sender (+32 ROM words, zero LUT).
+
+**Parent status:** the parent wrapper consumes the RX, TX-timestamp, PHC and
+publication faces, registers each committed publication bank atomically, and
+makes this plane the default owner at parent VERSION `0x0002_0055`. That is an
+RTL integration statement, not a product-acceptance claim:
+[`milan-fpga` issue #117](https://github.com/kebag-logic/milan-fpga/issues/117)
+still owns rootfs service retirement, reference-plane latency
+characterization, and the two-board wire campaign.
 
 ## Why a µCPU with an ALU
 
@@ -100,20 +108,21 @@ make lint       # verilator --lint-only on the engine top
 syn/ooc/run.sh  # Vivado 2026.1 OOC measurement into syn/ooc/work/
 ```
 
-## Integration contract (parent: milan-fpga)
+## Implemented integration contract (parent: milan-fpga)
 
-- RX: pre-classified EtherType 0x88F7 byte stream (DA first, FCS checked
-  and stripped), plus the frame's ingress timestamp latched at sof — both
-  already exist in the parent (`KL_pp_shadow` classifier pattern,
-  `ptp_ts_top` capture).
-- TX: byte stream with sof/eof onto the control TX cascade; egress
-  timestamp returned via `txts_*` (same `ptp_ts_top` capture, TX side).
+- RX: `KL_gptp_shadow` taps accepted EtherType 0x88F7 frames (DA first, FCS
+  checked and stripped) and pairs each delivered frame with its ingress
+  timestamp latched at SOF.
+- TX: the byte stream is geared onto its own parent control-trunk merge;
+  `KL_gptp_txstamp` returns the sequence-matched egress timestamp via `txts_*`
+  at the real MAC boundary.
 - PHC: `phc_ns_i` snapshot in, rate-addend and step writes out — the
   parent `timestamp_counter`'s adjfine/adjtime knobs, driven from fabric
   instead of from `/dev/ptpN`.
-- Publish bank out: GM identity, parent identity, flags (asCapable, sync
-  ok), peer delay — the CSR words `milan-statd` mirrors today
-  (0x624/0x628, 0x6E4, 0x778, 0x730 group) become wires.
+- Publish bank out: GM identity, parent identity, flags (asCapable, sync ok),
+  peer delay and offset are committed atomically into the parent-selected CSR,
+  AECP and AVTP-validity surfaces. The old `milan-statd` mirrors remain active
+  only when the parent explicitly elaborates this plane off.
 
 ## Measured record
 
