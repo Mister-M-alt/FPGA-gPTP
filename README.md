@@ -2,8 +2,10 @@
 # gptp-processor — the 802.1AS time-sync plane
 
 The gPTP sibling of the `protocol-processor` submodule: a micro-coded engine
-integrated into `milan-fpga` through `KL_gptp_shadow`. In the parent product
-shape it owns the duties formerly performed by `ptp4l` + `milan-statd` —
+integrated into the `milan-fpga` PR
+[#135](https://github.com/kebag-logic/milan-fpga/pull/135) candidate through
+`KL_gptp_shadow`. In that parent candidate's product shape it owns the duties
+formerly performed by `ptp4l` + `milan-statd` —
 BTCA, Announce, Sync/Follow_Up, both Pdelay roles, the PHC servo, and the
 publication surface (GM identity, asCapable, sync verdict, peer delay) — as
 one clock domain of fabric, byte in / byte out. The parent retains the
@@ -61,13 +63,15 @@ for the outstanding request's sequenceId and never again once its
 exchange has completed, a Follow_Up only behind that Pdelay_Resp and
 from its sender (+32 ROM words, zero LUT).
 
-**Parent status:** the parent wrapper consumes the RX, TX-timestamp, PHC and
-publication faces, registers each committed publication bank atomically, and
-makes this plane the default owner at parent VERSION `0x0002_0055`. That is an
-RTL integration statement, not a product-acceptance claim:
-[`milan-fpga` issue #117](https://github.com/kebag-logic/milan-fpga/issues/117)
-still owns rootfs service retirement, reference-plane latency
-characterization, and the two-board wire campaign.
+**Candidate parent status:** draft `milan-fpga` PR #135 consumes the RX,
+TX-timestamp, PHC and selected publication faces, registers every committed
+publication bank atomically, and proposes this plane as the default owner at
+parent VERSION `0x0002_0055`. This is candidate RTL, not landed parent state or
+product acceptance. Parent
+[`issue #116`](https://github.com/kebag-logic/milan-fpga/issues/116) owns the
+default flip and rootfs service retirement; parent
+[`issue #117`](https://github.com/kebag-logic/milan-fpga/issues/117) separately
+owns reference-plane latency characterization and the two-board wire campaign.
 
 ## Why a µCPU with an ALU
 
@@ -120,9 +124,12 @@ syn/ooc/run.sh  # Vivado 2026.1 OOC measurement into syn/ooc/work/
   parent `timestamp_counter`'s adjfine/adjtime knobs, driven from fabric
   instead of from `/dev/ptpN`.
 - Publish bank out: GM identity, parent identity, flags (asCapable, sync ok),
-  peer delay and offset are committed atomically into the parent-selected CSR,
-  AECP and AVTP-validity surfaces. The old `milan-statd` mirrors remain active
-  only when the parent explicitly elaborates this plane off.
+  peer delay and offset are all committed atomically in `KL_gptp_shadow`. The
+  PR #135 root consumes GM, parent and peer delay through its selected
+  CSR/protocol-processor faces, and consumes the flags in the AVTP-validity
+  decision. Offset is latched in the wrapper but has no parent consumer yet.
+  The old `milan-statd` mirrors remain active only when the parent explicitly
+  elaborates this plane off.
 
 ## Measured record
 
