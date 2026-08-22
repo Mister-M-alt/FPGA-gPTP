@@ -2,11 +2,15 @@
 # gptp-processor — the 802.1AS time-sync plane
 
 The gPTP sibling of the `protocol-processor` submodule: a micro-coded
-engine intended to take over the duties `ptp4l` + `milan-statd` perform on
-the milan-fpga soft core today — BTCA, Announce, Sync/Follow_Up, both
-Pdelay roles, the PHC servo, and the publication surface (GM identity,
-asCapable, sync verdict, peer delay) — as one clock domain of fabric,
-byte in / byte out, in the `KL_pp_shadow` integration shape.
+engine consumed by `milan-fpga` as its `gptp-processor` submodule through
+`hdl/ieee8021as/gptp_plane/KL_gptp_shadow.sv`, option-gated by the
+`milan_datapath` parameter `GPTP_PLANE_EN_P` (RTL default off; the shipping
+AX7101 configuration opts in with `board.features.fabric_gptp: true`). With
+the option on it owns the duties `ptp4l` + `milan-statd` perform on the soft
+core -- BTCA, Announce, Sync/Follow_Up, both Pdelay roles, the PHC servo, and
+the publication surface (GM identity, asCapable, sync verdict, peer delay) --
+as one clock domain of fabric, byte in / byte out. The CSR readback words and
+the rootfs daemons stay software until parent issue #116 flips the default.
 
 **Status: the state machines are landing as µcode revisions.** The round
 that created this repo (2026-08-14) priced the plane on the ship part;
@@ -38,7 +42,12 @@ one identity are not a storm), and the parent's field campaign then
 found the receive side ignoring domainNumber (#6): the parser refuses
 any domain but 0 at the header byte, ahead of every bank write, so no
 handler can see a foreign-domain frame (-15 LUT: the domain byte of
-bank word 0 became the constant the parser admits), and accepting a
+bank word 0 became the constant the parser admits), then its two
+transmit-side findings, the Table 11-7 control field per message type
+(#9: Sync 0x0, Follow_Up 0x2, Announce and the three Pdelay messages
+0x5) and the ten reserved zero bytes of the two-step Sync body (#10: the
+live egress time rides only in the Follow_Up's preciseOriginTimestamp),
+both ROM-only, and accepting a
 Follow_Up without the mandatory information TLV (#11): the parser now
 requires the 76-octet message of Table 11-9, refuses a short
 messageLength ahead of every bank write and the wrong TLV header
@@ -58,8 +67,49 @@ neighborPropDelay and dropping asCapable (#8): both Pdelay receive
 handlers now pair per 802.1AS-2011 11.2.15.3, a Pdelay_Resp taken only
 for the outstanding request's sequenceId and never again once its
 exchange has completed, a Follow_Up only behind that Pdelay_Resp and
-from its sender (+32 ROM words, zero LUT). Next: the parent-side
-integration.
+from its sender (+32 ROM words, zero LUT). Nothing of #6 through #12
+remains open. The two open donor issues are review findings on
+pre-existing behaviour: #22 (a frame with an unlisted messageType
+dispatches into the timer program uncounted and can transmit; the parent
+campaign's unknown-type probe expects a counted drop at the repin) and
+#23 (a Pdelay_Resp sourced from our own clockIdentity climbs the
+asCapable ladder, the Figure 11-8 thisClock condition; the parent
+campaign gains a matching probe when the pin moves). At `main` 781048b7:
+ucpu 768 / parser 140 / engine 319 checks, sixty-three planted mutations
+red, lint clean; the ROM is 927 of 1,024 words; the engine synthesizes
+OOC at 3,115 LUT / 2,390 FF / WNS +1.898 ns
+(`docs/RESOURCE_VALIDATION.md`).
+
+**Parent status:** the splice is landed (parent #114, 2026-08-19,
+option-gated) and the pin advances by pin-bearing commits on the
+parent's `dev`, at `5c330fc8` (the #16 merge): the pin trails the donor
+by design, and the parent tickets below move it forward. The parent's
+`tb/verilator/tsn_fuzz` field campaign (`make ptp`, `fuzz_ptp.py`) grades
+the whole slice in both directions -- every spec-constrained field of all
+six of the plane's own TX message types (Pdelay_Req, Pdelay_Resp,
+Pdelay_Resp_Follow_Up, Announce, Sync and Follow_Up) against the tsn-gen
+8021as models, and the parser's drop and ignore arms under per-field
+illegal probes -- and found #6 through #10. Each donor fix retires its
+own allowance at the repin, one parent ticket per donor issue, by one of
+two mechanisms. A tracked gap marker covers #6, #9, #10, #7 and #8: the
+ones still standing on `dev` `4ec73a15` are
+`gaps={"origin_timestamp": 10}` (`fuzz_ptp.py:489`, #137 for #10), the
+issue-8 arm (`:675`, #141 for #8) and the issue-7 arms (`:747`, plus
+`:719` reached from its two issue-7 `reject_probe` call sites `:736`
+and `:739`, #136 for #7), while #138 (#6) is done at the `dd0f56e3` pin
+and #139 (#9) at the `5c330fc8` pin (PR #208, dev `4ec73a15`), both
+markers already gone. For #11 and #12 there is no allowance to delete:
+what moves is the campaign's truncation oracle, which cuts at this
+parser's donor minima (`:573-582`, in frame bytes: Sync 58, Follow_Up
+58, Announce 78, Pdelay_Req 48), so #140 (#11) carries the Follow_Up cut
+to the legal 90 bytes and #142 (#12) the Pdelay_Req cut to 68. #137,
+#140, #142, #136 and #141 are pending. Parent PR #135
+(default on at VERSION
+0x0002_0055) was closed unmerged: the default flip, the CSR compatibility
+transition and the rootfs service retirement stay with parent issue #116,
+reference-plane latency characterization and the two-board wire campaign
+with parent issue #117. The parent's page of record is its
+`docs/design/GPTP_PLANE.md`.
 
 ## Why a µCPU with an ALU
 
@@ -100,20 +150,45 @@ make lint       # verilator --lint-only on the engine top
 syn/ooc/run.sh  # Vivado 2026.1 OOC measurement into syn/ooc/work/
 ```
 
-## Integration contract (parent: milan-fpga)
+## Implemented integration contract (parent: milan-fpga)
 
-- RX: pre-classified EtherType 0x88F7 byte stream (DA first, FCS checked
-  and stripped), plus the frame's ingress timestamp latched at sof — both
-  already exist in the parent (`KL_pp_shadow` classifier pattern,
-  `ptp_ts_top` capture).
-- TX: byte stream with sof/eof onto the control TX cascade; egress
-  timestamp returned via `txts_*` (same `ptp_ts_top` capture, TX side).
-- PHC: `phc_ns_i` snapshot in, rate-addend and step writes out — the
-  parent `timestamp_counter`'s adjfine/adjtime knobs, driven from fabric
-  instead of from `/dev/ptpN`.
-- Publish bank out: GM identity, parent identity, flags (asCapable, sync
-  ok), peer delay — the CSR words `milan-statd` mirrors today
-  (0x624/0x628, 0x6E4, 0x778, 0x730 group) become wires.
+What `KL_gptp_shadow` wires to `KL_gptp_engine` when `GPTP_PLANE_EN_P` is
+set. With it clear the control lane passes straight through, the PHC knobs
+constant-fold to the CSR face and the publish words read zero, so every
+other build is bit-identical.
+
+- RX: an input-only tap on the MAC RX AXIS stream (a beat is real when
+  `tvalid && tready`) classifies EtherType 0x88F7 at the aligned lanes into
+  a frame FIFO (frame mode; bad and oversize frames dropped, drops counted)
+  and serializes each delivered frame to the engine at 1 byte/clk, DA first.
+  The ingress timestamp is latched at the frame's first tap beat, pushed
+  into a side FIFO on the frame FIFO's commit pulse (once per delivered
+  frame; the shed rule of parent #122 keeps it from lapping a live stamp)
+  and popped at sof. The engine's `rx_err_i` is tied low: the frame FIFO
+  never delivers a bad frame.
+- TX: the engine's byte stream gears up to one wide, frame-held lane that
+  joins the control TX after the min-IFG gasket through its own staggered
+  merge (`adp_tx_arbiter`, diagnostics lane 4); `KL_gptp_txstamp` watches
+  the true MAC boundary, armed by the lane's sof, and returns {timestamp,
+  sequenceId} on `txts_*` for the engine's pending exchange.
+- PHC: `phc_ns_i` is the live `timestamp_counter` value; the engine's
+  adjfine pulse is latched to a level in the shadow and its adjtime passes
+  through, both onto the counter's knobs in place of the CSR face's
+  `/dev/ptpN` writes; settime stays with the CSR face (boot sets the epoch).
+- Publish bank out: GM identity, parent identity, flags (present, gm,
+  asCapable, sync), peer delay, offset and `pub_annq` leave the shadow as
+  wires beside the engine's commit pulse. Today only the GM identity has a
+  fabric consumer (`milan_datapath` muxes it over the CSR-published value
+  for the ADPDU/GET_AVB_INFO/AS_PATH face, the Milan-info answers and the
+  recentre latch); the other words and the commit pulse stay unconsumed
+  until #116 re-points the CSR readback words (ADP_GM 0x624/0x628,
+  GPTP_PDELAY 0x6E4, the 0x730 AS_PATH group) and the `tu` bit at the
+  plane.
+- ROM: the parent's builder generates the per-configuration 1,024-word
+  image from this repo's `hdl/ucode/gen_gptp_ucode.py` (`--mac`, `--p1`,
+  `--clk-hz` from the station YAML) and passes its path as
+  `GPTP_UCODE_HEX_P`; the parent tracks no image of its own, and its CI
+  fetches this submodule for the RTL and documentation gates.
 
 ## Measured record
 
