@@ -251,6 +251,6 @@ baseline is the Follow_Up row above (the #18 head):
 
 Re-grouping one constant in the table moves no LUT: the minimum mux
 was already there for the other five types. Verification at this
-measurement: ucpu 768 / parser 140 / engine 213 checks, forty-one
+measurement: ucpu 768 / parser 140 / engine 215 checks, forty-one
 planted mutations red (the new one: the Pdelay_Req minimum reverted to
 the 34-octet header fails 15 parser and 2 engine checks), lint clean.
