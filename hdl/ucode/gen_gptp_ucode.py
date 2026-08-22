@@ -245,7 +245,9 @@ S_MYPV = 10                              # our {p1, cq, p2, 16'0} vector
 S_PDGOT = 11                             # exchange seen since last req
 S_NR3, S_NR4, S_NRR = 12, 13, 14         # nrr window + Q2.30 ratio
 S_INTG = 15                              # servo integrator, addend units
-S_T1, S_T4, S_PEND = 16, 17, 18
+S_T1, S_T4, S_TXQ_TMR = 16, 17, 18       # S_TXQ_TMR took the cell the one
+                                         # shared pending kind used before
+                                         # the claims were split per frame
 S_RQCID, S_BESTSRC, S_RQSEQ, S_RQPN, S_INIT, S_MYSEQ = 19, 20, 21, 22, 23, 24
 S_CID, S_1E9, S_HDR8, S_SALO = 25, 26, 27, 28
 S_SSEQ, S_ASEQ, S_ANNBODY = 29, 30, 31
@@ -259,6 +261,23 @@ S_PTIDX, S_ZERO = 37, 38                 # path-trace walk: the DESC_ADDR
                                          # LUTRAM powers on at zero and the
                                          # init leg does not need to spend
                                          # a word on either
+S_TXQ_RESP = 41                          # the second egress-timestamp
+                                         # claim. Each claim holds the
+                                         # sequenceId its frame went out
+                                         # with, or'd with TXP_PEND_C while
+                                         # that frame's stamp is owed and
+                                         # with TXP_SYNC_C when the frame
+                                         # is a Sync, and zero once the
+                                         # stamp has been taken. Two cells
+                                         # are enough: the two timer-driven
+                                         # transmitters already exclude
+                                         # each other (each skips its beat
+                                         # while a timer-driven stamp is
+                                         # owed), so only a response can be
+                                         # in flight beside them, and each
+                                         # stamp goes to the frame whose
+                                         # sequenceId it names (FPGA-gPTP
+                                         # #28)
 S_RSPSEQ, S_RSPSRC = 39, 40              # the armed Pdelay_Resp: its
                                          # sequenceId | RSP_ARMED_C, and
                                          # its sourcePortIdentity (written
@@ -273,6 +292,18 @@ PT_CAP_C = 8                    # hops the message bank holds (w16..w23):
                                 # mirrors KL_gptp_rx_parser's cap
 
 # ---- 802.1AS-2011 11.2.15.3 Pdelay_Resp / Resp_Follow_Up pairing ------------
+TXP_PEND_C = 0x100000           # "a stamp is owed for this frame" and,
+TXP_SYNC_C = 0x200000           # for the timer-driven claim, "the frame
+                                # is a Sync, so its stamp builds the
+                                # Follow_Up". Both sit above the 16-bit
+                                # sequenceId in the claim cell, ABOVE the
+                                # messageType nibble a bank-word-0 read
+                                # leaves at bits [19:16], which is why
+                                # they start at bit 20 and why every claim
+                                # is masked to TXQ_MASK_C before it is
+                                # compared: the sequenceId is 16 bits on
+                                # the wire, the counters behind it are not
+TXQ_MASK_C = 0xFFFF | TXP_PEND_C | TXP_SYNC_C
 RSP_ARMED_C = 0x10000           # set above the 16-bit sequenceId in
                                 # S_RSPSEQ: a zero word is "no response"
 
@@ -755,8 +786,10 @@ def prog_rx_pdreq(base):
     p.emit("BFLD", ra=RB, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_RQPN, fmt=FMT_Q)
     p.emit("BFLD", ra=RC, fmt=FMT_W)
-    p.emit("MOVE", rd=RT, ra=0, imm=2)
-    p.emit("WRST", ra=RT, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    # RA still holds the request's sequenceId, the one this response
+    # carries and the one the stamper reads back at the MAC boundary
+    p.emit("ALU", rd=RT, ra=RA, rb=0, cnd=ALU_OR, imm=TXP_PEND_C)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)
     p.emit("SEND")
     p.label("out")
     p.emit("END")
@@ -865,23 +898,62 @@ def prog_rx_signal(base):
 
 
 def prog_tx_ts(base):
+    """Match the stamp to a claim by sequenceId, which narrows the guess.
+
+    KL_gptp_txstamp reads the sequenceId at the MAC boundary and returns it
+    beside the timestamp; the engine carries it in the event descriptor and
+    the dispatch preloads that descriptor into REV, sequenceId at bits
+    [31:16]. Comparing it against the claim its transmitter left is
+    order-independent, so it rests on no assumption about the order stamps
+    come back in, which is a property of the parent's merge and stamper
+    that this repository cannot establish.
+
+    This does NOT make the credit unambiguous, and #28 stays open for what
+    it does not cover. Sixteen bits of sequenceId is not an identity: two
+    outstanding frames whose tags coincide are indistinguishable here, and
+    the two ends of a link both start S_MYSEQ at zero and advance once a
+    second, so their request sequences are equal from boot rather than
+    coinciding one time in 65,536. Worse, three legs SEND and leave no
+    claim at all, prog_leg_anntx, prog_leg_syncfu and prog_leg_rfu, while
+    the parent's stamper stamps every armed 0x88F7 frame without filtering
+    on messageType, so a stamp from one of those can match and clear a
+    claim that belongs to a different frame. What this arm does achieve is
+    real: the shared cell is gone, each claim is explicit, and the case
+    that used to be a certainty rather than a coincidence, a peer request
+    landing anywhere in our outstanding interval, is closed. The clean
+    closure is msgType beside the sequenceId
+    (kebag-logic/milan-fpga#214), after which this compare takes both and
+    #28 can close."""
     p = Prog(base)
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_PEND, fmt=FMT_Q)
-    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
+    p.emit("ALU", rd=RU, ra=REV, rb=0, cnd=ALU_SHR, imm=16)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=0xFFFF)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_OR, imm=TXP_PEND_C)
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=TXQ_MASK_C)
+    p.emit("CMP", ra=RA, rb=RU, fmt=FMT_Q)
     p.emit("BRS", cnd=BRS_Z, label="t1")
-    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=2)
-    p.emit("BRS", cnd=BRS_Z, label=LB["RFU"])
-    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=3)
-    p.emit("BRS", cnd=BRS_Z, label=LB["SYNCFU"])
-    p.emit("END")
+    p.emit("ALU", rd=RB, ra=RU, rb=0, cnd=ALU_OR, imm=TXP_SYNC_C)
+    p.emit("CMP", ra=RA, rb=RB, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="sync")
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=TXQ_MASK_C)
+    p.emit("CMP", ra=RA, rb=RU, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="resp")
+    p.emit("END")                      # a stamp no outstanding frame claims
+    p.label("resp")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)
+    p.emit("BR", label=LB["RFU"])
+    p.label("sync")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
+    p.emit("BR", label=LB["SYNCFU"])
     p.label("t1")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_T1, fmt=FMT_Q)
-    p.emit("WRST", ra=0, imm=RG_SCR | S_PEND, fmt=FMT_Q)
     p.emit("END")
     return p
 
 
-def prog_tmr(base, mac):
+def prog_tmr(base, mac, seq_seed=0):
     cid = ((mac >> 24) << 40) | (0xFFFE << 24) | (mac & 0xFFFFFF)
     hdr8 = (0x0180C200000E << 16) | ((mac >> 32) & 0xFFFF)
     salo = mac & 0xFFFFFFFF
@@ -924,12 +996,30 @@ def prog_tmr(base, mac):
     p.emit("WRST", ra=RC, imm=RG_SCR | S_ANNBODY, fmt=FMT_Q)
     e_const(p, RC, 0xC2000001)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_FUORG, fmt=FMT_Q)
-    for s in (S_SYNCTS, S_PDELAY, S_T2, S_SSEQFLY,
+    for s in ((S_MYSEQ,) if not seq_seed else ()) + (
+              S_SYNCTS, S_PDELAY, S_T2, S_SSEQFLY,
               S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NR4, S_NRR, S_INTG,
-              S_T1, S_T4, S_PEND, S_MYSEQ, S_SSEQ, S_ASEQ,
-              S_RSP1, S_IVMULTI, S_MULTI, S_CEASE, S_CEASECNT,
+              S_T1, S_T4, S_TXQ_TMR, S_TXQ_RESP,
+              S_SSEQ, S_ASEQ,
+              S_RSP1, S_IVMULTI, S_CEASE,
               S_RSPSEQ):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
+    # S_CEASECNT and S_MULTI are deliberately NOT in that list, which is
+    # where the words for the mask below and for the seeded regression
+    # image came from. Each is read only behind a cell that IS zeroed
+    # here, and each is written before that gate can open. S_CEASECNT is
+    # read only at the "quiet" label, reached only when S_CEASE is 1, and
+    # the one path that sets S_CEASE to 1 writes S_CEASECNT two
+    # instructions later. S_MULTI is read only at "was_multi", reached
+    # only when S_IVMULTI is 1, and the other arm of that branch writes
+    # S_MULTI on every beat where it is 0; S_IVMULTI can only become 1
+    # after a request has gone out, which passes through that arm first
+    if seq_seed:
+        # REGRESSION IMAGE ONLY: start the request counter above 16 bits so
+        # the claim tag carries bits the flags live in. The shipping image
+        # never takes this branch
+        p.emit("MOVE", rd=RT, ra=0, imm=seq_seed)
+        p.emit("WRST", ra=RT, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_INIT, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
@@ -937,7 +1027,7 @@ def prog_tmr(base, mac):
     p.label("cadence")
     p.emit("MOVE", rd=RT, ra=0, imm=1000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 0, fmt=FMT_Q)
-    p.emit("RDST", rd=RB, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="send")
     p.emit("END")
@@ -1013,10 +1103,17 @@ def prog_tmr(base, mac):
     p.emit("BFLD", ra=0, fmt=FMT_Q)
     p.emit("BFLD", ra=0, fmt=FMT_Q)
     p.emit("BFLD", ra=0, fmt=FMT_D)
+    # S_MYSEQ is a free-running counter and the sequenceId on the wire is
+    # its low 16 bits, so the tag MUST be bounded before the flags are
+    # or'd in: raw, its bit 21 is TXP_SYNC_C and every Pdelay_Req stamp
+    # from request 2,097,152 onwards, 24.3 days at this cadence, would be
+    # routed to the Sync Follow_Up leg. Masking here also bounds the
+    # counter itself, since the write-back below takes the masked value
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=0xFFFF)
+    p.emit("ALU", rd=RT, ra=RA, rb=0, cnd=ALU_OR, imm=TXP_PEND_C)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_ADD, imm=1)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
-    p.emit("MOVE", rd=RT, ra=0, imm=1)
-    p.emit("WRST", ra=RT, imm=RG_SCR | S_PEND, fmt=FMT_Q)
     p.emit("SEND")
     p.emit("END")
     return p
@@ -1099,12 +1196,11 @@ def prog_btca(base):
     e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)
     p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCSRC, fmt=FMT_Q)
-    p.emit("RDST", rd=RT, imm=RG_SCR | S_PEND, fmt=FMT_Q)
-    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=3)
-    p.emit("BRS", cnd=BRS_Z, label="vfu")
-    p.emit("BR", label="pk")
-    p.label("vfu")
-    p.emit("WRST", ra=0, imm=RG_SCR | S_PEND, fmt=FMT_Q)   # FU build void
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=TXP_SYNC_C)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="pk")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)  # FU build void
     p.label("pk")
     p.emit("WRST", ra=0, imm=RG_TMR | 1, fmt=FMT_Q)        # sync TX off
     p.emit("WRST", ra=0, imm=RG_TMR | 3, fmt=FMT_Q)        # ann TX off
@@ -1302,7 +1398,6 @@ def prog_leg_rfu(base):
     p.emit("BFLD", ra=RB, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_RQPN, fmt=FMT_Q)
     p.emit("BFLD", ra=RC, fmt=FMT_W)
-    p.emit("WRST", ra=0, imm=RG_SCR | S_PEND, fmt=FMT_Q)
     p.emit("SEND")
     p.emit("END")
     return p
@@ -1324,7 +1419,6 @@ def prog_leg_syncfu(base):
     p.emit("BFLD", ra=0, fmt=FMT_Q)                  # lastGmPhaseChange
     p.emit("BFLD", ra=0, fmt=FMT_D)                  #   (12 bytes)
     p.emit("BFLD", ra=0, fmt=FMT_D)                  # scaledLastGmFreqChg
-    p.emit("WRST", ra=0, imm=RG_SCR | S_PEND, fmt=FMT_Q)
     p.emit("SEND")
     p.emit("END")
     return p
@@ -1336,7 +1430,7 @@ def prog_leg_synctx(base):
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)
     e_flag_gate(p, FL_AMGM_C, FL_AMGM_C, "gm", "skip")
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "skip")
-    p.emit("RDST", rd=RB, imm=RG_SCR | S_PEND, fmt=FMT_Q)
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="build")
     p.label("skip")
@@ -1350,10 +1444,11 @@ def prog_leg_synctx(base):
     # timestamp event and is written into the paired Follow_Up.
     p.emit("BFLD", ra=0, fmt=FMT_Q)
     p.emit("BFLD", ra=0, fmt=FMT_W)
+    p.emit("ALU", rd=RT, ra=RA, rb=0, cnd=ALU_OR,
+           imm=TXP_PEND_C | TXP_SYNC_C)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_ADD, imm=1)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_SSEQ, fmt=FMT_Q)
-    p.emit("MOVE", rd=RT, ra=0, imm=3)
-    p.emit("WRST", ra=RT, imm=RG_SCR | S_PEND, fmt=FMT_Q)
     p.emit("SEND")
     p.emit("END")
     return p
@@ -1405,12 +1500,12 @@ LEG_FNS = [
 ]
 
 
-def build(mac):
+def build(mac, seq_seed=0):
     fixed = [
         (16, prog_rx_sync), (64, prog_rx_followup), (128, prog_rx_announce),
         (192, prog_rx_pdreq), (256, prog_rx_pdresp), (320, prog_rx_pdrfu),
         (384, prog_rx_signal), (448, prog_tx_ts),
-        (512, lambda b: prog_tmr(b, mac)), (704, prog_tb_battery),
+        (512, lambda b: prog_tmr(b, mac, seq_seed)), (704, prog_tb_battery),
     ]
 
     # pass 1: measure (word counts are independent of branch targets)
@@ -1464,6 +1559,9 @@ def build(mac):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", default="gptp_ucode.hex")
+    ap.add_argument("--seq-seed", type=lambda s: int(s, 0), default=0,
+                    help="seed S_MYSEQ at init; a REGRESSION IMAGE only, "
+                         "for proving a claim tag above 16 bits is bounded")
     ap.add_argument("--mac", type=lambda s: int(s, 0), default=0x02A1B2C3D4E5)
     ap.add_argument("--p1", type=int, default=248,
                     help="our announced priority1 (lower wins BTCA)")
@@ -1478,7 +1576,7 @@ def main():
     global P1_C
     P1_C = args.p1
     set_servo_gains(args.clk_hz)
-    rom, used = build(args.mac)
+    rom, used = build(args.mac, args.seq_seed)
     with open(args.out, "w", encoding="ascii") as f:
         for word in rom:
             f.write(f"{word:012X}\n")

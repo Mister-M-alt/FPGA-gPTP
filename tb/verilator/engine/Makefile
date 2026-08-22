@@ -14,12 +14,27 @@ SRCS = $(RTL_DIR)/ucpu/gptp_ucpu_pkg.sv $(RTL_DIR)/ucpu/KL_gptp_ucpu.sv \
        $(RTL_DIR)/common/KL_gptp_timer.sv $(RTL_DIR)/top/KL_gptp_engine.sv
 CPP  = sim_main.cpp
 
+GEN = $(RTL_DIR)/ucode/gen_gptp_ucode.py
+GENARGS = --clk-hz 2000000 --cease-ms 3000
+
+# The suite runs TWICE against the same build. The second run swaps in a
+# regression image whose request counter starts above 16 bits, which is
+# the one condition that makes an unbounded claim tag observable: the
+# counter reaches it after 2,097,152 requests, 24.3 days at this cadence,
+# and no ordinary run can get there. $$readmemh reads the image at
+# simulation start, so the swap needs no rebuild. Under backpressure the
+# same trick would serve; see the input table in README.md
 run: gptp_ucode.hex
 	$(VERILATOR) $(VFLAGS) $(SRCS) $(CPP) -o Vengine_sim
 	./obj_dir/Vengine_sim
+	@cp gptp_ucode.hex gptp_ucode_shipping.hex
+	@python3 $(GEN) $(GENARGS) --seq-seed 0x200000 -o gptp_ucode.hex >/dev/null
+	@echo "-- again, with the request counter seeded above 16 bits --"
+	@./obj_dir/Vengine_sim; rc=$$?; \
+	 mv gptp_ucode_shipping.hex gptp_ucode.hex; exit $$rc
 
-gptp_ucode.hex: $(RTL_DIR)/ucode/gen_gptp_ucode.py
-	python3 $< --clk-hz 2000000 --cease-ms 3000 -o $@
+gptp_ucode.hex: $(GEN)
+	python3 $< $(GENARGS) -o $@
 
 clean:
-	rm -rf obj_dir gptp_ucode.hex
+	rm -rf obj_dir gptp_ucode.hex gptp_ucode_shipping.hex

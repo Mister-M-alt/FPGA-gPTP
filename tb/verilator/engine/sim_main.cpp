@@ -193,7 +193,29 @@ static Frame follow_up(uint16_t seq, uint64_t corr, uint64_t origin,
 
 
 static VKL_gptp_engine *dut;
+//! the sequenceId a boundary stamper reads out of the frame it stamps
+//! (PTP header offset 30, frame offset 44)
+static uint16_t seq_of(const std::vector<uint8_t> &f) {
+  return f.size() > 45 ? (uint16_t)((f[44] << 8) | f[45]) : 0;
+}
+
 static uint64_t cyc = 0;
+
+// ---- TX backpressure ------------------------------------------------------
+// The parent drives the engine's tx_ready from its gearbox and frame FIFO
+// (KL_gptp_shadow.sv:499, eng_tx_ready_w = gbo_ready_w | ~gbo_valid_w), so
+// ready deasserts in ordinary operation. This bench pinned it high, which
+// left the whole backpressure path unobservable: no test could tell a
+// design that honours the handshake from one that ignores it (FPGA-gPTP
+// #33). It is driven here instead, by a period/low duty pattern for whole
+// runs and by an explicit hold for directed cases.
+static int  bp_period = 0;        //! 0 = ready held high, the old behaviour
+static int  bp_low = 0;           //! cycles low at the start of each period
+static long bp_hold = 0;          //! an explicit stall, counted down per tick
+static long bp_sof_hold = 0;      //! stall this long at the next frame's sof
+static bool bp_sof_armed = false;
+static long bp_low_cycles = 0;    //! observability: cycles ready was low
+static long bp_stalled_beats = 0; //! valid && !ready, a byte actually held
 static std::vector<std::vector<uint8_t>> txf;
 static std::vector<uint64_t> txns;               // egress ts fed per frame
 static std::vector<uint8_t> cur;
@@ -212,12 +234,44 @@ static std::vector<uint32_t> adj_seen;           // every adjfine write
 static uint64_t phc() { return (uint64_t)(phc_acc >> 24); }
 
 static void tick() {
+  //! a byte transfers only on valid && ready: the serializer holds
+  //! tx_data_o and tx_valid_o stable while ready is low
+  //! (KL_gptp_tx_slot.sv:117-141), so the capture below must sample the
+  //! handshake, not just valid
+  if (bp_sof_armed && dut->tx_valid_o && dut->tx_sof_o && bp_hold == 0) {
+    bp_hold = bp_sof_hold;
+    bp_sof_armed = false;
+  }
+  bool bp_ready = true;
+  if (bp_hold > 0) { bp_ready = false; bp_hold--; }
+  else if (bp_period > 0)
+    bp_ready = (long)(cyc % (uint64_t)bp_period) >= (long)bp_low;
+  dut->tx_ready_i = bp_ready ? 1 : 0;
+  if (!bp_ready) {
+    bp_low_cycles++;
+    if (dut->tx_valid_o) bp_stalled_beats++;
+  }
   if (auto_pend >= 0 && !dut->txts_valid_i) {
     uint64_t ns = phc() + 200;                   // MAC pipeline latency
     dut->txts_valid_i = 1;
     dut->txts_ns_i = ns;
+    dut->txts_seq_i = seq_of(txf[auto_pend]);
     txns[auto_pend] = ns;
     auto_pend = -1;
+  }
+  //! the beat this edge will accept. The serializer's outputs after edge
+  //! N are the beat offered at edge N+1, so the byte is sampled here,
+  //! against the ready being applied now, rather than after the edge
+  //! against the ready that drove the previous one
+  if (dut->tx_valid_o && bp_ready) {
+    if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
+    if (in_tx) cur.push_back(dut->tx_data_o);
+    if (dut->tx_eof_o && in_tx) {
+      txf.push_back(cur);
+      txns.push_back(0);
+      if (auto_txts) auto_pend = (int)txf.size() - 1;
+      in_tx = false;
+    }
   }
   dut->clk_i = 0; dut->eval();
   dut->clk_i = 1; dut->eval();
@@ -232,16 +286,6 @@ static void tick() {
   }
   phc_acc += (unsigned __int128)(uint64_t)((500ll << 24) + phc_adj);
   dut->phc_ns_i = phc();
-  if (dut->tx_valid_o) {
-    if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
-    if (in_tx) cur.push_back(dut->tx_data_o);
-    if (dut->tx_eof_o && in_tx) {
-      txf.push_back(cur);
-      txns.push_back(0);
-      if (auto_txts) auto_pend = (int)txf.size() - 1;
-      in_tx = false;
-    }
-  }
   dut->txts_valid_i = 0;                 // a pulse lasts exactly one edge
   cyc++;
 }
@@ -261,10 +305,19 @@ static void send_frame(const std::vector<uint8_t> &bytes, uint64_t rx_ts) {
   dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
 }
 
-static void txts(uint64_t ns) {
-  dut->txts_valid_i = 1; dut->txts_ns_i = ns; dut->txts_seq_i = 0;
+//! stamp one CHOSEN transmitted frame, reporting its own sequenceId the
+//! way KL_gptp_txstamp does. Until #28 the bench reported 0 for every
+//! frame, so nothing here exercised the tag the hardware delivers
+static void txts_idx(size_t idx, uint64_t ns) {
+  dut->txts_valid_i = 1; dut->txts_ns_i = ns;
+  dut->txts_seq_i = idx < txf.size() ? seq_of(txf[idx]) : 0;
   tick();
   dut->txts_valid_i = 0;
+}
+
+//! stamp the frame last sent, the common case
+static void txts(uint64_t ns) {
+  txts_idx(txf.empty() ? 0 : txf.size() - 1, ns);
 }
 
 // ---- pdelay model: the spec formula in the ROM's exact integer forms ------
@@ -539,12 +592,19 @@ static void check_common(const char *tag, const std::vector<uint8_t> &f,
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
+  for (int i = 1; i < argc; i++) {
+    if (!strcmp(argv[i], "--bp") && i + 1 < argc)
+      sscanf(argv[i + 1], "%d,%d", &bp_period, &bp_low);
+    if (!strcmp(argv[i], "--bp-sof") && i + 1 < argc) {
+      bp_sof_hold = atol(argv[i + 1]);
+      bp_sof_armed = true;
+    }
+  }
   dut = new VKL_gptp_engine;
 
   dut->rst_n = 0;
   dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
   dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
-  dut->tx_ready_i = 1;
   dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
   dut->phc_ns_i = 0;
   for (int i = 0; i < 8; i++) tick();
@@ -552,6 +612,7 @@ int main(int argc, char **argv) {
 
   // ---- 1: our Pdelay_Req; asCapable must start low ----------------------
   std::vector<uint8_t> req = wait_tx(0x2, 3200000);
+  const size_t our_req_idx = txf.empty() ? 0 : txf.size() - 1;
   if (!req.empty()) {
     check_common("pdreq", req, 0x2, 0x0000, 54, 0x00);
     uint64_t z = 0;
@@ -592,8 +653,158 @@ int main(int argc, char **argv) {
            drops);
     expect("self-sourced request: flags unmoved", dut->pub_flags_o, flags0);
   }
-  txts(T1);
+  // ---- 1c: peer requests inside our own request's outstanding interval --
+  // Our Pdelay_Req is out and its egress timestamp has not come back, so
+  // the plane owes itself a stamp for the whole of this interval. A peer
+  // running its own cadence sends into that interval, we answer, and the
+  // answer must not divert the stamp our request is waiting for
+  // (FPGA-gPTP #28). The leads are spread across the interval rather
+  // than bunched at its edge, because the interval is not a few cycles:
+  // the steal was measured at leads from 0 to 1,000,000 cycles, so a
+  // single near-boundary case would look the same whether a fix closed
+  // the whole interval or only its last cycles.
+  //
+  // The last response's stamp is then returned BEFORE our request's,
+  // which is the discriminating case: positional matching, crediting
+  // stamps in hand-over order, gives that stamp to our request and this
+  // phase goes red. Matching by the sequenceId the stamper reports does
+  // not care what order they arrive in.
+  uint16_t drops_1c = 0;
+  const uint64_t P3_TS = 850000ull, P4_TS = 870000ull, P5_TS = 890000ull;
+  size_t p3_idx = 0, p4_idx = 0, p5_idx = 0;
+  uint16_t p3_seq = 0;
+  {
+    const long leads[] = {10, 2000, 200000};
+    size_t mark = txf.size();
+    drops_1c = dut->dbg_rx_drop_o;
+    int n = 0;
+    for (long lead : leads) {
+      run((uint64_t)lead);
+      p3_seq = (uint16_t)(0x9900 + n);
+      Frame q = ptp(0x2, p3_seq, 0, 0x0000, 20, PEER_CID);
+      q.u64(0); q.u16(0); q.ts(0);
+      q.b.resize(68);
+      send_frame(q.b, 900000 + 1000 * n);
+      run(4000);
+      n++;
+    }
+    int resps = 0;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) {
+        resps++;
+        p3_idx = i;
+      }
+    // named for what it pins: three requests drew three Pdelay_Resps.
+    // It is NOT three completed exchanges, since one response claim cell
+    // means only the last can be stamped; the two before it are
+    // incomplete against 802.1AS-2011 11.2.16, which needs a peer sending
+    // faster than one request per outstanding interval to reach
+    expect("peer requests across our window: three Pdelay_Resps", resps, 3);
+    expect("peer requests across our window: none was a parser drop",
+           dut->dbg_rx_drop_o, drops_1c);
+  }
+  {
+    size_t mark = txf.size();
+    txts_idx(p3_idx, P3_TS);            // the RESPONSE's stamp, returned
+    run(8000);                          // before our own request's
+    std::vector<uint8_t> u;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0xA) u = txf[i];
+    expect("out-of-order stamp: the Resp_FU is built", u.empty() ? 0 : 1, 1);
+    if (!u.empty()) {
+      expect("out-of-order stamp: it pairs its own request",
+             fld16(u, 44), p3_seq);
+      expect("out-of-order stamp: it carries its own timestamp",
+             fld48(u, 48) * 1000000000ull + fld32(u, 54), P3_TS);
+    }
+  }
+  {
+    // two claims outstanding whose tags differ ONLY in the high byte of
+    // the sequenceId: ours is 0 and this request's is 0x0100. A compare
+    // narrowed to the low 8 bits reads them as equal, gives this
+    // response's stamp to our request and never builds the Resp_FU, and
+    // every other tag pair in this suite differs in the low byte, so
+    // without this case that narrowing survives untouched. It is the
+    // same blindness the pinned txts_seq_i had: a field nothing varies
+    // is a field nothing tests
+    size_t mark = txf.size();
+    Frame q = ptp(0x2, 0x0100, 0, 0x0000, 20, PEER_CID);
+    q.u64(0); q.u16(0); q.ts(0);
+    q.b.resize(68);
+    send_frame(q.b, 904000);
+    run(4000);
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) p5_idx = i;
+    mark = txf.size();
+    txts_idx(p5_idx, P5_TS);
+    run(8000);
+    std::vector<uint8_t> u;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0xA) u = txf[i];
+    expect("high-byte-only difference: the Resp_FU is built",
+           u.empty() ? 0 : 1, 1);
+    if (!u.empty()) {
+      expect("high-byte-only difference: it pairs its own request",
+             fld16(u, 44), 0x0100);
+      expect("high-byte-only difference: it carries its own timestamp",
+             fld48(u, 48) * 1000000000ull + fld32(u, 54), P5_TS);
+    }
+  }
+  {
+    // the documented residual, exercised rather than described: the two
+    // 16-bit sequence counters are independent, so a peer request can
+    // carry the sequenceId our own outstanding request is using. Our
+    // boot request is sequence 0, so this one is too, and both claims
+    // then hold the same tag. The stamps are credited in the order
+    // prog_tx_ts tests the claims, timer first, not to the frames that
+    // earned them: two stamps arrive and each claim takes one, so
+    // nothing is lost and nothing is doubled, but if the response
+    // crossed the MAC boundary first then the two values are swapped.
+    // msgType beside the sequenceId would close it (parent #214)
+    size_t mark = txf.size();
+    Frame q = ptp(0x2, 0, 0, 0x0000, 20, PEER_CID);
+    q.u64(0); q.u16(0); q.ts(0);
+    q.b.resize(68);
+    send_frame(q.b, 906000);
+    run(4000);
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) p4_idx = i;
+    expect("equal sequences: the request is still answered",
+           p4_idx > mark - 1 ? 1 : 0, 1);
+    expect("equal sequences: its response carries our own sequence",
+           fld16(txf[p4_idx], 44), 0);
+  }
+  // our request's own stamp: its sequenceId is 0, which the response
+  // above also claims, so the timer claim is tested first and takes it.
+  // Phase 2's published delay is the oracle, 600 ns if it reached S_T1
+  // and 500,600 ns if a response took it
+  txts_idx(our_req_idx, T1);
+  {
+    // the equal-sequence response's stamp, arriving with the timer claim
+    // now cleared: its claim is the only one left holding sequence 0, so
+    // it takes this one and builds its Resp_FU.
+    //
+    // The gap is load-bearing and is not this round's defect: the engine
+    // keeps ONE egress timestamp and samples it at dispatch, so two
+    // stamps closer together than the dispatch latency lose the first
+    // value whatever the claims say (#31). Without the run() below, our
+    // request's t1 takes this stamp's value and phase 2 publishes 65,600
+    // instead of 600, which is #31 reproducing itself inside this test
+    run(2000);
+    size_t mark = txf.size();
+    txts_idx(p4_idx, P4_TS);
+    run(8000);
+    std::vector<uint8_t> u;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0xA) u = txf[i];
+    expect("equal sequences: the second stamp builds the Resp_FU",
+           u.empty() ? 0 : 1, 1);
+    if (!u.empty())
+      expect("equal sequences: it carries the second stamp",
+             fld48(u, 48) * 1000000000ull + fld32(u, 54), P4_TS);
+  }
   run(2000);
+  tx_seen = txf.size();          // this phase's frames are accounted for
 
   // ---- 1b: a Follow_Up for the boot request ahead of any Resp ----------
   // sequence 0 is the first request the plane sends (and recurs every
