@@ -27,11 +27,11 @@ lock closed-loop against a +140 ppm master, and v6 the full-compare
 round: BTCA against a stored best vector (parent updates, stepsRemoved
 and sourcePortIdentity tie-breaks, immediate takeover on parent
 degradation), Sync/Follow_Up sequence-and-source pairing, asCapable
-gating sync consumption, and the Sync originTimestamp carrying the
-live PHC, and v7 the cease-rule round -- the deliberate end of the
-zero-RTL era: the engine gains a SECOND message bank (each accepted
-frame lands in the bank its event names, retiring the torn-read
-window) and a 64-word scratch, and the Milan 4.2.6.2.5
+gating sync consumption, and the paired Follow_Up preciseOriginTimestamp
+carrying the live egress stamp, and v7 the cease-rule round -- the
+deliberate end of the zero-RTL era: the engine gains a SECOND message
+bank (each accepted frame lands in the bank its event names, retiring
+the torn-read window) and a 64-word scratch, and the Milan 4.2.6.2.5
 multiple-responder cease rule lands on that room (three multi-identity
 intervals stop Pdelay_Req, a 5-minute timer resumes, duplicates from
 one identity are not a storm), and the parent's field campaign then

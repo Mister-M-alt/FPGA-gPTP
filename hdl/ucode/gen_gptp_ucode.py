@@ -48,9 +48,9 @@ v5 closed the loop; v6 completes the receive-side state machines of
     Sync/Follow_Up processing -- the servo no longer steers on a link
     whose delay verdict is dead. Pdelay keeps running; it is how the
     verdict is earned back.
-  * The Sync originTimestamp carries the live PHC (11.4.3 approximate
-    origin; GATH sel 0 -- the first functional consumer of phc_ns_i,
-    which makes a mis-wired clock snapshot observable on the wire).
+  * The two-step Sync body is the ten reserved zero bytes required by
+    Table 11-8. The paired Follow_Up carries the live egress timestamp
+    as its preciseOriginTimestamp.
 
 Identity scope: "sourcePortIdentity" in the pairing and the BTCA
 tiebreak is the clockIdentity alone; the 16-bit portNumber (bank w3)
@@ -1104,11 +1104,11 @@ def prog_leg_synctx(base):
     p.emit("RDST", rd=RA, imm=RG_SCR | S_SSEQ, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_SSEQFLY, fmt=FMT_Q)
     e_hdr(p, 0x0, 0x0208, RA, 0xFD, 44)
-    # 11.4.3: the two-step Sync's originTimestamp is the approximate
-    # egress time -- the live PHC via gather sel 0 (the first
-    # functional consumer of phc_ns_i)
-    p.emit("GATH", rd=RB, imm=0)
-    e_ts_fields(p, RB)
+    # 802.1AS-2011 Table 11-8: a two-step Sync carries ten reserved
+    # bytes, all zero. The actual egress time arrives through the TX
+    # timestamp event and is written into the paired Follow_Up.
+    p.emit("BFLD", ra=0, fmt=FMT_Q)
+    p.emit("BFLD", ra=0, fmt=FMT_W)
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_ADD, imm=1)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_SSEQ, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=3)

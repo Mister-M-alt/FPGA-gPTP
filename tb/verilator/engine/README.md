@@ -33,7 +33,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 18 | gmId tie -> stepsRemoved (shorter wins, longer loses) -> sourcePortIdentity tiebreak switches the parent with NO sync-ok flicker |
 | 18b | a delayed dispatch reads the frame its event names (the second bank): a worse announce beside a parent Sync REJECTS, never a wrongful takeover |
 | 19 | a parent degrading below us yields mastership IMMEDIATELY (10.3.5) |
-| 20 | the Sync originTimestamp carries the live PHC (11.4.3; gather sel 0 consumes phc_ns_i) |
+| 20 | every two-step Sync carries ten zero reserved bytes (Table 11-8); phase 7 proves its Follow_Up still carries the live egress timestamp |
 | 21 | an asCapable fall stops sync consumption and steering; recovery resumes it |
 | 21b | become resets the best record: no ghost GM outlives the receipt timeout |
 | 21c | the priority vector outranks the identity in the compare order |
@@ -55,7 +55,7 @@ staleness guard, the fall-at-three lost count, a dropped adopt-side
 sync void, a dead step threshold, both servo sign errors, a dead
 integrator, a halved integrator clamp, a step that loses the rate
 estimate, both pairing bypasses, an inverted steps compare, a dropped
-parent update, a zeroed origin gather, a reverted consumption gate, a
+parent update, a non-zero Sync reserved body, a reverted consumption gate, a
 removed dispatch seq guard, a dropped become-side best reset, a
 swapped vector/identity compare order, a 30-interval cease threshold,
 duplicates counted as a storm, a dead resume countdown, a removed
