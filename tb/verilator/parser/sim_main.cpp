@@ -583,6 +583,33 @@ int main(int argc, char **argv) {
     expect_eq("cut pdreq drop: one drop", dut->drop_cnt_o,
               (uint16_t)(d0 + 1));
   }
+  // IEEE 1588-2008 13.3.2.2 and its Table 19 define the messageType
+  // values; a gPTP port carries only the seven of 802.1AS-2011 Clause 10
+  // and 11 (Sync 0x0, Pdelay_Req 0x2, Pdelay_Resp 0x3, Follow_Up 0x8,
+  // Pdelay_Resp_Follow_Up 0xA, Announce 0xB, Signaling 0xC) and has no
+  // handler for the rest. The arm sits at the type byte beside the
+  // transportSpecific compare, ahead of every bank write, so an unlisted
+  // type leaves no event, no bank word and one counted drop instead of
+  // dispatching with the event code no handler claims (FPGA-gPTP #22).
+  // All nine unlisted values, each in an otherwise valid 44-octet frame
+  // that every other arm admits: without this compare each one dispatches
+  // (measured before the fix: events=1 ev_code=0 bank_writes=4 drops=+0).
+  const uint8_t unlisted[] = {0x1, 0x4, 0x5, 0x6, 0x7, 0x9, 0xD, 0xE, 0xF};
+  for (uint8_t mt : unlisted) {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = mt; h.seq = (uint16_t)(0x0E60 + mt); h.flags = 0x0208;
+    h.srcid = 0xAABBCCFFFE001122ull; h.srcpn = 1; h.logint = 0xFD;
+    Frame f = common(h, 10);
+    f.u48(0x000012345678ull); f.u32(0x1DCD6500);
+    feed(f.b, false);
+    char n[64];
+    snprintf(n, sizeof n, "type 0x%X drop: no event", mt);
+    expect_eq(n, ev_seen, 0);
+    snprintf(n, sizeof n, "type 0x%X drop: no bank write", mt);
+    expect_eq(n, bank.size(), 0);
+    snprintf(n, sizeof n, "type 0x%X drop: one drop", mt);
+    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+  }
   {
     uint16_t d0 = dut->drop_cnt_o;
     Hdr h; h.mtype = 0x2; h.seq = 0x0E54; h.srcid = 0x00220FFFFE334455ull;
@@ -596,7 +623,7 @@ int main(int argc, char **argv) {
     expect_eq("complete pdreq after the arms: w2 srcid", bank[2], h.srcid);
     expect_eq("complete pdreq after the arms: no drop", dut->drop_cnt_o, d0);
   }
-  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 27));
+  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 36));
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;
