@@ -738,6 +738,20 @@ def prog_rx_pdresp(base):
     p.emit("BRS", cnd=BRS_Z, label="mine")
     p.emit("BR", label="out")
     p.label("mine")
+    # IEEE 1588-2008 9.5.2.2: "A message received at the same port that
+    # issued the message shall be ignored", identified by comparing the
+    # received sourcePortIdentity against the port's own portIdentity
+    # (its Table 17). 802.1AS-2011 Figure 11-8 carries the same condition
+    # into this machine: asCapable is set only if
+    # rcvdPdelayRespPtr->sourcePortIdentity.clockIdentity != thisClock. So
+    # our own request reflected back by a loop or a misconfigured bridge
+    # is not a neighbour response: refuse it here, ahead of the pairing
+    # and of the 4.2.6.2.5 bookkeeping alike, because it is not a
+    # responder at all (FPGA-gPTP #23). RB still holds thisClock and RC
+    # carries their source from here to the arm below
+    p.emit("RDST", rd=RC, imm=RG_BANK | 2, fmt=FMT_Q)            # their source
+    p.emit("CMP", ra=RC, rb=RB, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="out")
     # 11.2.15.3 (Figure 11-8, WAITING_FOR_PDELAY_RESP): the response must
     # carry the sequenceId of OUR outstanding request, S_MYSEQ - 1 on the
     # wire's 16 bits (S_MYSEQ is never 0 here: the init leg sends the
@@ -761,7 +775,6 @@ def prog_rx_pdresp(base):
     # re-arms: a replayed pair can neither recompute the delay nor climb
     # the ladder a second time in one interval. The Milan 4.2.6.2.5
     # identity bookkeeping below still sees every matching response
-    p.emit("RDST", rd=RC, imm=RG_BANK | 2, fmt=FMT_Q)            # their source
     p.emit("RDST", rd=RU, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
     p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="arm")
