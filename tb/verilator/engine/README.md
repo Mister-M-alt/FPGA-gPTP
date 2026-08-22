@@ -22,6 +22,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 1b | a Follow_Up for the boot request (sequence 0) ahead of any Resp, sourced from the zero identity a never-armed pairing holds, is ignored: "armed with sequence 0" is not "nothing armed" (11.2.15.3) |
 | 3b | a foreign-domain Pdelay_Req (domain 0x10) draws no Pdelay_Resp and counts one drop; a domain-0 request right after it is answered with its own sequence and its Resp_FU |
 | 3c | a header-only Pdelay_Req (messageLength 34 in a 48-byte frame) and a declared 54 cut at 53 octets draw no Pdelay_Resp and count one drop each; the complete request right after them is answered with its own sequence and its Resp_FU (Table 11-11, #12) |
+| 3d | an unlisted messageType (0x1, 0xD, 0xF) with a valid header draws no frame at all over a proven-quiet window and counts one drop each, and the flags do not move: 802.1AS-2011 Tables 10-5 and 11-3 name the seven types a gPTP port carries and the NOTE under Table 11-3 says the others are not used in this standard, IEEE 1588-2008 Table 19 assigning three of them to Delay_Req, Delay_Resp and Management (#22) |
 | 4 | it IS set at the second; pdelay matches the nrr-corrected model |
 | 5 | become-master waits for asCapable |
 | 7b | 802.1AS-2011 11.2.15.3 (Figure 11-8): a Pdelay_Resp_Follow_Up pairs with ONE Pdelay_Resp for the outstanding request. Before any Resp, with a stale sequenceId (the parent campaign's 0xEEEE probe), behind a stale-sequence Resp (0xEEEE, and the outstanding sequence with its high byte flipped), from another responder, duplicated, or for a superseded request it leaves pdelay and asCapable unmoved (a wrongly consumed one would publish -400 ns and clear asCapable); the paired Follow_Up and the next exchange compute the model value |
@@ -57,7 +58,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All sixty-three planted mutations (the own-source rule removed, its
+All sixty-four planted mutations (the own-source rule removed, its
 identity compare narrowed to 32 bits, the stepsRemoved bound off by one
 in either direction, its compare narrowed to a byte, a dead path-trace
 compare, the hop compare narrowed to 32 bits, the hop read from the next
@@ -78,15 +79,17 @@ parent update, a non-zero Sync reserved body, a reverted consumption gate, a
 removed dispatch seq guard, a dropped become-side best reset, a
 swapped vector/identity compare order, a 30-interval cease threshold,
 duplicates counted as a storm, a dead resume countdown, a removed
-mid-cease completion gate, and ten RTL mutations: the read bank
+mid-cease completion gate, and eleven RTL mutations: the read bank
 tied to the write bank, the ingress stamp reverted to a single
 register, the runt length qualification removed, the parser's
 domainNumber drop arm removed, its compare narrowed to the low nibble,
 the end-of-frame gate's bad_r term dropped so a refused frame still
 dispatches, the Follow_Up minimum reverted to the 44-octet
 header-and-timestamp shape, the information TLV header arms removed,
-the Follow_Up TLV block applied to Sync as well, and the Pdelay_Req
-minimum reverted to the 34-octet header) turn the run red.
+the Follow_Up TLV block applied to Sync as well, the Pdelay_Req
+minimum reverted to the 34-octet header, and the unlisted messageType
+arm removed, so a frame no handler claims dispatches into the timer
+program) turn the run red.
 
 ```sh
 make        # regenerates gptp_ucode.hex from hdl/ucode/, builds, runs

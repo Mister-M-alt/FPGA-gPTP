@@ -347,3 +347,48 @@ boot Follow_Up, the skewed forged pairs of the cease phase, and the
 late second identity of phase 27b, which pins the completed path's
 identity bookkeeping (a completed path sent to END passes phase 27 and
 fails 27b).
+
+## The unlisted-type round re-measured: one LUT
+
+FPGA-gPTP #22, found by the cleared-context review of PR #18 and raised
+by the parent lane as a regression its field campaign can see: the
+parser admitted any messageType with a valid header, so a frame no
+handler claims dispatched all the same, and the entry table's arm for
+an unclaimed code is the timer program, whose slot came from the
+descriptor's low bits. Slot 0 is the cadence leg, so a type-0x1 frame
+drew a Pdelay_Req off the 11.5.2.2 interval and walked the
+lost-response count toward an asCapable fall; as master, slot 1 emitted
+a Sync off cadence. The dispatch path is old, but the observable
+refusal regressed with #18: until then the length term refused the
+campaign's 44-octet probes before the type ever mattered, and retiring
+the per-type minimum flag left an unlisted type, which has no minimum
+of its own, with nothing to fail. The fix is one membership compare at
+the type byte, beside the transportSpecific arm and ahead of every bank
+write: Table 10-5 (Announce 0xB, Signaling 0xC) and Table 11-3 (Sync
+0x0, Pdelay_Req 0x2, Pdelay_Resp 0x3, Follow_Up 0x8,
+Pdelay_Resp_Follow_Up 0xA) name the seven types a gPTP port carries,
+and the NOTE under Table 11-3 says the other nine values are not used
+in this standard. No ucode changed; the ROM stays at 927 real words of
+1,024. Same instrument, Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100
+MHz, 2026-08-22, against main at 9d5fb025 re-measured the same day in
+its own worktree:
+
+| | 9d5fb025 (PR #14) | the unlisted-type arm | delta |
+|---|---|---|---|
+| Slice LUTs | 3,115 (2,789 logic + 326 LUTRAM) | **3,116** (2,790 + 326) | **+1** |
+| `u_parser` LUTs | 542 | 543 | +1 |
+| Registers | 2,390 | 2,390 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+One LUT for a seven-of-sixteen membership test: it joins the compare
+the transportSpecific nibble already drives at that byte, and a frame
+refused there costs nothing downstream. Verification at this
+measurement: ucpu 768 / parser 167 / engine 323 checks, sixty-four
+planted mutations red (this round's one, the arm removed: 28 of the
+parser suite's checks, and in the engine suite 105 of the 288 the run
+reaches, because the cadence leg the injected frame re-arms
+desynchronises every exchange after it), lint clean. The parser suite
+carries one more that the engine suite cannot see, one type dropped
+from the list: Signaling refused, 5 checks.

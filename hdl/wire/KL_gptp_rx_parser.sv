@@ -103,6 +103,19 @@ module KL_gptp_rx_parser
 );
 
   // ---- 802.1AS message types --------------------------------------------
+  //! The COMPLETE set a gPTP port carries: Table 10-5 (10.5.2.2.2) names
+  //! Announce 0xB and Signaling 0xC, Table 11-3 (11.4.2.1) names Sync
+  //! 0x0, Pdelay_Req 0x2, Pdelay_Resp 0x3, Follow_Up 0x8 and
+  //! Pdelay_Resp_Follow_Up 0xA, and the NOTE under Table 11-3 closes the
+  //! set: "Other values for the messageType field, except for 0xB ... and
+  //! 0xC ..., are not used in this standard". The other nine values are
+  //! IEEE 1588-2008 Table 19's Delay_Req 0x1, Delay_Resp 0x9 and
+  //! Management 0xD (the delay-request mechanism and management, which
+  //! 802.1AS does not use) and its reserved 0x4..0x7 and 0xE..0xF. None
+  //! has a handler here, so the type arm below refuses them rather than
+  //! let the engine dispatch an event no entry claims (FPGA-gPTP #22);
+  //! one list, used by the refusal, the minimum-length table and the
+  //! event map alike.
   localparam logic [3:0] MT_SYNC_C   = 4'h0;
   localparam logic [3:0] MT_PDREQ_C  = 4'h2;
   localparam logic [3:0] MT_PDRESP_C = 4'h3;
@@ -299,6 +312,12 @@ module KL_gptp_rx_parser
               if ({acc_r[7:0], rx_data_i} != 16'h88F7) bad_r <= 1'b1;
             11'(OFF_TYPE_C): begin
               if (rx_data_i[7:4] != 4'h1) bad_r <= 1'b1;
+              // an unlisted messageType has no handler, no body layout and
+              // no minimum of its own: refuse it here, beside the
+              // transportSpecific compare and ahead of every bank write
+              if (!(rx_data_i[3:0] inside {MT_SYNC_C, MT_PDREQ_C, MT_PDRESP_C,
+                                           MT_FU_C, MT_PDRFU_C, MT_ANN_C,
+                                           MT_SIG_C})) bad_r <= 1'b1;
               mtype_r <= rx_data_i[3:0];
             end
             11'(OFF_VER_C):

@@ -12,6 +12,9 @@
 //         a domain-0 request right after it is answered (8.1, #6)
 //  3c     a header-only and a cut Pdelay_Req draw no frame and count one
 //         drop each; the complete request after them is answered (#12)
+//  3d     an unlisted messageType (0x1, 0xD, 0xF) with a valid header
+//         draws no frame at all and counts one drop each, and the flags
+//         do not move (Table 11-3's NOTE: not used in this standard, #22)
 //  5..9   grandmaster life: timeout become (asCapable-gated), Announce/
 //         Sync/Follow_Up byte-exact, BTCA both directions, adoption
 //  7b     802.1AS-2011 11.2.15.3: a Pdelay_Resp_Follow_Up pairs with one
@@ -644,6 +647,42 @@ int main(int argc, char **argv) {
     if (!u3.empty())
       expect("complete request after them: Resp_FU pairs", fld16(u3, 44),
              0x55AF);
+  }
+
+  // ---- 3d: an unlisted messageType draws nothing and is counted --------
+  // 802.1AS-2011 Tables 10-5 and 11-3 name the seven messageType values
+  // a gPTP port carries, and the NOTE under Table 11-3 says the others
+  // "are not used in this standard": IEEE 1588-2008 Table 19 assigns
+  // three of them to Delay_Req, Delay_Resp and Management and reserves
+  // the rest. None has a handler here. Until
+  // #22 the parser admitted any of them with a valid header and the
+  // engine's entry table sent the resulting code-0 event to the timer
+  // program at 512, whose slot came from the descriptor's low bits: slot
+  // 0 is the cadence leg, so a type-0x1 frame drew a Pdelay_Req off the
+  // 11.5.2.2 interval and walked the lost-response count, and as master
+  // slot 1 emitted a Sync. The three shapes the issue names, each an
+  // otherwise valid 44-octet frame: the window is proven quiet first, no
+  // frame at all leaves the lane after them, each counts one drop, and
+  // the flags do not move. Phase 4 then earns asCapable as before, so
+  // the refusals cannot pass by having deafened the plane.
+  {
+    size_t pre = txf.size();
+    run(4000);
+    expect("unlisted types: the window starts quiet", txf.size(), pre);
+    size_t mark = txf.size();
+    uint16_t drops = dut->dbg_rx_drop_o;
+    uint32_t flags0 = dut->pub_flags_o;
+    const uint8_t unlisted[] = {0x1, 0xD, 0xF};
+    for (uint8_t mt : unlisted) {
+      Frame f = ptp(mt, (uint16_t)(0x56A0 + mt), 0, 0x0000, 10);
+      f.ts(0);
+      send_frame(f.b, T2R + 450000);
+      run(4000);
+    }
+    expect("unlisted types: no frame transmitted", txf.size(), mark);
+    expect("unlisted types: dropped and counted", dut->dbg_rx_drop_o,
+           (uint16_t)(drops + 3));
+    expect("unlisted types: flags unmoved", dut->pub_flags_o, flags0);
   }
 
   // ---- 4: the live peer raises asCapable on the SECOND exchange ---------

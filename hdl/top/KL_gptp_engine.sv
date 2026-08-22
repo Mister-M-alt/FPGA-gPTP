@@ -302,7 +302,15 @@ module KL_gptp_engine
       EV_RX_PDRFU_C:    entry_w = UPC_W_C'(320);
       EV_RX_SIGNAL_C:   entry_w = UPC_W_C'(384);
       EV_TX_TS_C:       entry_w = UPC_W_C'(448);
-      default:          entry_w = UPC_W_C'(512);   // EV_TMR_C
+      //! EV_TMR_C, and structurally every code no arm above claims.
+      //! The three push sources are the parser's ev_code_o, the literal
+      //! EV_TX_TS_C and the literal EV_TMR_C, and since the parser
+      //! refuses an unlisted messageType at its type byte its ev_map's
+      //! own default can no longer be latched (FPGA-gPTP #22), so
+      //! EV_TMR_C is the only code that reaches this arm. Left as a
+      //! catch-all rather than narrowed: a no-op default would need a
+      //! ROM entry of its own, and the hazard is closed at the source
+      default:          entry_w = UPC_W_C'(512);
     endcase
   end
 
