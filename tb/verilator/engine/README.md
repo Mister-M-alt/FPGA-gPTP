@@ -53,8 +53,13 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All forty-one planted mutations (the shared TX control value, ladder
-trigger, both pdelay
+All fifty-three planted mutations (the own-source rule removed, its
+identity compare narrowed to 32 bits, the stepsRemoved bound off by one
+in either direction, its compare narrowed to a byte, a dead path-trace
+compare, the hop compare narrowed to 32 bits, the hop read from the next
+bank word, the hop-count gate removed, a walk one hop past the count, a
+one-hop walk, the state-port base left offset after the walk, the shared
+TX control value, ladder trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
 sync void, a dead step threshold, both servo sign errors, a dead

@@ -47,8 +47,13 @@ no longer reaches the servo (+34 LUT for the two compares, the
 redundant per-type minimum flag retired), and a header-only Pdelay_Req
 drawing a Pdelay_Resp (#12): the request's minimum is the 54 octets of
 Table 11-11, one line of the same per-type table, so a truncated
-request is refused ahead of the responder. Next: the parent-side
-integration.
+request is refused ahead of the responder, and then the announce
+handler admitting every well-formed Announce (#7): 802.1AS-2011
+10.3.10.2.1 qualifyAnnounce now runs ahead of BTCA and of every write
+the handler makes (our own clockIdentity as the source, stepsRemoved 255
+and above, our identity anywhere in the path trace the bank holds), its
+count-gated hop walk the first consumer of OP_DESC_ADDR (+23 ROM words,
+zero LUT). Next: the parent-side integration.
 
 ## Why a µCPU with an ALU
 
