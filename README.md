@@ -82,8 +82,8 @@ OOC at 3,115 LUT / 2,390 FF / WNS +1.898 ns
 
 **Parent status:** the splice is landed (parent #114, 2026-08-19,
 option-gated) and the pin advances by pin-bearing commits on the
-parent's `dev` (`dd0f56e3`, the #15 merge, since 2026-08-22; the parent
-tickets below move it forward). The parent's
+parent's `dev` (`5c330fc8`, the #16 merge, at the time of this commit;
+the parent tickets below move it forward). The parent's
 `tb/verilator/tsn_fuzz` field campaign (`make ptp`, `fuzz_ptp.py`) grades
 the whole slice in both directions -- every spec-constrained field of all
 six of the plane's own TX message types (Pdelay_Req, Pdelay_Resp,
@@ -92,8 +92,9 @@ Pdelay_Resp_Follow_Up, Announce, Sync and Follow_Up) against the tsn-gen
 illegal probes -- and found #6 through #10; each donor fix retires
 exactly its own tracked-gap allowance there at the repin, one parent
 ticket per donor issue: #138 (#6) done at the `dd0f56e3` pin, #139 (#9)
-in PR #208's final review, #137 (#10), #140 (#11), #142 (#12), #136 (#7)
-and #141 (#8) pending. Parent PR #135 (default on at VERSION
+done at the `5c330fc8` pin (PR #208, dev `4ec73a15`), #137 (#10), #140
+(#11), #142 (#12), #136 (#7) and #141 (#8) pending. Parent PR #135
+(default on at VERSION
 0x0002_0055) was closed unmerged: the default flip, the CSR compatibility
 transition and the rootfs service retirement stay with parent issue #116,
 reference-plane latency characterization and the two-board wire campaign
