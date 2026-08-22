@@ -68,17 +68,20 @@ handlers now pair per 802.1AS-2011 11.2.15.3, a Pdelay_Resp taken only
 for the outstanding request's sequenceId and never again once its
 exchange has completed, a Follow_Up only behind that Pdelay_Resp and
 from its sender (+32 ROM words, zero LUT). Nothing of #6 through #12
-remains open. The donor issues open at this commit are all review
-findings on pre-existing behaviour: #23 (a Pdelay_Resp sourced from our
-own clockIdentity climbs the asCapable ladder, the Figure 11-8
-thisClock condition; in review as PR #25), #26 (a Pdelay_Req sourced
-from our own clockIdentity is answered, the same rule on the responder
-side) and #27 (a zero-gap 1-byte runt landing the cycle after a dropped
-frame is not counted); the issue tracker is the authority, not this
-paragraph. Measured at this commit (`main` 9d5fb025 plus the unlisted
-messageType arm): ucpu 768 / parser 167 / engine 323 checks, sixty-four
-planted mutations red, lint clean; the ROM is 927 of 1,024 words; the
-engine synthesizes OOC at 3,116 LUT / 2,390 FF / WNS +1.898 ns
+remains open, and #23 closes here. The donor issues open at this commit
+are all review findings on pre-existing behaviour: #26 (a Pdelay_Req
+sourced from our own clockIdentity is answered, the same 1588-2008
+9.5.2.2 rule on the responder side), #28 (a Pdelay_Req arriving while
+our own request waits for its egress timestamp steals it through the
+shared pending cell, so the delay reads 500,600 ns), #27 (a zero-gap
+1-byte runt landing the cycle after a dropped frame is not counted) and
+#30 (the requestingPortIdentity gate is unpinned and omits Figure
+11-8's portNumber term); the issue tracker is the authority, not this
+paragraph. Measured at this commit (`main` c33fb1af plus the
+self-sourced response arm): ucpu 768 / parser 167 / engine 328 checks,
+sixty-seven planted mutations red, lint clean; the ROM is 929 of 1,024
+words, 95 free; the engine synthesizes OOC at 3,116 LUT / 2,390 FF /
+WNS +1.898 ns
 (`docs/RESOURCE_VALIDATION.md`).
 
 **Parent status:** the splice is landed (parent #114, 2026-08-19,

@@ -585,12 +585,19 @@ int main(int argc, char **argv) {
   {
     uint32_t fl0 = dut->pub_flags_o, d0 = dut->pub_pdelay_ns_o;
     int c0 = pdm.count;
+    uint16_t dr0 = dut->dbg_rx_drop_o;
     pd_seen = txf.size();
     pd_mode = PD_SELF;
     pd_self_sent = 0;
     auto_txts = true;                  // the cadence request needs its t1
     run_svc(2600000);
     expect("self-sourced pair: one was answered", pd_self_sent >= 1, 1);
+    // sent is not the same as admitted: without this the three checks
+    // below would pass vacuously if the frame were ever refused at the
+    // parser instead, which is where it must NOT be refused, the parser
+    // holding no identity of its own. The refusal is in the ucode, so
+    // the parser's counter must not move
+    expect("self-sourced pair: not a parser drop", dut->dbg_rx_drop_o, dr0);
     expect("self-sourced pair: asCapable unmoved",
            dut->pub_flags_o & FL_ASCAP, fl0 & FL_ASCAP);
     expect("self-sourced pair: pdelay unmoved", dut->pub_pdelay_ns_o, d0);

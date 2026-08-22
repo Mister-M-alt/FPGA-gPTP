@@ -408,26 +408,27 @@ generated ourselves. The fix is IEEE 1588-2008 9.5.2.2 in ucode, one
 already writes from the ROM's identity constant, placed ahead of the
 pairing and of the Milan 4.2.6.2.5 bookkeeping alike, because a frame
 of our own is not a responder at all. No RTL changed. The ROM grew from
-927 to 929 real words of 1,024 (+2: the compare and its branch, with
-the handler's existing read of their source hoisted above the sequence
-gate to carry it), every leg base unchanged and 38 word positions
-differing, all of them inside the Pdelay_Resp handler's own slot. Same
+927 to 929 real words of 1,024, 95 free (+2: the compare and its
+branch, with the handler's existing read of their source hoisted above
+the sequence gate to carry it), every leg base unchanged and 38 word
+positions differing, all of them inside the Pdelay_Resp handler's own
+slot. Same
 instrument, Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100 MHz,
-2026-08-22, against main at 9d5fb025 re-measured the same day in its
+2026-08-22, against main at c33fb1af re-measured the same day in its
 own worktree:
 
-| | 9d5fb025 (PR #14) | the self-sourced arm | delta |
+| | c33fb1af (PR #24) | the self-sourced arm | delta |
 |---|---|---|---|
-| Slice LUTs | 3,115 (2,789 logic + 326 LUTRAM) | **3,115** (2,789 + 326) | **0** |
+| Slice LUTs | 3,116 (2,790 logic + 326 LUTRAM) | **3,116** (2,790 + 326) | **0** |
 | `u_ucpu` LUTs | 1,997 | 1,997 | 0 |
-| `u_parser` LUTs | 542 | 542 | 0 |
+| `u_parser` LUTs | 543 | 543 | 0 |
 | Registers | 2,390 | 2,390 | 0 |
 | BRAM tiles | 1.5 | 1.5 | 0 |
 | DSP48E1 | 4 | 4 | 0 |
 | WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
 
 Byte-identical, as a ROM-only change must be. Verification at this
-measurement: ucpu 768 / parser 167 / engine 327 checks, sixty-seven
+measurement: ucpu 768 / parser 167 / engine 328 checks, sixty-seven
 planted mutations red (this round's three, engine checks failed: the
 compare removed 4, the same compare applied to requestingPortIdentity
 instead of sourcePortIdentity 129 of the 285 the run reaches, because
