@@ -392,3 +392,48 @@ reaches, because the cadence leg the injected frame re-arms
 desynchronises every exchange after it), lint clean. The parser suite
 carries one more that the engine suite cannot see, one type dropped
 from the list: Signaling refused, 5 checks.
+
+## The self-sourced round re-measured: ROM words only
+
+FPGA-gPTP #23, found by the cleared-context review of PR #21: the
+Pdelay_Resp handler qualified the response's requestingPortIdentity
+against thisClock, which asks "is this answering OUR request", but never
+qualified its sourcePortIdentity, which asks "is this someone else". A
+Pdelay_Resp and Follow_Up pair carrying our own clockIdentity as their
+source, our requestingPortIdentity, and the outstanding sequenceId, the
+shape a loop or a misconfigured bridge reflects back at us, therefore
+computed a delay and climbed the asCapable ladder on evidence we
+generated ourselves. The fix is IEEE 1588-2008 9.5.2.2 in ucode, one
+64-bit compare of bank word 2 against the S_CID cell the boot leg
+already writes from the ROM's identity constant, placed ahead of the
+pairing and of the Milan 4.2.6.2.5 bookkeeping alike, because a frame
+of our own is not a responder at all. No RTL changed. The ROM grew from
+927 to 929 real words of 1,024 (+2: the compare and its branch, with
+the handler's existing read of their source hoisted above the sequence
+gate to carry it), every leg base unchanged and 38 word positions
+differing, all of them inside the Pdelay_Resp handler's own slot. Same
+instrument, Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100 MHz,
+2026-08-22, against main at 9d5fb025 re-measured the same day in its
+own worktree:
+
+| | 9d5fb025 (PR #14) | the self-sourced arm | delta |
+|---|---|---|---|
+| Slice LUTs | 3,115 (2,789 logic + 326 LUTRAM) | **3,115** (2,789 + 326) | **0** |
+| `u_ucpu` LUTs | 1,997 | 1,997 | 0 |
+| `u_parser` LUTs | 542 | 542 | 0 |
+| Registers | 2,390 | 2,390 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+Byte-identical, as a ROM-only change must be. Verification at this
+measurement: ucpu 768 / parser 167 / engine 327 checks, sixty-seven
+planted mutations red (this round's three, engine checks failed: the
+compare removed 4, the same compare applied to requestingPortIdentity
+instead of sourcePortIdentity 129 of the 285 the run reaches, because
+every genuine response carries our requesting identity by definition,
+and the compare narrowed to 32 bits 6, caught by the second responder
+identity of the Milan 4.2.6.2.5 probes, which now shares our low 32
+bits and differs above them), lint clean. The parser suite is untouched
+at 167: the parser holds no identity of its own, so the rule cannot be
+qualified there.
