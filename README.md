@@ -69,24 +69,27 @@ type (#9: Sync 0x0, Follow_Up 0x2, Announce and the three Pdelay messages
 0x5) and the two-step Sync body carries the ten reserved zero bytes of
 Table 11-8 (#10: the live egress time rides only in the Follow_Up's
 preciseOriginTimestamp), both ROM-only. Still open: #7 (Announce
-qualification, 10.3.10.2.1; draft #20), #8 (an unsolicited
-Pdelay_Resp_Follow_Up poisons neighborPropDelay), #11 (a Follow_Up without
-its information TLV steers the servo; in review as #18) and #12 (a
-header-only Pdelay_Req draws a response; in review as #19). At `main`
+qualification, 10.3.10.2.1; in review as #20), #8 (an unsolicited
+Pdelay_Resp_Follow_Up poisons neighborPropDelay; in review as #21), #11 (a
+Follow_Up without its information TLV steers the servo; in review as #18)
+and #12 (a header-only Pdelay_Req draws a response; in review as #19). At
+`main`
 9e69681f: ucpu 768 / parser 51 / engine 190 checks, thirty-seven planted
 mutations red, lint clean; the ROM is 872 of 1,024 words; the engine
 synthesizes OOC at 3,081 LUT / 2,392 FF / WNS +1.898 ns
 (`docs/RESOURCE_VALIDATION.md`).
 
 **Parent status:** the splice is landed (parent #114, 2026-08-19,
-option-gated) and the pin advances by dedicated commits on the parent's
-`dev` (`dd0f56e3`, the #15 merge, today; the #139 and #137 lanes carry it
-to the #16 and #17 merges). The parent's `tb/verilator/tsn_fuzz` field
-campaign (`make ptp`, `fuzz_ptp.py`) grades the whole slice in both
-directions -- every spec-constrained field of the plane's own Pdelay_Req,
-Announce, Sync and Follow_Up against the tsn-gen 8021as models, and the
-parser's drop and ignore arms under per-field illegal probes -- and found
-#6, #9 and #10; each donor fix retires exactly its own tracked-gap
+option-gated) and the pin advances by pin-bearing commits on the
+parent's `dev` (`dd0f56e3`, the #15 merge, since 2026-08-22; the #139 and
+#137 lanes carry it to the #16 and #17 merges). The parent's
+`tb/verilator/tsn_fuzz` field campaign (`make ptp`, `fuzz_ptp.py`) grades
+the whole slice in both directions -- every spec-constrained field of all
+six of the plane's own TX message types (Pdelay_Req, Pdelay_Resp,
+Pdelay_Resp_Follow_Up, Announce, Sync and Follow_Up) against the tsn-gen
+8021as models, and the parser's drop and ignore arms under per-field
+illegal probes -- and found #6 through #10 (the #7 and #8 allowances
+still stand); each donor fix retires exactly its own tracked-gap
 allowance there at the repin. Parent PR #135 (default on at VERSION
 0x0002_0055) was closed unmerged: the default flip, the CSR compatibility
 transition and the rootfs service retirement stay with parent issue #116,
