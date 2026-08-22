@@ -16,6 +16,10 @@
 // 11b     a Sync/Follow_Up pair in a foreign domain never steers: the
 //         offset, the PHC writes and the flags hold, and the foreign
 //         Sync leaves no pending slot for a domain-0 Follow_Up (#6)
+// 11c     a Follow_Up without its information TLV never steers and does
+//         not consume the pending Sync; the complete one pairs (#11)
+// 11d     a Sync padded to the 60-byte Ethernet minimum, and one padded
+//         to 74, still pair
 // 13..15  the servo: step-vs-slew at 20 us, the PI addend against an
 //         exact-integer mirror, closed-loop lock on a +140 ppm master
 //         (one re-base carrying the surviving integrator)
@@ -821,6 +825,50 @@ int main(int argc, char **argv) {
     expect("complete Follow_Up re-bases the phc",
            !steps_seen.empty() && svm.stepped &&
                steps_seen.back() == svm.step_val, 1);
+  }
+
+  // ---- 11d: a Sync padded to the Ethernet minimum still pairs ----------
+  // a 44-octet Sync is a 58-byte frame, so every Sync a real link
+  // delivers arrives padded to 60 bytes (IEEE 1588-2008 13.3.2.4 NOTE:
+  // messageLength excludes the padding); an arm keyed on a byte past 57
+  // that is not gated on the message type would refuse every one of
+  // them while passing a suite that never pads (the #18 review's MR7).
+  // Two shapes: the 60-byte minimum, and a Sync padded to 74 bytes, the
+  // span of the whole Follow_Up TLV header arm (octets past messageLength
+  // are padding to a receiver whatever their count). Each is accepted
+  // with no drop, its Follow_Up pairs with it, and the pair re-bases the
+  // PHC by the negation of its own offset. The 74-byte shape is the one
+  // an arm at byte 59 cannot hide from: a poison raised on a frame's eof
+  // byte is not seen by the end-of-frame gate, which samples bad_r as
+  // registered, so the 60-byte shape alone would pass MR7
+  {
+    struct Pad { const char *tag; uint16_t seq; size_t pad; uint64_t skew; };
+    const Pad pads[] = { {"padded Sync (60)", 0x0112, 2, 555ull},
+                         {"padded Sync (74)", 0x0113, 16, 999ull} };
+    for (const Pad &p : pads) {
+      char n[64];
+      uint16_t drops = dut->dbg_rx_drop_o;
+      const uint64_t TRXP = TRX2 + 1200000000ull + (uint64_t)p.seq * 1000ull;
+      const uint64_t ORGP = ORIGIN2 + 1200000000ull + (uint64_t)p.seq * 1000ull
+                            - p.skew;
+      Frame f = ptp(0x0, p.seq, 0, 0x0208, 10);
+      f.ts(0);
+      for (size_t i = 0; i < p.pad; i++) f.u8(0);   // the padding
+      send_frame(f.b, TRXP);
+      run(2000);
+      snprintf(n, sizeof n, "%s: accepted, no drop", p.tag);
+      expect(n, dut->dbg_rx_drop_o, drops);
+      Frame g = follow_up(p.seq, CORR_NS << 16, ORGP);
+      send_frame(g.b, TRXP + 500);
+      run(6000);
+      const uint64_t OFFP = TRXP - (ORGP + CORR_NS + (uint64_t)pdm.d);
+      snprintf(n, sizeof n, "%s pairs: offset", p.tag);
+      expect(n, (uint32_t)dut->pub_offset_o, (uint32_t)OFFP);
+      servo_mirror((int64_t)OFFP);
+      snprintf(n, sizeof n, "%s pairs: re-bases the phc", p.tag);
+      expect(n, !steps_seen.empty() && svm.stepped &&
+                    steps_seen.back() == svm.step_val, 1);
+    }
   }
 
   // ---- 12: syncReceiptTimeout (375 ms) -> sync-ok falls -----------------

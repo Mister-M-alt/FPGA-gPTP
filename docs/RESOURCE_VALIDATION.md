@@ -203,10 +203,10 @@ cost; the per-type minimum flag that mirrored the end-of-frame gate
 and the TLV-type flag that only withheld bank word 11 are retired,
 which is the two flops back. Same instrument, Vivado 2026.1 OOC on
 `xc7a100tfgg484-2` at 100 MHz, 2026-08-22. The baseline is the tree
-at 5c330fc8 (PR #16, a ROM-only change that re-measures
-byte-identical to the domain-arm row above):
+at 9e69681f (PR #17; #16 and #17 are ROM-only changes, and both
+re-measure byte-identical to the domain-arm row above):
 
-| | 5c330fc8 (PR #16) | the Follow_Up arms | delta |
+| | 9e69681f (PR #17) | the Follow_Up arms | delta |
 |---|---|---|---|
 | Slice LUTs | 3,081 (2,755 logic + 326 LUTRAM) | **3,115** (2,789 + 326) | **+34** |
 | `u_parser` LUTs | 508 | 542 | +34 |
@@ -216,10 +216,10 @@ byte-identical to the domain-arm row above):
 | DSP48E1 | 4 | 4 | 0 |
 | WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
 
-Verification at this measurement: ucpu 768 / parser 78 / engine 203
-checks, thirty-nine planted mutations red (the two new ones: the
-Follow_Up minimum reverted to the 44-octet shape fails 9 parser and
-12 engine checks, the TLV header arms removed 13 and 6; two more are
-visible to the parser suite alone: the messageLength arm removed
-fails its two `no bank write` checks, the tlvType compared alone
-fails 10), lint clean.
+Verification at this measurement: ucpu 768 / parser 119 / engine 210
+checks, forty planted mutations red (the three new ones: the Follow_Up
+minimum reverted to the 44-octet shape fails 9 parser and 12 engine
+checks, the TLV header arms removed 13 and 6, the Follow_Up TLV block
+applied to Sync as well 3 and 3; three more are visible to the parser
+suite alone: the messageLength arm removed fails 18, the arm narrowed
+to Follow_Up 16, the tlvType compared alone 10), lint clean.

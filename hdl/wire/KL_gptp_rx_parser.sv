@@ -414,6 +414,10 @@ module KL_gptp_rx_parser
           end
 
           // ---------------- end of frame -------------------------------
+          //! bad_r is sampled as registered: a poison raised by an arm on
+          //! the eof byte itself is not seen here, so every drop arm must
+          //! sit below its type's minimum index (all of them do: 13..18
+          //! for the header arms, 59 and 67 against a Follow_Up's 89)
           if (rx_eof_i) begin
             run_r    <= 1'b0;
             fin_r    <= 1'b1;
