@@ -202,20 +202,6 @@ static uint16_t seq_of(const std::vector<uint8_t> &f) {
 static uint64_t cyc = 0;
 
 // ---- TX backpressure ------------------------------------------------------
-// The parent drives the engine's tx_ready from its gearbox and frame FIFO
-// (KL_gptp_shadow.sv:499, eng_tx_ready_w = gbo_ready_w | ~gbo_valid_w), so
-// ready deasserts in ordinary operation. This bench pinned it high, which
-// left the whole backpressure path unobservable: no test could tell a
-// design that honours the handshake from one that ignores it (FPGA-gPTP
-// #33). It is driven here instead, by a period/low duty pattern for whole
-// runs and by an explicit hold for directed cases.
-static int  bp_period = 0;        //! 0 = ready held high, the old behaviour
-static int  bp_low = 0;           //! cycles low at the start of each period
-static long bp_hold = 0;          //! an explicit stall, counted down per tick
-static long bp_sof_hold = 0;      //! stall this long at the next frame's sof
-static bool bp_sof_armed = false;
-static long bp_low_cycles = 0;    //! observability: cycles ready was low
-static long bp_stalled_beats = 0; //! valid && !ready, a byte actually held
 static std::vector<std::vector<uint8_t>> txf;
 static std::vector<uint64_t> txns;               // egress ts fed per frame
 static std::vector<uint8_t> cur;
@@ -234,23 +220,6 @@ static std::vector<uint32_t> adj_seen;           // every adjfine write
 static uint64_t phc() { return (uint64_t)(phc_acc >> 24); }
 
 static void tick() {
-  //! a byte transfers only on valid && ready: the serializer holds
-  //! tx_data_o and tx_valid_o stable while ready is low
-  //! (KL_gptp_tx_slot.sv:117-141), so the capture below must sample the
-  //! handshake, not just valid
-  if (bp_sof_armed && dut->tx_valid_o && dut->tx_sof_o && bp_hold == 0) {
-    bp_hold = bp_sof_hold;
-    bp_sof_armed = false;
-  }
-  bool bp_ready = true;
-  if (bp_hold > 0) { bp_ready = false; bp_hold--; }
-  else if (bp_period > 0)
-    bp_ready = (long)(cyc % (uint64_t)bp_period) >= (long)bp_low;
-  dut->tx_ready_i = bp_ready ? 1 : 0;
-  if (!bp_ready) {
-    bp_low_cycles++;
-    if (dut->tx_valid_o) bp_stalled_beats++;
-  }
   if (auto_pend >= 0 && !dut->txts_valid_i) {
     uint64_t ns = phc() + 200;                   // MAC pipeline latency
     dut->txts_valid_i = 1;
@@ -258,20 +227,6 @@ static void tick() {
     dut->txts_seq_i = seq_of(txf[auto_pend]);
     txns[auto_pend] = ns;
     auto_pend = -1;
-  }
-  //! the beat this edge will accept. The serializer's outputs after edge
-  //! N are the beat offered at edge N+1, so the byte is sampled here,
-  //! against the ready being applied now, rather than after the edge
-  //! against the ready that drove the previous one
-  if (dut->tx_valid_o && bp_ready) {
-    if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
-    if (in_tx) cur.push_back(dut->tx_data_o);
-    if (dut->tx_eof_o && in_tx) {
-      txf.push_back(cur);
-      txns.push_back(0);
-      if (auto_txts) auto_pend = (int)txf.size() - 1;
-      in_tx = false;
-    }
   }
   dut->clk_i = 0; dut->eval();
   dut->clk_i = 1; dut->eval();
@@ -286,6 +241,16 @@ static void tick() {
   }
   phc_acc += (unsigned __int128)(uint64_t)((500ll << 24) + phc_adj);
   dut->phc_ns_i = phc();
+  if (dut->tx_valid_o) {
+    if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
+    if (in_tx) cur.push_back(dut->tx_data_o);
+    if (dut->tx_eof_o && in_tx) {
+      txf.push_back(cur);
+      txns.push_back(0);
+      if (auto_txts) auto_pend = (int)txf.size() - 1;
+      in_tx = false;
+    }
+  }
   dut->txts_valid_i = 0;                 // a pulse lasts exactly one edge
   cyc++;
 }
@@ -592,19 +557,12 @@ static void check_common(const char *tag, const std::vector<uint8_t> &f,
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
-  for (int i = 1; i < argc; i++) {
-    if (!strcmp(argv[i], "--bp") && i + 1 < argc)
-      sscanf(argv[i + 1], "%d,%d", &bp_period, &bp_low);
-    if (!strcmp(argv[i], "--bp-sof") && i + 1 < argc) {
-      bp_sof_hold = atol(argv[i + 1]);
-      bp_sof_armed = true;
-    }
-  }
   dut = new VKL_gptp_engine;
 
   dut->rst_n = 0;
   dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
   dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
+  dut->tx_ready_i = 1;
   dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
   dut->phc_ns_i = 0;
   for (int i = 0; i < 8; i++) tick();

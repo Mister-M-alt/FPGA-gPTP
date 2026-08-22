@@ -254,6 +254,20 @@ S_SSEQ, S_ASEQ, S_ANNBODY = 29, 30, 31
 # the widened half (the engine's 64-word scratch, v7)
 S_RSP1, S_IVMULTI, S_MULTI, S_CEASE = 32, 33, 34, 35
 S_CEASECNT = 36                          # cadence beats to resume
+# INVARIANT for S_CEASECNT and S_MULTI, which the init leg deliberately
+# does NOT zero. Each is read only behind a gate, S_CEASE and S_IVMULTI
+# respectively, and each gate has exactly ONE writer that can set it
+# nonzero, which writes the guarded cell in the same straight-line block:
+# the cease arm sets S_CEASE then S_CEASECNT two instructions later, and
+# the storm arm sets S_IVMULTI in prog_rx_pdresp while the cadence beat's
+# other branch writes S_MULTI before S_IVMULTI can ever be 1. That is
+# what the safety rests on, NOT on the init list: scratch is LUTRAM with
+# no reset (KL_gptp_engine.sv:143-149), so a warm reset does not run the
+# init leg at all, and gate and guarded cell simply carry over TOGETHER
+# and stay mutually consistent. There is no partial-reset path that could
+# clear one and not the other. ADDING A SECOND WRITER to either gate
+# breaks this: give the guarded cell an init write again, or write it in
+# the new writer's own block.
 S_PTIDX, S_ZERO = 37, 38                 # path-trace walk: the DESC_ADDR
                                          # pointer cell (written before
                                          # each read) and the base-restore
@@ -273,8 +287,8 @@ S_TXQ_RESP = 41                          # the second egress-timestamp
                                          # transmitters already exclude
                                          # each other (each skips its beat
                                          # while a timer-driven stamp is
-                                         # owed), so only a response can be
-                                         # in flight beside them, and each
+                                         # owed), so no second timer-driven
+                                         # frame joins them, and each
                                          # stamp goes to the frame whose
                                          # sequenceId it names (FPGA-gPTP
                                          # #28)
@@ -1006,14 +1020,11 @@ def prog_tmr(base, mac, seq_seed=0):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
     # S_CEASECNT and S_MULTI are deliberately NOT in that list, which is
     # where the words for the mask below and for the seeded regression
-    # image came from. Each is read only behind a cell that IS zeroed
-    # here, and each is written before that gate can open. S_CEASECNT is
-    # read only at the "quiet" label, reached only when S_CEASE is 1, and
-    # the one path that sets S_CEASE to 1 writes S_CEASECNT two
-    # instructions later. S_MULTI is read only at "was_multi", reached
-    # only when S_IVMULTI is 1, and the other arm of that branch writes
-    # S_MULTI on every beat where it is 0; S_IVMULTI can only become 1
-    # after a request has gone out, which passes through that arm first
+    # image came from. Each is read only behind a gate cell, and the one
+    # writer that can open that gate writes the guarded cell in the same
+    # straight-line block. See the invariant beside their definitions:
+    # note that this list is NOT what makes it safe, since after a warm
+    # reset this leg does not run at all
     if seq_seed:
         # REGRESSION IMAGE ONLY: start the request counter above 16 bits so
         # the claim tag carries bits the flags live in. The shipping image

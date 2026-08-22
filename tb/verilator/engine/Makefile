@@ -21,20 +21,20 @@ GENARGS = --clk-hz 2000000 --cease-ms 3000
 # regression image whose request counter starts above 16 bits, which is
 # the one condition that makes an unbounded claim tag observable: the
 # counter reaches it after 2,097,152 requests, 24.3 days at this cadence,
-# and no ordinary run can get there. $$readmemh reads the image at
-# simulation start, so the swap needs no rebuild. Under backpressure the
-# same trick would serve; see the input table in README.md
+# and no ordinary run can get there. $$readmemh resolves its image by
+# RELATIVE name at simulation start, so the seeded pass runs with its cwd
+# in seedrun/ and never touches the tracked image; an interrupt there can
+# leave nothing but an ignored directory behind
 run: gptp_ucode.hex
 	$(VERILATOR) $(VFLAGS) $(SRCS) $(CPP) -o Vengine_sim
 	./obj_dir/Vengine_sim
-	@cp gptp_ucode.hex gptp_ucode_shipping.hex
-	@python3 $(GEN) $(GENARGS) --seq-seed 0x200000 -o gptp_ucode.hex >/dev/null
+	@mkdir -p seedrun
+	@python3 $(GEN) $(GENARGS) --seq-seed 0x200000 -o seedrun/gptp_ucode.hex >/dev/null
 	@echo "-- again, with the request counter seeded above 16 bits --"
-	@./obj_dir/Vengine_sim; rc=$$?; \
-	 mv gptp_ucode_shipping.hex gptp_ucode.hex; exit $$rc
+	@cd seedrun && ../obj_dir/Vengine_sim
 
 gptp_ucode.hex: $(GEN)
 	python3 $< $(GENARGS) -o $@
 
 clean:
-	rm -rf obj_dir gptp_ucode.hex gptp_ucode_shipping.hex
+	rm -rf obj_dir gptp_ucode.hex seedrun

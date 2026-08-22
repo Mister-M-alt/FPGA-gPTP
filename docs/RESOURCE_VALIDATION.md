@@ -528,7 +528,7 @@ order-independent, so it rests on no assumption about the order stamps
 come back in, which is a parent property this repository cannot
 establish. Two claim cells are enough rather than three: the two
 timer-driven transmitters already skip their beat while a timer-driven
-stamp is owed, so only a response can be in flight beside them, and a
+stamp is owed, so no second timer-driven frame joins them, and a
 flag bit above the sequenceId says which of the two a timer claim is.
 That shape was forced by measurement, not chosen: the three-cell form
 put the timer program at 197 words against its hard 192-word slot. The
@@ -547,14 +547,16 @@ which is the fourth fact: a fourth transmitter needs all of them.
 
 No RTL changed. The ROM grew from 932 to 941 real words of 1,024 (+9).
 The headline free figure, 83, is misleading on its own: the free words
-are in other gaps, and entry 512, the timer program, is at 192 of 192
-with ZERO headroom. The mask above was paid for by removing two init
-zero writes that are provably redundant, S_CEASECNT and S_MULTI, each
-read only behind a cell that is itself zeroed and each written before
-that gate can open. Anything added to the timer program must free a word
-first. and this round moves legs: RFU 964 to 470, SYNCFU 914 to
-967 and SYNCTX 459 to 914, with the other nine bases unchanged, so 288
-word positions differ. Same instrument, Vivado 2026.1 OOC on
+are in other gaps, and the timer program at entry 512 has almost none.
+It is 191 of its 192 words in the shipping image and 192 of 192 in the
+seeded regression image, whose two extra init instructions replace one,
+so the seeded build is the binding constraint and anything added to the
+timer program must free a word first. The mask above was paid for that
+way, by removing two init zero writes that are redundant under the
+invariant recorded beside their definitions, S_CEASECNT and S_MULTI.
+This round also moves legs: RFU 964 to 470, SYNCFU 914 to 967 and
+SYNCTX 459 to 914, with the other nine bases unchanged, so 288 word
+positions differ. Same instrument, Vivado 2026.1 OOC on
 `xc7a100tfgg484-2` at 100 MHz, 2026-08-22, against main at 5d4fcc67
 re-measured the same day in its own worktree:
 
