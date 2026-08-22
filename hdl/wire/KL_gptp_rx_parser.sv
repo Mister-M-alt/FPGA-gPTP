@@ -193,6 +193,13 @@ module KL_gptp_rx_parser
   logic [2:0]  pt_byte_r;      //! byte inside the current identity
   logic        pt_run_r;
   logic [15:0] drop_cnt_r;
+  //! the two refusals that can resolve on ONE edge: a deferred
+  //! end-of-frame whose frame was refused, and a one-byte frame arriving
+  //! in that same cycle. They belong to DIFFERENT frames, so both must
+  //! count; as two increments of one register only one survived, because
+  //! non-blocking assignments to the same register on one edge keep the
+  //! last. One write site, fed by both (FPGA-gPTP #27)
+  logic fin_drop_w, runt_drop_w;
   //! end-of-frame settles one cycle late: last-byte field writes are
   //! non-blocking, and the announce hop-count word must not fight the
   //! final identity write for the one bank lane
@@ -277,6 +284,10 @@ module KL_gptp_rx_parser
       ev_valid_o <= 1'b0;
 
       // deferred end-of-frame: every last-byte write has settled
+      if (fin_drop_w || runt_drop_w)
+        drop_cnt_r <= drop_cnt_r +
+                      ((fin_drop_w && runt_drop_w) ? 16'd2 : 16'd1);
+
       if (fin_r) begin
         fin_r <= 1'b0;
         if (fin_ok_r) begin
@@ -288,8 +299,6 @@ module KL_gptp_rx_parser
           ev_valid_o <= 1'b1;
           ev_code_o  <= ev_map_w;
           ev_seq_o   <= seq_r;
-        end else begin
-          drop_cnt_r <= drop_cnt_r + 16'd1;
         end
       end
 
@@ -451,13 +460,15 @@ module KL_gptp_rx_parser
         end
 
         if (rx_sof_i && rx_eof_i) begin
-          // one-byte frame: malformed by construction
-          run_r      <= 1'b0;
-          drop_cnt_r <= drop_cnt_r + 16'd1;
+          // one-byte frame: malformed by construction, counted above
+          run_r <= 1'b0;
         end
       end
     end
   end
+
+  assign fin_drop_w  = fin_r && !fin_ok_r;
+  assign runt_drop_w = rx_valid_i && rx_sof_i && rx_eof_i;
 
   assign drop_cnt_o = drop_cnt_r;
 

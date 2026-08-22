@@ -102,6 +102,25 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 3; i++) tick();
   };
 
+  //! stream two frames with an exact inter-frame gap, so a frame can start
+  //! in the cycle a predecessor's deferred end-of-frame is still settling
+  auto feed_gap = [&](const std::vector<uint8_t> &a,
+                      const std::vector<uint8_t> &b, int gap) {
+    bank.clear(); ev_seen = false;
+    for (const std::vector<uint8_t> *f : {&a, &b}) {
+      for (size_t i = 0; i < f->size(); i++) {
+        dut->rx_valid_i = 1;
+        dut->rx_data_i  = (*f)[i];
+        dut->rx_sof_i   = (i == 0);
+        dut->rx_eof_i   = (i + 1 == f->size());
+        tick();
+      }
+      dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+      if (f == &a) for (int i = 0; i < gap; i++) tick();
+    }
+    for (int i = 0; i < 3; i++) tick();
+  };
+
   // reset
   dut->rst_n = 0; dut->rx_valid_i = 0; dut->rx_sof_i = 0;
   dut->rx_eof_i = 0; dut->rx_err_i = 0; dut->rx_data_i = 0;
@@ -623,7 +642,47 @@ int main(int argc, char **argv) {
     expect_eq("complete pdreq after the arms: w2 srcid", bank[2], h.srcid);
     expect_eq("complete pdreq after the arms: no drop", dut->drop_cnt_o, d0);
   }
-  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 36));
+  // Two refusals can resolve on one clock edge: the deferred
+  // end-of-frame of a dropped frame, and a one-byte frame arriving in
+  // that same cycle. They are different frames and both must be counted,
+  // and as two increments of one register only one survived
+  // (FPGA-gPTP #27). `dbg_rx_drop_o` is the oracle the parent's
+  // conformance probes read, so a lost increment weakens every probe
+  // that asserts a counted refusal. Both orderings and both gaps: only
+  // drop-then-runt at zero gap ever collided, and the reverse never did,
+  // because a runt resolves on its own edge while the frame behind it
+  // finalizes two cycles later
+  {
+    Hdr h; h.mtype = 0x0; h.dom = 5;                 // a foreign-domain Sync
+    Frame f = common(h, 10);
+    f.u48(1); f.u32(2);
+    const std::vector<uint8_t> runt = {0x01};
+    for (int gap : {0, 1}) {
+      char n[64];
+      uint16_t d0 = dut->drop_cnt_o;
+      feed_gap(f.b, runt, gap);
+      snprintf(n, sizeof n, "drop then %d-gap runt: two drops", gap);
+      expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 2));
+      d0 = dut->drop_cnt_o;
+      feed_gap(runt, f.b, gap);
+      snprintf(n, sizeof n, "runt then %d-gap drop: two drops", gap);
+      expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 2));
+    }
+    // and the accepted path is untouched: a good frame arriving in the
+    // cycle a dropped frame finalizes still dispatches with a clean bank
+    // word, which is one drop and one event, never both for one frame
+    Hdr g; g.mtype = 0x0; g.seq = 0x0777; g.flags = 0x0208;
+    g.srcid = 0xAABBCCFFFE001122ull; g.srcpn = 1; g.logint = 0xFD;
+    Frame good = common(g, 10);
+    good.u48(0x000012345678ull); good.u32(0x1DCD6500);
+    uint16_t d1 = dut->drop_cnt_o;
+    feed_gap(f.b, good.b, 0);
+    expect_eq("drop then zero-gap sync: one drop", dut->drop_cnt_o,
+              (uint16_t)(d1 + 1));
+    expect_eq("drop then zero-gap sync: event", ev_seen ? ev_code : 0, 1);
+    expect_eq("drop then zero-gap sync: w0", bank[0], w0_of(g));
+  }
+  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 45));
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;
