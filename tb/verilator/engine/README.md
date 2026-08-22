@@ -20,8 +20,10 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 1, 2 | asCapable is NOT set after one good exchange (4.2.6.2.4) |
 | 4 | it IS set at the second; pdelay matches the nrr-corrected model |
 | 5 | become-master waits for asCapable |
+| 8b | a BETTER Announce in a foreign domain never reaches BTCA: GM, parent, flags and the raw published vector hold and the drop is counted (802.1AS-2011 8.1, IEEE 1588-2008 9.5.1) |
 | 10, 12 | sync-ok rises on a completed pair, falls at 375 ms (Table 4.2) |
 | 11 | a Follow_Up later than 125 ms pairs with nothing (Table 4.2) |
+| 11b | a Sync/Follow_Up pair in a foreign domain never steers: offset, PHC writes and flags hold, both drops are counted, and the foreign Sync leaves no pending slot for a domain-0 Follow_Up |
 | 10, 13 | offsets beyond 20 us re-base the modeled PHC by their exact negation, and the step's addend write is the bare surviving integrator |
 | 14 | a +5 us offset SLEWS: the PI addend equals the integer mirror |
 | 15 | closed loop: a +140 ppm master (above half the clamp on purpose) locks under 200 ns after one re-base, the addend carrying its rate |
@@ -44,7 +46,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All thirty-three planted mutations (ladder trigger, both pdelay
+All thirty-four planted mutations (ladder trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
 sync void, a dead step threshold, both servo sign errors, a dead
@@ -54,10 +56,10 @@ parent update, a zeroed origin gather, a reverted consumption gate, a
 removed dispatch seq guard, a dropped become-side best reset, a
 swapped vector/identity compare order, a 30-interval cease threshold,
 duplicates counted as a storm, a dead resume countdown, a removed
-mid-cease completion gate, and three RTL mutations: the read bank
+mid-cease completion gate, and four RTL mutations: the read bank
 tied to the write bank, the ingress stamp reverted to a single
-register, and the runt length qualification removed) turn the run
-red.
+register, the runt length qualification removed, and the parser's
+domainNumber drop arm removed) turn the run red.
 
 ```sh
 make        # regenerates gptp_ucode.hex from hdl/ucode/, builds, runs

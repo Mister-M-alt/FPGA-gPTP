@@ -6,9 +6,14 @@ information TLV) and Pdelay_Resp frames byte-by-byte in C++ — an
 independent re-implementation of the 802.1AS-2011 wire layout — and
 checks every message-bank word the parser writes, plus the end-of-frame
 event and its sequenceId. Also proves the drop arms: wrong EtherType,
-transportSpecific ≠ 1, PTP version ≠ 2, truncation below the per-type
-minimum, and rx_err, each of which must produce no event and one drop
-count. 31 checks, mutation-proven.
+transportSpecific ≠ 1, PTP version ≠ 2, a foreign domainNumber
+(802.1AS-2011 8.1 and IEEE 1588-2008 9.5.1: a Sync in domain 5, a
+better-priority Announce in domain 1 and a Pdelay_Resp in domain 255,
+each refused with no event AND no message-bank write, because the arm
+sits at header byte 4 ahead of every bank write), truncation below the
+per-type minimum, and rx_err, each of which must produce no event and
+one drop count. 37 checks, mutation-proven (the domain arm removed:
+7 FAIL).
 
 This suite is what caught the three field-straddle bugs (announce
 currentUtcOffset outside the 8-byte accumulator window, the stepsRemoved

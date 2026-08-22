@@ -34,7 +34,12 @@ frame lands in the bank its event names, retiring the torn-read
 window) and a 64-word scratch, and the Milan 4.2.6.2.5
 multiple-responder cease rule lands on that room (three multi-identity
 intervals stop Pdelay_Req, a 5-minute timer resumes, duplicates from
-one identity are not a storm). Next: the parent-side integration.
+one identity are not a storm), and the parent's field campaign then
+found the receive side ignoring domainNumber (#6): the parser refuses
+any domain but 0 at the header byte, ahead of every bank write, so no
+handler can see a foreign-domain frame (-15 LUT: the domain byte of
+bank word 0 became the constant the parser admits). Next: the
+parent-side integration.
 
 ## Why a µCPU with an ALU
 

@@ -151,3 +151,34 @@ the skeleton; seven ucode revisions later the plane prices at
 measurement: ucpu 768 / parser 31 / engine 162 checks, thirty-one
 planted mutations red (one of them RTL: the read bank tied to the
 write bank), lint clean.
+
+## The domain round re-measured: the parser's domainNumber drop arm
+
+FPGA-gPTP #6, found by the parent's field campaign: the receive path
+ignored domainNumber, so a domain-5 Announce moved the grandmaster and
+a domain-5 Sync/Follow_Up pair steered the PHC. The fix is one header
+drop arm in `KL_gptp_rx_parser` (802.1AS-2011 8.1: the domain number of
+a gPTP domain shall be 0; IEEE 1588-2008 9.5.1: a message whose
+domainNumber does not match is not accepted for processing), placed at
+header byte 4 ahead of every message-bank write; the domain byte of
+bank word 0 became the constant the parser admits, so the 8-bit domain
+register went with it. Same instrument, Vivado 2026.1 OOC on
+`xc7a100tfgg484-2` at 100 MHz, 2026-08-22. The honest baseline is the
+tree at a29e8106 (PR #5, the per-bank ingress stamp) re-measured the
+same day, not the v7 row above, which predates that PR:
+
+| | a29e8106 (PR #5) | the domain arm | delta |
+|---|---|---|---|
+| Slice LUTs | 3,096 (2,770 logic + 326 LUTRAM) | **3,081** (2,755 + 326) | **-15** |
+| `u_parser` LUTs | 523 | 508 | -15 |
+| Registers | 2,400 | 2,392 | -8 |
+| `u_parser` registers | 267 | 259 | -8 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+The compare against a constant is cheaper than the register it
+replaced and the mux that fed bank word 0 from it. Verification at this
+measurement: ucpu 768 / parser 37 / engine 178 checks, thirty-four
+planted mutations red (the new one, the domain arm removed, fails 7
+parser and 21 engine checks), lint clean.
