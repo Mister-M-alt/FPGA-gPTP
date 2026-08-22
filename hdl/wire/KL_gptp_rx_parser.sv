@@ -22,7 +22,10 @@
 //                whose domainNumber does not match is not accepted for
 //                processing), messageLength below the per-type minimum
 //                (10.5.2.2.4 / 11.4.2.2: the octet count of header,
-//                body and TLVs), frame truncated before that minimum,
+//                body and TLVs; Table 11-11 makes a Pdelay_Req 54, the
+//                header and two reserved fields, so the header alone no
+//                longer draws a response), frame truncated before that
+//                minimum,
 //                a Follow_Up whose information TLV header is not the
 //                one 11.4.4.3 prescribes (Table 11-9 makes the TLV a
 //                field of the 76-octet Follow_Up, 11.4.4.2.2 places it
@@ -189,9 +192,12 @@ module KL_gptp_rx_parser
   //! per-type minimum length (absolute index of the last mandatory byte):
   //! the message lengths of 802.1AS-2011 Table 10-7 (Announce 64),
   //! Table 11-8 (Sync 44), Table 11-9 (Follow_Up 76: the information
-  //! TLV is a field, not a suffix), Tables 11-12 / 11-13 (Pdelay_Resp
-  //! and Pdelay_Resp_Follow_Up 54) and the 34-octet header, each as the
-  //! frame index of its last octet (the header starts at byte 14). The
+  //! TLV is a field, not a suffix), Tables 11-11 / 11-12 / 11-13
+  //! (Pdelay_Req, Pdelay_Resp and Pdelay_Resp_Follow_Up 54: IEEE
+  //! 1588-2008 13.9 pads the request with a second reserved field to the
+  //! response's length, so the three share one index) and the 34-octet
+  //! header for Signaling, each as the frame index of its last octet
+  //! (the header starts at byte 14). The
   //! one table gates both the declared messageLength and the bytes
   //! actually received; no second flag mirrors it.
   logic [10:0] min_end_w;
@@ -199,10 +205,10 @@ module KL_gptp_rx_parser
     unique case (mtype_r)
       MT_ANN_C:    min_end_w = 11'(OFF_AN_TSRC_C);
       MT_FU_C:     min_end_w = 11'(OFF_FU_END_C);
+      MT_PDREQ_C,
       MT_PDRESP_C,
       MT_PDRFU_C:  min_end_w = 11'(OFF_RQPN_END_C);
       MT_SYNC_C:   min_end_w = 11'(OFF_TS_NS_END_C);
-      MT_PDREQ_C,
       MT_SIG_C:    min_end_w = 11'(OFF_LOGI_C);
       default:     min_end_w = 11'(OFF_LOGI_C);
     endcase
