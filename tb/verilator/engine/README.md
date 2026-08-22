@@ -20,6 +20,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 1, 3, 6, 7 | Table 11-7 `controlField`: Sync = 0, Follow_Up = 2, Announce and every Pdelay message = 5 |
 | 1, 2 | asCapable is NOT set after one good exchange (4.2.6.2.4) |
 | 1b | a Follow_Up for the boot request (sequence 0) ahead of any Resp, sourced from the zero identity a never-armed pairing holds, is ignored: "armed with sequence 0" is not "nothing armed" (11.2.15.3) |
+| 2b | a Pdelay_Resp and its Follow_Up sourced from OUR OWN clockIdentity, answering the outstanding request with our requestingPortIdentity and a delay under the threshold, are ignored: the published delay and asCapable both hold, and the exchange that would have been the second never happened (IEEE 1588-2008 9.5.2.2, 802.1AS-2011 Figure 11-8, #23) |
 | 3b | a foreign-domain Pdelay_Req (domain 0x10) draws no Pdelay_Resp and counts one drop; a domain-0 request right after it is answered with its own sequence and its Resp_FU |
 | 3c | a header-only Pdelay_Req (messageLength 34 in a 48-byte frame) and a declared 54 cut at 53 octets draw no Pdelay_Resp and count one drop each; the complete request right after them is answered with its own sequence and its Resp_FU (Table 11-11, #12) |
 | 3d | an unlisted messageType (0x1, 0xD, 0xF) with a valid header draws no frame at all over a proven-quiet window and counts one drop each, and the flags do not move: 802.1AS-2011 Tables 10-5 and 11-3 name the seven types a gPTP port carries and the NOTE under Table 11-3 says the others are not used in this standard, IEEE 1588-2008 Table 19 assigning three of them to Delay_Req, Delay_Resp and Management (#22) |
@@ -58,7 +59,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All sixty-four planted mutations (the own-source rule removed, its
+All sixty-seven planted mutations (the own-source rule removed, its
 identity compare narrowed to 32 bits, the stepsRemoved bound off by one
 in either direction, its compare narrowed to a byte, a dead path-trace
 compare, the hop compare narrowed to 32 bits, the hop read from the next
@@ -69,7 +70,9 @@ byte, the arm cleared on the Resp itself, a Follow_Up taken with nothing
 armed, the armed bit dropped from its compare, the pairing not consumed,
 the responder identity not paired, the arm surviving the next request, a
 completed exchange armed again, the completed path skipping the identity
-bookkeeping, the shared TX control value, ladder trigger, both pdelay
+bookkeeping, the self-sourced response admitted, its thisClock compare
+applied to requestingPortIdentity instead, that compare narrowed to 32
+bits, the shared TX control value, ladder trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
 sync void, a dead step threshold, both servo sign errors, a dead
