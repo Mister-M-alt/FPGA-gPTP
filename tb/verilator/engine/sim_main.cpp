@@ -8,6 +8,10 @@
 //  1b     a Follow_Up for the boot request (sequence 0) ahead of any
 //         Resp, from the zero identity a never-armed pairing holds, is
 //         ignored: "armed with sequence 0" is not "nothing armed" (#8)
+//  2b     a Pdelay_Resp (and its Follow_Up) sourced from OUR OWN
+//         clockIdentity, answering the outstanding request, is ignored:
+//         it neither moves the delay nor climbs the ladder (IEEE
+//         1588-2008 9.5.2.2, 802.1AS-2011 Figure 11-8, #23)
 //  3b     a foreign-domain Pdelay_Req draws no frame and counts one drop;
 //         a domain-0 request right after it is answered (8.1, #6)
 //  3c     a header-only and a cut Pdelay_Req draw no frame and count one
@@ -87,6 +91,12 @@
 static const uint64_t OUR_MAC = 0x02A1B2C3D4E5ull;
 static const uint64_t OUR_CID = 0x02A1B2FFFEC3D4E5ull;
 static const uint64_t PEER_CID = 0x0080E1FFFE112233ull;
+//! the second responder identity of the Milan 4.2.6.2.5 probes, chosen
+//! to share OUR clockIdentity's low 32 bits and differ above them: it is
+//! a genuine responder, so the 1588-2008 9.5.2.2 compare must admit it,
+//! and a compare narrowed to 32 bits refuses it instead and never
+//! reaches the bookkeeping the cease phases read (FPGA-gPTP #23)
+static const uint64_t NEAR_CID = 0x00777700FEC3D4E5ull;
 static const uint32_t OUR_CQ = 0xF8FE436A;
 
 // publish flags bits (the retired software contract)
@@ -293,10 +303,11 @@ static void servo_mirror(int64_t off) {
 // ---- auto peer: answers every Pdelay_Req the DUT transmits ----------------
 // peer clock runs at +2^-13 (~122 ppm) against ours; turnaround fields are
 // constants of the mode, the ingress stamp is t1 + wire turnaround.
-enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_DUAL,
+enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_SELF, PD_DUAL,
               PD_DUP, PD_DUAL_LATE };
 static PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
 static size_t pd_seen = 0;
+static int pd_self_sent = 0;             // PD_SELF pairs actually sent
 
 static uint64_t peer_ns(uint64_t ours) {
   return 5000000ull + ours + (ours >> 13);
@@ -316,6 +327,25 @@ static void service_pdelay() {
     uint16_t seq = (uint16_t)((txf[i][44] << 8) | txf[i][45]);
     uint64_t t1 = txns[i];
     uint64_t t2 = peer_ns(t1 + 300);
+    if (pd_mode == PD_SELF) {
+      // our own request reflected back at us: the pair answers the
+      // outstanding sequenceId with our requestingPortIdentity, so every
+      // other gate admits it and only the sourcePortIdentity compare can
+      // refuse it. Its residency is 19,800, a delay near 700 rather than
+      // the 600 of a genuine exchange, so an accepted pair MOVES the
+      // published delay (still under the 800 ns threshold, which must
+      // not be what refuses it). No model_exchange: it never happened
+      Frame f = ptp(0x3, seq, 0, 0x0200, 20, OUR_CID);
+      f.ts(t2); f.u64(OUR_CID); f.u16(1);
+      send_frame(f.b, t1 + 21200);
+      run(400);
+      Frame g = ptp(0xA, seq, 0, 0x0000, 20, OUR_CID);
+      g.ts(t2 + 19800); g.u64(OUR_CID); g.u16(1);
+      send_frame(g.b, t1 + 21200 + 1000);
+      run(400);
+      pd_self_sent++;
+      continue;
+    }
     uint64_t resid = 20000;              // D = +600 after correction
     if (pd_mode == PD_NEG) resid = 21300;   // D ~ -49: the Milan floor
     if (pd_mode == PD_FAR) resid = 19200;   // D ~ +1001: over threshold
@@ -326,7 +356,7 @@ static void service_pdelay() {
     send_frame(f.b, t4);
     run(400);
     if (pd_mode == PD_DUAL || pd_mode == PD_DUP) {
-      uint64_t src2 = (pd_mode == PD_DUAL) ? 0x0077770077FE0077ull
+      uint64_t src2 = (pd_mode == PD_DUAL) ? NEAR_CID
                                            : PEER_CID;
       Frame d = ptp(0x3, seq, 0, 0x0200, 20, src2);
       d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
@@ -342,7 +372,7 @@ static void service_pdelay() {
       // Follow_Up: the exchange has completed, so this response takes
       // the handler's post-completion path, which must still reach the
       // Milan 4.2.6.2.5 identity bookkeeping
-      Frame d = ptp(0x3, seq, 0, 0x0200, 20, 0x0077770077FE0077ull);
+      Frame d = ptp(0x3, seq, 0, 0x0200, 20, NEAR_CID);
       d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
       send_frame(d.b, t4 + 2000);
       run(400);
@@ -538,6 +568,44 @@ int main(int argc, char **argv) {
   }
   expect("pub pdelay ex1", dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
   expect("one exchange not capable", dut->pub_flags_o & FL_ASCAP, 0);
+
+  // ---- 2b: a Pdelay_Resp sourced from OUR clockIdentity is ignored ------
+  // IEEE 1588-2008 9.5.2.2: "A message received at the same port that
+  // issued the message shall be ignored", identified by comparing the
+  // received sourcePortIdentity with the port's own portIdentity (its
+  // Table 17). 802.1AS-2011 Figure 11-8 carries the same condition into
+  // the MDPdelayReq machine, where asCapable is set only if
+  // rcvdPdelayRespPtr->sourcePortIdentity.clockIdentity != thisClock. A
+  // loop or a misconfigured bridge reflecting our own Pdelay_Req back at
+  // us is not a neighbour, and one exchange has already completed here,
+  // so an accepted pair would be the SECOND and would raise asCapable
+  // (FPGA-gPTP #23). The pair is refused by nothing else: it answers the
+  // outstanding sequenceId, carries our requestingPortIdentity, and its
+  // delay lands near 700 ns, under the threshold
+  {
+    uint32_t fl0 = dut->pub_flags_o, d0 = dut->pub_pdelay_ns_o;
+    int c0 = pdm.count;
+    uint16_t dr0 = dut->dbg_rx_drop_o;
+    pd_seen = txf.size();
+    pd_mode = PD_SELF;
+    pd_self_sent = 0;
+    auto_txts = true;                  // the cadence request needs its t1
+    run_svc(2600000);
+    expect("self-sourced pair: one was answered", pd_self_sent >= 1, 1);
+    // sent is not the same as admitted: without this the three checks
+    // below would pass vacuously if the frame were ever refused at the
+    // parser instead, which is where it must NOT be refused, the parser
+    // holding no identity of its own. The refusal is in the ucode, so
+    // the parser's counter must not move
+    expect("self-sourced pair: not a parser drop", dut->dbg_rx_drop_o, dr0);
+    expect("self-sourced pair: asCapable unmoved",
+           dut->pub_flags_o & FL_ASCAP, fl0 & FL_ASCAP);
+    expect("self-sourced pair: pdelay unmoved", dut->pub_pdelay_ns_o, d0);
+    expect("self-sourced pair: no exchange modelled", pdm.count, c0);
+    pd_mode = PD_SKIP;
+    pd_seen = txf.size();
+    auto_txts = false;                 // phase 3 feeds its own timestamps
+  }
 
   // ---- 3: peer initiates -> our Resp + Resp_FU --------------------------
   const uint64_t T2R = 2000000ull, T3R = 2050000ull;
