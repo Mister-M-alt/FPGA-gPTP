@@ -102,12 +102,29 @@ static const uint64_t PEER_CID = 0x0080E1FFFE112233ull;
 //! above them, used by two rounds: as the second responder of the Milan
 //! 4.2.6.2.5 probes, which the 1588-2008 9.5.2.2 compare must admit
 //! (FPGA-gPTP #23), and as a genuine requester the responder must answer
-//! (#26). Either way a compare narrowed to the low 32 bits refuses it,
-//! which is how both rounds catch a narrowing
-static const uint64_t NEAR_CID = 0x00777700FEC3D4E5ull;
+//! (#26). A compare narrowed to the low half refuses it, which is how
+//! both rounds catch that narrowing.
+//!
+//! DERIVED from OUR_CID, never hand-copied. A literal keeps the halves it
+//! was written with, and --mac moves OUR_CID: measured on this suite, one
+//! byte of difference in the high-half fixture and the high-half
+//! narrowing mutation escapes silently at 340/340, where the derived form
+//! gives 336/340. The static_asserts below are the second lock, so the
+//! shared halves cannot drift without the build saying so
+static const uint64_t NEAR_CID =
+    0x0077770000000000ull | (OUR_CID & 0xFFFFFFFFull);
 //! its mirror: a requester sharing our HIGH 32 bits and differing below,
 //! so a compare narrowed to the high half refuses this one instead (#26)
-static const uint64_t REQ_HI_CID = 0x02A1B2FF00112233ull;
+static const uint64_t REQ_HI_CID =
+    (OUR_CID & 0xFFFFFFFF00000000ull) | 0x00112233ull;
+static_assert((NEAR_CID & 0xFFFFFFFFull) == (OUR_CID & 0xFFFFFFFFull),
+              "NEAR_CID must share OUR_CID's low half");
+static_assert((NEAR_CID >> 32) != (OUR_CID >> 32),
+              "NEAR_CID must differ from OUR_CID above the halfway line");
+static_assert((REQ_HI_CID >> 32) == (OUR_CID >> 32),
+              "REQ_HI_CID must share OUR_CID's high half");
+static_assert((REQ_HI_CID & 0xFFFFFFFFull) != (OUR_CID & 0xFFFFFFFFull),
+              "REQ_HI_CID must differ from OUR_CID below the halfway line");
 static const uint32_t OUR_CQ = 0xF8FE436A;
 
 // publish flags bits (the retired software contract)
@@ -679,9 +696,15 @@ int main(int argc, char **argv) {
   // ---- 3a: a requester whose identity nearly matches ours is answered ---
   // the refusal above compares all 64 bits of the clockIdentity. These
   // two requesters differ from ours in only one half each, so a compare
-  // narrowed to the low half (32, 16 or 8 bits) refuses the first and one
-  // narrowed to the high half refuses the second: either way a genuine
-  // neighbour loses its Pdelay_Resp and this phase goes red
+  // narrowed to the low half refuses the first and one narrowed to the
+  // high half refuses the second: either way a genuine neighbour loses
+  // its Pdelay_Resp and this phase goes red.
+  //
+  // Only FMT_D is a symmetric narrowing here. The ISA masks operand A
+  // alone (KL_gptp_ucpu.sv:188-194; b_or_imm_w keeps all 64 bits), so
+  // FMT_W and FMT_B make the compare unsatisfiable rather than narrow:
+  // nothing is ever refused, this phase stays green, and the loss shows
+  // in phase 1a instead, where the self-sourced request is answered
   {
     struct Near { const char *tag; uint64_t cid; uint16_t seq; uint64_t rx, tx; };
     const Near near[] = {
