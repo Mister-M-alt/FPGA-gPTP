@@ -20,10 +20,23 @@
 //                domainNumber != DOMAIN_C (802.1AS-2011 8.1: a gPTP
 //                domain is domain 0; IEEE 1588-2008 9.5.1: a message
 //                whose domainNumber does not match is not accepted for
-//                processing), frame truncated before the per-type
-//                minimum, rx_err_i. The domain arm sits at header byte
-//                4, ahead of every message-bank write, so a foreign-
-//                domain frame leaves nothing a handler could read.
+//                processing), messageLength below the per-type minimum
+//                (10.5.2.2.4 / 11.4.2.2: the octet count of header,
+//                body and TLVs), frame truncated before that minimum,
+//                a Follow_Up whose information TLV header is not the
+//                one 11.4.4.3 prescribes (Table 11-9 makes the TLV a
+//                field of the 76-octet Follow_Up, 11.4.4.2.2 places it
+//                first), rx_err_i. The domain and messageLength arms
+//                sit at header bytes 4 and 2..3, ahead of every
+//                message-bank write, so a foreign-domain or short-
+//                declared frame leaves nothing a handler could read.
+//                The TLV arm can only follow the body it qualifies: a
+//                refused Follow_Up's header words land in the write
+//                bank like those of any frame cut by truncation or
+//                rx_err, no event names that bank, and the next frame
+//                overwrites it. TLVs after the information TLV are not
+//                parsed (11.4.1: ignore a TLV and attempt the next), so
+//                a messageLength above 76 is accepted.
 //
 //                Message bank map (64-bit words, region 0 of the µCPU
 //                state port):
@@ -104,11 +117,23 @@ module KL_gptp_rx_parser
   //! zero from the register file's zero source (e_hdr).
   localparam logic [7:0] DOMAIN_C = 8'd0;
 
+  // ---- the Follow_Up information TLV header -----------------------------
+  //! 802.1AS-2011 11.4.4.3, Table 11-10: tlvType 0x3 (ORGANIZATION_EXTENSION,
+  //! 11.4.4.3.2), lengthField 28 (11.4.4.3.3), organizationId 00-80-C2
+  //! (11.4.4.3.4), organizationSubType 1 (11.4.4.3.5). Table 11-9 makes
+  //! the TLV a field of the Follow_Up message and 11.4.4.2.2 places it
+  //! first after the fixed fields, so octets 44..53 of every Follow_Up
+  //! are this header; a frame that carries anything else there has no
+  //! information TLV and is refused (FPGA-gPTP #11).
+  localparam logic [15:0] FU_TLV_TYPE_C = 16'h0003;
+  localparam logic [63:0] FU_TLV_HDR_C  = {16'd28, 24'h0080C2, 24'd1};
+
   // ---- absolute byte offsets (DA = byte 0, PTP header = byte 14) --------
   localparam int unsigned OFF_ETYPE_HI_C = 12;
   localparam int unsigned OFF_ETYPE_LO_C = 13;
   localparam int unsigned OFF_TYPE_C     = 14;
   localparam int unsigned OFF_VER_C      = 15;
+  localparam int unsigned OFF_MSGLEN_END_C = 17;
   localparam int unsigned OFF_DOM_C      = 18;
   localparam int unsigned OFF_FLAGS0_C   = 20;
   localparam int unsigned OFF_CORR_END_C = 29;
@@ -130,10 +155,12 @@ module KL_gptp_rx_parser
   localparam int unsigned OFF_AN_SR_END_C = 76;
   localparam int unsigned OFF_AN_TSRC_C   = 77;
   localparam int unsigned OFF_AN_TLV_C    = 78;
-  // follow-up information TLV
-  localparam int unsigned OFF_FU_TLVT_END_C = 59;
+  // follow-up information TLV (Table 11-10 offsets + 58)
+  localparam int unsigned OFF_FU_TLVT_END_C = 59;   //! tlvType
+  localparam int unsigned OFF_FU_TLVH_END_C = 67;   //! lengthField..organizationSubType
   localparam int unsigned OFF_FU_CSRO_END_C = 71;
   localparam int unsigned OFF_FU_TBI_END_C  = 73;
+  localparam int unsigned OFF_FU_END_C      = 89;   //! scaledLastGmFreqChange
 
   // ---- parse state -------------------------------------------------------
   logic [10:0] cnt_r;          //! absolute byte index of the CURRENT byte
@@ -143,38 +170,50 @@ module KL_gptp_rx_parser
   logic [15:0] seq_r;
   logic [15:0] flags_r;
   logic [63:0] acc_r;          //! big-endian byte accumulator
-  logic        min_ok_r;       //! per-type minimum body consumed
   logic [15:0] utc_r;          //! announce currentUtcOffset (straddles acc)
-  logic        fu_tlv_ok_r;    //! follow-up information TLV type matched
   // announce path trace walk
   logic [15:0] pt_left_r;      //! TLV bytes remaining
   logic [7:0]  pt_cnt_r;       //! hops seen
   logic [2:0]  pt_byte_r;      //! byte inside the current identity
   logic        pt_run_r;
   logic [15:0] drop_cnt_r;
-  //! end-of-frame settles one cycle late: last-byte field writes and the
-  //! per-type minimum flag are non-blocking, and the announce hop-count
-  //! word must not fight the final identity write for the one bank lane
+  //! end-of-frame settles one cycle late: last-byte field writes are
+  //! non-blocking, and the announce hop-count word must not fight the
+  //! final identity write for the one bank lane
   logic        fin_r;
   logic        fin_ok_r;
 
   logic [63:0] acc_nxt_w;
   assign acc_nxt_w = {acc_r[55:0], rx_data_i};
 
-  //! per-type minimum length (absolute index of the last mandatory byte)
+  //! per-type minimum length (absolute index of the last mandatory byte):
+  //! the message lengths of 802.1AS-2011 Table 10-7 (Announce 64),
+  //! Table 11-8 (Sync 44), Table 11-9 (Follow_Up 76: the information
+  //! TLV is a field, not a suffix), Tables 11-12 / 11-13 (Pdelay_Resp
+  //! and Pdelay_Resp_Follow_Up 54) and the 34-octet header, each as the
+  //! frame index of its last octet (the header starts at byte 14). The
+  //! one table gates both the declared messageLength and the bytes
+  //! actually received; no second flag mirrors it.
   logic [10:0] min_end_w;
   always_comb begin : min_len
     unique case (mtype_r)
       MT_ANN_C:    min_end_w = 11'(OFF_AN_TSRC_C);
+      MT_FU_C:     min_end_w = 11'(OFF_FU_END_C);
       MT_PDRESP_C,
       MT_PDRFU_C:  min_end_w = 11'(OFF_RQPN_END_C);
-      MT_SYNC_C,
-      MT_FU_C:     min_end_w = 11'(OFF_TS_NS_END_C);
+      MT_SYNC_C:   min_end_w = 11'(OFF_TS_NS_END_C);
       MT_PDREQ_C,
       MT_SIG_C:    min_end_w = 11'(OFF_LOGI_C);
       default:     min_end_w = 11'(OFF_LOGI_C);
     endcase
   end
+
+  //! the same minimum as a messageLength bound: 10.5.2.2.4 / 11.4.2.2
+  //! count the octets from the first header octet through the last TLV
+  //! octet, so the bound is the last mandatory index + 1 less the 14-byte
+  //! Ethernet header; a declared length above it (trailing TLVs) passes
+  logic [15:0] min_len_w;
+  assign min_len_w = 16'(min_end_w) + 16'd1 - 16'(OFF_TYPE_C);
 
   logic [7:0] ev_map_w;
   always_comb begin : ev_map
@@ -200,9 +239,7 @@ module KL_gptp_rx_parser
       seq_r       <= '0;
       flags_r     <= '0;
       acc_r       <= '0;
-      min_ok_r    <= 1'b0;
       utc_r       <= '0;
-      fu_tlv_ok_r <= 1'b0;
       pt_left_r   <= '0;
       pt_cnt_r    <= '0;
       pt_byte_r   <= '0;
@@ -223,7 +260,7 @@ module KL_gptp_rx_parser
       // deferred end-of-frame: every last-byte write has settled
       if (fin_r) begin
         fin_r <= 1'b0;
-        if (fin_ok_r && min_ok_r) begin
+        if (fin_ok_r) begin
           if (mtype_r == MT_ANN_C) begin
             bank_we_o    <= 1'b1;
             bank_addr_o  <= 5'd12;
@@ -243,7 +280,6 @@ module KL_gptp_rx_parser
           run_r    <= 1'b1;
           bad_r    <= 1'b0;
           mtype_r  <= '0;
-          min_ok_r <= 1'b0;
           pt_run_r <= 1'b0;
           pt_cnt_r <= '0;
           acc_r    <= {56'd0, rx_data_i};
@@ -261,6 +297,8 @@ module KL_gptp_rx_parser
             end
             11'(OFF_VER_C):
               if (rx_data_i[3:0] != 4'h2) bad_r <= 1'b1;
+            11'(OFF_MSGLEN_END_C):
+              if (acc_nxt_w[15:0] < min_len_w) bad_r <= 1'b1;
             11'(OFF_DOM_C):
               if (rx_data_i != DOMAIN_C) bad_r <= 1'b1;
             11'(OFF_CORR_END_C): begin
@@ -285,7 +323,6 @@ module KL_gptp_rx_parser
               bank_addr_o  <= 5'd0;
               bank_wdata_o <= {8'd0, 4'd0, mtype_r, seq_r, DOMAIN_C,
                                flags_r, rx_data_i};
-              min_ok_r     <= (mtype_r inside {MT_PDREQ_C, MT_SIG_C});
             end
             default: ;
           endcase
@@ -304,7 +341,6 @@ module KL_gptp_rx_parser
                 bank_we_o    <= 1'b1;
                 bank_addr_o  <= 5'd5;
                 bank_wdata_o <= {32'd0, acc_nxt_w[31:0]};
-                min_ok_r     <= (mtype_r inside {MT_SYNC_C, MT_FU_C});
               end
             end
             if (mtype_r inside {MT_PDRESP_C, MT_PDRFU_C}) begin
@@ -317,15 +353,19 @@ module KL_gptp_rx_parser
                 bank_we_o    <= 1'b1;
                 bank_addr_o  <= 5'd7;
                 bank_wdata_o <= {48'd0, acc_nxt_w[15:0]};
-                min_ok_r     <= 1'b1;
               end
             end
             if (mtype_r == MT_FU_C) begin
-              if (cnt_r == 11'(OFF_FU_TLVT_END_C))
-                // information TLV type must be 0x0003; else ignore body
-                fu_tlv_ok_r <= (acc_nxt_w[15:0] == 16'h0003);
+              // the information TLV header: tlvType at octets 44..45,
+              // then lengthField, organizationId and organizationSubType
+              // at 46..53; a mismatch poisons the frame, so neither the
+              // w11 write below nor the event follows
+              if ((cnt_r == 11'(OFF_FU_TLVT_END_C)) &&
+                  (acc_nxt_w[15:0] != FU_TLV_TYPE_C)) bad_r <= 1'b1;
+              if ((cnt_r == 11'(OFF_FU_TLVH_END_C)) &&
+                  (acc_nxt_w != FU_TLV_HDR_C)) bad_r <= 1'b1;
               if (cnt_r == 11'(OFF_FU_TBI_END_C)) begin
-                bank_we_o    <= fu_tlv_ok_r;
+                bank_we_o    <= 1'b1;
                 bank_addr_o  <= 5'd11;
                 bank_wdata_o <= {acc_nxt_w[47:16], acc_nxt_w[15:0],
                                  16'd0};
@@ -350,7 +390,6 @@ module KL_gptp_rx_parser
                 bank_we_o    <= 1'b1;
                 bank_addr_o  <= 5'd10;
                 bank_wdata_o <= {acc_r[15:0], rx_data_i, 40'd0};
-                min_ok_r     <= 1'b1;
               end
               // path trace TLV: header, then 8-byte identities
               if (cnt_r == 11'(OFF_AN_TLV_C + 3)) begin
@@ -375,6 +414,10 @@ module KL_gptp_rx_parser
           end
 
           // ---------------- end of frame -------------------------------
+          //! bad_r is sampled as registered: a poison raised by an arm on
+          //! the eof byte itself is not seen here, so every drop arm must
+          //! sit below its type's minimum index (all of them do: 13..18
+          //! for the header arms, 59 and 67 against a Follow_Up's 89)
           if (rx_eof_i) begin
             run_r    <= 1'b0;
             fin_r    <= 1'b1;

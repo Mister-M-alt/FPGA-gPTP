@@ -9,7 +9,9 @@
 // end-of-frame event, and compares against independently packed expected
 // words. Also proves the drop arms: wrong EtherType, wrong
 // transportSpecific, wrong PTP version, foreign domainNumber, truncation,
-// rx_err.
+// a short messageLength (one arm per type the per-type table names), a
+// Follow_Up without its information TLV, rx_err; and that a Sync padded
+// to the 60-byte Ethernet minimum is accepted.
 
 #include <cstdint>
 #include <cstdio>
@@ -334,7 +336,194 @@ int main(int argc, char **argv) {
     expect_eq("domain 0x80 sig drop: one drop", dut->drop_cnt_o,
               (uint16_t)(d0 + 1));
   }
-  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 10));
+  // 802.1AS-2011 Table 11-9: a Follow_Up is 76 octets, the header, the
+  // preciseOriginTimestamp and the Follow_Up information TLV, which
+  // 11.4.4.3 makes a field of the message (tlvType 0x3, lengthField 28,
+  // organizationId 00-80-C2, organizationSubType 1: 11.4.4.3.2 to
+  // 11.4.4.3.5) and 11.4.4.2.2 places first; 10.5.2.2.4 counts exactly
+  // those 76 octets in messageLength. Until #11 the parser's Follow_Up
+  // minimum was the 44-octet header-and-timestamp shape and a TLV type
+  // mismatch only withheld bank word 11, so a TLV-less Follow_Up
+  // dispatched and steered. Arms: the issue's 44-octet shape and a
+  // declared length of 75, each refused at the messageLength byte with
+  // no event, no bank write and one counted drop; a declared 76 cut at
+  // 75 octets, refused at the end-of-frame gate (no event, one drop);
+  // then a TLV header wrong in exactly one field (tlvType 0x0008,
+  // lengthField 27, organizationId 00-1B-19, organizationSubType 2),
+  // each refused at the TLV arm with no event, no word-11 write and one
+  // drop. Controls: the complete Follow_Up dispatches with its word 11
+  // after the arms as it did before them, and a Follow_Up with a second
+  // TLV appended after the information TLV (messageLength 88) is
+  // accepted: 11.4.1 has a receiver skip a TLV it does not parse.
+  auto fu_frame = [&](uint16_t seq, uint16_t tlvt, uint16_t tlvl,
+                      uint32_t org, uint32_t sub) {
+    Hdr h; h.mtype = 0x8; h.seq = seq; h.srcid = 0xAABBCCFFFE001122ull;
+    h.srcpn = 1;
+    Frame f = common(h, 10 + 32);
+    f.u48(0x000012345678ull); f.u32(0x2FAF0800);
+    f.u16(tlvt); f.u16(tlvl);
+    f.u8((uint8_t)(org >> 16)); f.u8((uint8_t)(org >> 8)); f.u8((uint8_t)org);
+    f.u8((uint8_t)(sub >> 16)); f.u8((uint8_t)(sub >> 8)); f.u8((uint8_t)sub);
+    f.u32(0xFFFFF000); f.u16(0x0007);
+    for (int i = 0; i < 12; i++) f.u8(0);
+    f.u32(0x00000123);
+    return f;
+  };
+  const uint64_t W11 = (0xFFFFF000ull << 32) | (0x0007ull << 16);
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x8; h.seq = 0x0F44; h.srcid = 0xAABBCCFFFE001122ull;
+    h.srcpn = 1;
+    Frame f = common(h, 10);                         // messageLength 44
+    f.u48(0x000012345678ull); f.u32(0x2FAF0800);     // and no TLV
+    feed(f.b, false);
+    expect_eq("TLV-less fu drop: no event", ev_seen, 0);
+    expect_eq("TLV-less fu drop: no bank write", bank.size(), 0);
+    expect_eq("TLV-less fu drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F4B, 0x0003, 28, 0x0080C2, 1);
+    f.b[16] = 0; f.b[17] = 75;                       // messageLength 75
+    f.b.pop_back();                                  // in 75 octets
+    feed(f.b, false);
+    expect_eq("75-octet fu drop: no event", ev_seen, 0);
+    expect_eq("75-octet fu drop: no bank write", bank.size(), 0);
+    expect_eq("75-octet fu drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F4C, 0x0003, 28, 0x0080C2, 1);
+    f.b.pop_back();                                  // declared 76, cut at 75
+    feed(f.b, false);
+    expect_eq("cut fu drop: no event", ev_seen, 0);
+    expect_eq("cut fu drop: one drop", dut->drop_cnt_o, (uint16_t)(d0 + 1));
+  }
+  struct BadTlv { const char *tag; uint16_t tlvt, tlvl; uint32_t org, sub; };
+  const BadTlv bad_tlv[] = {
+    {"fu tlvType 0x0008 drop", 0x0008, 28, 0x0080C2, 1},
+    {"fu lengthField 27 drop", 0x0003, 27, 0x0080C2, 1},
+    {"fu orgId 00-1B-19 drop", 0x0003, 28, 0x001B19, 1},
+    {"fu orgSubType 2 drop", 0x0003, 28, 0x0080C2, 2},
+  };
+  for (const BadTlv &t : bad_tlv) {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F50, t.tlvt, t.tlvl, t.org, t.sub);
+    feed(f.b, false);
+    char n[64];
+    snprintf(n, sizeof n, "%s: no event", t.tag);
+    expect_eq(n, ev_seen, 0);
+    snprintf(n, sizeof n, "%s: no w11 write", t.tag);
+    expect_eq(n, bank.count(11), 0);
+    snprintf(n, sizeof n, "%s: one drop", t.tag);
+    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F76, 0x0003, 28, 0x0080C2, 1);
+    feed(f.b, false);
+    expect_eq("complete fu after the arms: event", ev_seen ? ev_code : 0, 2);
+    expect_eq("complete fu after the arms: ev_seq", ev_seq, 0x0F76);
+    expect_eq("complete fu after the arms: w11", bank[11], W11);
+    expect_eq("complete fu after the arms: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F88, 0x0003, 28, 0x0080C2, 1);
+    f.b[16] = 0; f.b[17] = 88;                       // messageLength 88:
+    f.u16(0x0008); f.u16(8);                         // a path trace TLV
+    f.u64(0x3333333333333333ull);                    // after the info TLV
+    feed(f.b, false);
+    expect_eq("fu with a trailing TLV: event", ev_seen ? ev_code : 0, 2);
+    expect_eq("fu with a trailing TLV: w11", bank[11], W11);
+    expect_eq("fu with a trailing TLV: no drop", dut->drop_cnt_o, d0);
+  }
+  // The messageLength arm is one compare against the per-type table, so
+  // it must hold for every type the table names, not only the Follow_Up
+  // that motivated it (the #18 review's MR8, the arm narrowed to
+  // Follow_Up, passed both suites). For each of Sync (44, Table 11-8),
+  // Announce (64, Table 10-7), Pdelay_Resp and Pdelay_Resp_Follow_Up
+  // (54, Tables 11-12 / 11-13) and Signaling (34, the header alone): a
+  // physically complete frame declaring one octet below the minimum is
+  // refused at the messageLength byte with no event, no bank write and
+  // one drop, and the same frame declaring the exact minimum dispatches
+  // with no drop. Pdelay_Req (54, Table 11-11) gets its arm with #19.
+  struct LenArm { const char *tag; uint8_t mtype; uint16_t minlen; uint8_t ev; };
+  const LenArm len_arms[] = {
+    {"sync", 0x0, 44, 1}, {"announce", 0xB, 64, 3}, {"pdresp", 0x3, 54, 5},
+    {"pdrfu", 0xA, 54, 6}, {"signaling", 0xC, 34, 7},
+  };
+  for (const LenArm &a : len_arms) {
+    char n[64];
+    Hdr h; h.mtype = a.mtype; h.seq = (uint16_t)(0x0B00 | a.minlen);
+    h.srcid = 0x00220FFFFE334455ull; h.srcpn = 2;
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = common(h, (uint16_t)(a.minlen - 34));    // the full message
+    for (int i = 34; i < a.minlen; i++) f.u8(0);
+    f.b[16] = (uint8_t)((a.minlen - 1) >> 8);          // declaring one
+    f.b[17] = (uint8_t)((a.minlen - 1) & 0xFF);        // octet fewer
+    feed(f.b, false);
+    snprintf(n, sizeof n, "%s declared %u drop: no event", a.tag,
+             (unsigned)(a.minlen - 1));
+    expect_eq(n, ev_seen, 0);
+    snprintf(n, sizeof n, "%s declared %u drop: no bank write", a.tag,
+             (unsigned)(a.minlen - 1));
+    expect_eq(n, bank.size(), 0);
+    snprintf(n, sizeof n, "%s declared %u drop: one drop", a.tag,
+             (unsigned)(a.minlen - 1));
+    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+    d0 = dut->drop_cnt_o;
+    Frame g = common(h, (uint16_t)(a.minlen - 34));    // the exact minimum
+    for (int i = 34; i < a.minlen; i++) g.u8(0);
+    feed(g.b, false);
+    snprintf(n, sizeof n, "%s declared %u control: event", a.tag,
+             (unsigned)a.minlen);
+    expect_eq(n, ev_seen ? ev_code : 0, a.ev);
+    snprintf(n, sizeof n, "%s declared %u control: no drop", a.tag,
+             (unsigned)a.minlen);
+    expect_eq(n, dut->drop_cnt_o, d0);
+  }
+  // A 44-octet Sync is a 58-byte frame and leaves the transmitting MAC
+  // padded to the 60-byte Ethernet minimum (IEEE 1588-2008 13.3.2.4
+  // NOTE: messageLength excludes the padding), so octets 58..59 exist on
+  // every Sync a real link delivers and the receiver ignores them. The
+  // #18 review's MR7, the TLV arms applied to Sync as well, passed both
+  // suites because no suite sent a padded Sync: the arm at byte 59 was
+  // never reached. Four padded Syncs, each accepted with its event, its
+  // six bank words and no drop: zero padding, padding shaped like the
+  // information TLV's tlvType (0x0003), padding 0x0008 (a path trace
+  // TLV's type), and a Sync padded to 74 bytes, the span of the whole
+  // TLV header arm.
+  {
+    struct Pad { const char *tag; std::vector<uint8_t> pad; };
+    const Pad pads[] = {
+      {"sync padded to 60 (zero)", {0x00, 0x00}},
+      {"sync padded to 60 (TLV-shaped)", {0x00, 0x03}},
+      {"sync padded to 60 (0x0008)", {0x00, 0x08}},
+      {"sync padded to 74", std::vector<uint8_t>(16, 0x00)},
+    };
+    for (const Pad &p : pads) {
+      char n[64];
+      uint16_t d0 = dut->drop_cnt_o;
+      Hdr h; h.mtype = 0x0; h.seq = 0x0A60; h.flags = 0x0208;
+      h.srcid = 0xAABBCCFFFE001122ull; h.srcpn = 1; h.logint = 0xFD;
+      Frame f = common(h, 10);                       // messageLength 44
+      f.u48(0x000012345678ull); f.u32(0x1DCD6500);
+      for (uint8_t b : p.pad) f.u8(b);               // the MAC's padding
+      feed(f.b, false);
+      snprintf(n, sizeof n, "%s: event", p.tag);
+      expect_eq(n, ev_seen ? ev_code : 0, 1);
+      snprintf(n, sizeof n, "%s: six words", p.tag);
+      expect_eq(n, bank.size(), 6);
+      snprintf(n, sizeof n, "%s: w5 ns", p.tag);
+      expect_eq(n, bank[5], 0x1DCD6500ull);
+      snprintf(n, sizeof n, "%s: no drop", p.tag);
+      expect_eq(n, dut->drop_cnt_o, d0);
+    }
+  }
+  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 22));
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;

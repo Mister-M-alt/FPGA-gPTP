@@ -16,6 +16,10 @@
 // 11b     a Sync/Follow_Up pair in a foreign domain never steers: the
 //         offset, the PHC writes and the flags hold, and the foreign
 //         Sync leaves no pending slot for a domain-0 Follow_Up (#6)
+// 11c     a Follow_Up without its information TLV never steers and does
+//         not consume the pending Sync; the complete one pairs (#11)
+// 11d     a Sync padded to the 60-byte Ethernet minimum, and one padded
+//         to 74, still pair
 // 13..15  the servo: step-vs-slew at 20 us, the PI addend against an
 //         exact-integer mirror, closed-loop lock on a +140 ppm master
 //         (one re-base carrying the surviving integrator)
@@ -94,6 +98,27 @@ static Frame ptp(uint8_t mtype, uint16_t seq, uint64_t corr,
   f.u16(seq);
   f.u8(0x05); f.u8(0x7F);
   return f;
+}
+
+// a Follow_Up: header, preciseOriginTimestamp and the information TLV
+// (802.1AS-2011 Table 11-9: 76 octets; 11.4.4.3 / Table 11-10: tlvType
+// 0x3, lengthField 28, organizationId 00-80-C2, organizationSubType 1,
+// then cumulativeScaledRateOffset, gmTimeBaseIndicator, lastGmPhaseChange
+// and scaledLastGmFreqChange). Until #11 every Follow_Up this suite sent
+// stopped after the timestamp: the shape the parser wrongly accepted was
+// the shape the bench called valid
+static Frame follow_up(uint16_t seq, uint64_t corr, uint64_t origin,
+                       uint64_t src = PEER_CID) {
+  Frame g = ptp(0x8, seq, corr, 0x0000, 42, src);
+  g.ts(origin);
+  g.u16(0x0003); g.u16(28);
+  g.u8(0x00); g.u8(0x80); g.u8(0xC2);
+  g.u8(0x00); g.u8(0x00); g.u8(0x01);
+  g.u32(0);                                    // cumulativeScaledRateOffset
+  g.u16(0);                                    // gmTimeBaseIndicator
+  for (int i = 0; i < 12; i++) g.u8(0);        // lastGmPhaseChange
+  g.u32(0);                                    // scaledLastGmFreqChange
+  return g;
 }
 
 
@@ -332,8 +357,7 @@ static void sync_pair(uint16_t seq, uint64_t local_rx, uint64_t origin,
   f.ts(0);
   send_frame(f.b, local_rx);
   run(2000);
-  Frame g = ptp(0x8, seq, 0, 0x0000, 10, src);
-  g.ts(origin);
+  Frame g = follow_up(seq, 0, origin, src);
   send_frame(g.b, local_rx + 500);
   run(6000);
 }
@@ -642,8 +666,7 @@ int main(int argc, char **argv) {
                  CORR_NS = 1000ull;
   {
     // an FU pairing with the pre-adopt rogue Sync must find nothing
-    Frame g = ptp(0x8, 0x0101, CORR_NS << 16, 0x0000, 10);
-    g.ts(ORIGIN - 1000000000ull);
+    Frame g = follow_up(0x0101, CORR_NS << 16, ORIGIN - 1000000000ull);
     send_frame(g.b, TRX - 999999500ull);
     run(6000);
   }
@@ -653,8 +676,7 @@ int main(int argc, char **argv) {
     f.ts(0);
     send_frame(f.b, TRX);
     run(2000);
-    Frame g = ptp(0x8, 0x0102, CORR_NS << 16, 0x0000, 10);
-    g.ts(ORIGIN);
+    Frame g = follow_up(0x0102, CORR_NS << 16, ORIGIN);
     send_frame(g.b, TRX + 500);
     run(6000);
   }
@@ -674,8 +696,7 @@ int main(int argc, char **argv) {
     f.ts(0);
     send_frame(f.b, TRX + 1000000000ull);
     run_svc(270000);                             // 135 ms: FU watch fires
-    Frame g = ptp(0x8, 0x0103, CORR_NS << 16, 0x0000, 10);
-    g.ts(ORIGIN + 999999223ull);
+    Frame g = follow_up(0x0103, CORR_NS << 16, ORIGIN + 999999223ull);
     send_frame(g.b, TRX + 1000000500ull);
     run(6000);
   }
@@ -688,8 +709,7 @@ int main(int argc, char **argv) {
     f.ts(0);
     send_frame(f.b, TRX2);
     run(2000);
-    Frame g = ptp(0x8, 0x0104, CORR_NS << 16, 0x0000, 10);
-    g.ts(ORIGIN2);
+    Frame g = follow_up(0x0104, CORR_NS << 16, ORIGIN2);
     send_frame(g.b, TRX2 + 500);
     run(6000);
   }
@@ -715,9 +735,8 @@ int main(int argc, char **argv) {
     f.ts(0);
     send_frame(f.b, TRXF);
     run(2000);
-    Frame g = ptp(0x8, 0x0110, CORR_NS << 16, 0x0000, 10);
+    Frame g = follow_up(0x0110, CORR_NS << 16, ORGF);
     g.b[18] = 5;
-    g.ts(ORGF);
     send_frame(g.b, TRXF + 500);
     run(6000);
     expect("foreign-domain pair: offset unmoved", (uint32_t)dut->pub_offset_o,
@@ -727,14 +746,129 @@ int main(int argc, char **argv) {
     expect("foreign-domain pair: flags untouched", dut->pub_flags_o, flags);
     expect("foreign-domain pair: both dropped and counted",
            dut->dbg_rx_drop_o, (uint16_t)(drops + 2));
-    Frame h = ptp(0x8, 0x0110, CORR_NS << 16, 0x0000, 10);   // domain 0
-    h.ts(ORGF);
+    Frame h = follow_up(0x0110, CORR_NS << 16, ORGF);   // domain 0
     send_frame(h.b, TRXF + 600);
     run(6000);
     expect("foreign Sync left no pending slot", (uint32_t)dut->pub_offset_o,
            (uint32_t)OFF2);
     expect("orphan Follow_Up never steers",
            steps_seen.size() + adj_seen.size(), writes);
+  }
+
+  // ---- 11c: a Follow_Up without its information TLV never steers --------
+  // 802.1AS-2011 Table 11-9: a Follow_Up is 76 octets, the header, the
+  // preciseOriginTimestamp and the information TLV that 11.4.4.3 makes a
+  // field of the message; until #11 the parser's minimum was the 44-octet
+  // header-and-timestamp shape, so a TLV-less Follow_Up dispatched, set
+  // sync-ok and moved the offset. Against a valid pending Sync, three
+  // malformed Follow_Ups in turn: messageLength 44 with 44 octets (the
+  // issue's shape, refused at the messageLength byte ahead of every bank
+  // write), messageLength 76 cut at 75 octets (refused at the end-of-
+  // frame gate), and a 76-octet frame whose TLV type is 0x0008 (refused
+  // at the TLV header). Each carries the pairing sequence and source with
+  // an origin skewed a further -777 ns, so a wrong acceptance would move
+  // the published offset; each is counted and leaves the offset, the PHC
+  // knobs and the flags unmoved; none consumes the pending Sync, so the
+  // complete Follow_Up that follows pairs with it and lands an offset 333
+  // ns from the previous one, then re-bases the PHC by its negation
+  {
+    uint16_t drops = dut->dbg_rx_drop_o;
+    size_t writes = steps_seen.size() + adj_seen.size();
+    uint32_t flags = dut->pub_flags_o;
+    const uint64_t TRXM = TRX2 + 1000000000ull;
+    const uint64_t ORGM = ORIGIN2 + 1000000000ull - 333ull;
+    Frame f = ptp(0x0, 0x0111, 0, 0x0208, 10);
+    f.ts(0);
+    send_frame(f.b, TRXM);
+    run(2000);
+    Frame g = ptp(0x8, 0x0111, CORR_NS << 16, 0x0000, 10);   // 44 octets
+    g.ts(ORGM - 777ull);
+    send_frame(g.b, TRXM + 500);
+    run(6000);
+    expect("TLV-less Follow_Up: offset unmoved", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF2);
+    expect("TLV-less Follow_Up: never steers",
+           steps_seen.size() + adj_seen.size(), writes);
+    expect("TLV-less Follow_Up: flags untouched", dut->pub_flags_o, flags);
+    expect("TLV-less Follow_Up: dropped and counted", dut->dbg_rx_drop_o,
+           (uint16_t)(drops + 1));
+    Frame h = follow_up(0x0111, CORR_NS << 16, ORGM - 777ull);
+    h.b.resize(89);                              // declared 76, cut at 75
+    send_frame(h.b, TRXM + 600);
+    run(6000);
+    expect("cut Follow_Up: offset unmoved", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF2);
+    expect("cut Follow_Up: never steers",
+           steps_seen.size() + adj_seen.size(), writes);
+    expect("cut Follow_Up: dropped and counted", dut->dbg_rx_drop_o,
+           (uint16_t)(drops + 2));
+    Frame k = follow_up(0x0111, CORR_NS << 16, ORGM - 777ull);
+    k.b[59] = 0x08;                              // tlvType 0x0008: path trace
+    send_frame(k.b, TRXM + 700);
+    run(6000);
+    expect("wrong-TLV Follow_Up: offset unmoved", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF2);
+    expect("wrong-TLV Follow_Up: never steers",
+           steps_seen.size() + adj_seen.size(), writes);
+    expect("wrong-TLV Follow_Up: flags untouched", dut->pub_flags_o, flags);
+    expect("wrong-TLV Follow_Up: dropped and counted", dut->dbg_rx_drop_o,
+           (uint16_t)(drops + 3));
+    Frame m = follow_up(0x0111, CORR_NS << 16, ORGM);
+    send_frame(m.b, TRXM + 800);
+    run(6000);
+    const uint64_t OFFM = TRXM - (ORGM + CORR_NS + (uint64_t)pdm.d);
+    expect("complete Follow_Up pairs with the surviving Sync",
+           (uint32_t)dut->pub_offset_o, (uint32_t)OFFM);
+    expect("complete Follow_Up: nothing further dropped", dut->dbg_rx_drop_o,
+           (uint16_t)(drops + 3));
+    servo_mirror((int64_t)OFFM);
+    expect("complete Follow_Up re-bases the phc",
+           !steps_seen.empty() && svm.stepped &&
+               steps_seen.back() == svm.step_val, 1);
+  }
+
+  // ---- 11d: a Sync padded to the Ethernet minimum still pairs ----------
+  // a 44-octet Sync is a 58-byte frame, so every Sync a real link
+  // delivers arrives padded to 60 bytes (IEEE 1588-2008 13.3.2.4 NOTE:
+  // messageLength excludes the padding); an arm keyed on a byte past 57
+  // that is not gated on the message type would refuse every one of
+  // them while passing a suite that never pads (the #18 review's MR7).
+  // Two shapes: the 60-byte minimum, and a Sync padded to 74 bytes, the
+  // span of the whole Follow_Up TLV header arm (octets past messageLength
+  // are padding to a receiver whatever their count). Each is accepted
+  // with no drop, its Follow_Up pairs with it, and the pair re-bases the
+  // PHC by the negation of its own offset. The 74-byte shape is the one
+  // an arm at byte 59 cannot hide from: a poison raised on a frame's eof
+  // byte is not seen by the end-of-frame gate, which samples bad_r as
+  // registered, so the 60-byte shape alone would pass MR7
+  {
+    struct Pad { const char *tag; uint16_t seq; size_t pad; uint64_t skew; };
+    const Pad pads[] = { {"padded Sync (60)", 0x0112, 2, 555ull},
+                         {"padded Sync (74)", 0x0113, 16, 999ull} };
+    for (const Pad &p : pads) {
+      char n[64];
+      uint16_t drops = dut->dbg_rx_drop_o;
+      const uint64_t TRXP = TRX2 + 1200000000ull + (uint64_t)p.seq * 1000ull;
+      const uint64_t ORGP = ORIGIN2 + 1200000000ull + (uint64_t)p.seq * 1000ull
+                            - p.skew;
+      Frame f = ptp(0x0, p.seq, 0, 0x0208, 10);
+      f.ts(0);
+      for (size_t i = 0; i < p.pad; i++) f.u8(0);   // the padding
+      send_frame(f.b, TRXP);
+      run(2000);
+      snprintf(n, sizeof n, "%s: accepted, no drop", p.tag);
+      expect(n, dut->dbg_rx_drop_o, drops);
+      Frame g = follow_up(p.seq, CORR_NS << 16, ORGP);
+      send_frame(g.b, TRXP + 500);
+      run(6000);
+      const uint64_t OFFP = TRXP - (ORGP + CORR_NS + (uint64_t)pdm.d);
+      snprintf(n, sizeof n, "%s pairs: offset", p.tag);
+      expect(n, (uint32_t)dut->pub_offset_o, (uint32_t)OFFP);
+      servo_mirror((int64_t)OFFP);
+      snprintf(n, sizeof n, "%s pairs: re-bases the phc", p.tag);
+      expect(n, !steps_seen.empty() && svm.stepped &&
+                    steps_seen.back() == svm.step_val, 1);
+    }
   }
 
   // ---- 12: syncReceiptTimeout (375 ms) -> sync-ok falls -----------------
@@ -752,8 +886,7 @@ int main(int argc, char **argv) {
     f.ts(0);
     send_frame(f.b, TRX3);
     run(2000);
-    Frame g = ptp(0x8, 0x0105, CORR_NS << 16, 0x0000, 10);
-    g.ts(ORG3);
+    Frame g = follow_up(0x0105, CORR_NS << 16, ORG3);
     send_frame(g.b, TRX3 + 500);
     run(6000);
     servo_mirror(1000000);
@@ -774,8 +907,7 @@ int main(int argc, char **argv) {
     f.ts(0);
     send_frame(f.b, TRX4);
     run(2000);
-    Frame g = ptp(0x8, 0x0106, CORR_NS << 16, 0x0000, 10);
-    g.ts(ORG4);
+    Frame g = follow_up(0x0106, CORR_NS << 16, ORG4);
     send_frame(g.b, TRX4 + 500);
     run(6000);
     servo_mirror(5000);
@@ -813,8 +945,7 @@ int main(int argc, char **argv) {
       f.ts(0);
       send_frame(f.b, local_rx);
       run(1000);
-      Frame g = ptp(0x8, sq, 0, 0x0000, 10);
-      g.ts(origin);
+      Frame g = follow_up(sq, 0, origin);
       send_frame(g.b, local_rx + 500);
       run(4000);
       if (k == 0) {
@@ -849,13 +980,11 @@ int main(int argc, char **argv) {
     f.ts(0);
     send_frame(f.b, TRX6);
     run(2000);
-    Frame g = ptp(0x8, 0x0401, 0, 0x0000, 10);   // wrong seq
-    g.ts(TRX6 - 5000);
+    Frame g = follow_up(0x0401, 0, TRX6 - 5000);   // wrong seq
     send_frame(g.b, TRX6 + 500);
     run(6000);
     expect("mismatched seq dropped", dut->pub_offset_o, off_before);
-    Frame h = ptp(0x8, 0x0400, 0, 0x0000, 10);   // the right one
-    h.ts(TRX6 - 5000);
+    Frame h = follow_up(0x0400, 0, TRX6 - 5000);   // the right one
     send_frame(h.b, TRX6 + 600);
     run(6000);
     const uint64_t OFF6 = TRX6 - (TRX6 - 5000 + (uint64_t)pdm.d);
@@ -871,13 +1000,11 @@ int main(int argc, char **argv) {
     f.ts(0);
     send_frame(f.b, TRX6 + 1000000000ull);
     run(2000);
-    Frame g = ptp(0x8, 0x0410, 0, 0x0000, 10, IMPOSTOR);
-    g.ts(TRX6 + 1000000000ull - 7000);
+    Frame g = follow_up(0x0410, 0, TRX6 + 1000000000ull - 7000, IMPOSTOR);
     send_frame(g.b, TRX6 + 1000000500ull);
     run(6000);
     expect("impostor FU dropped", dut->pub_offset_o, off_before);
-    Frame h = ptp(0x8, 0x0410, 0, 0x0000, 10);
-    h.ts(TRX6 + 1000000000ull - 7000);
+    Frame h = follow_up(0x0410, 0, TRX6 + 1000000000ull - 7000);
     send_frame(h.b, TRX6 + 1000000600ull);
     run(6000);
     const uint64_t OFF7 = 7000 - (uint64_t)pdm.d;
