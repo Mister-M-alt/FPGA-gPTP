@@ -9,7 +9,7 @@
 // end-of-frame event, and compares against independently packed expected
 // words. Also proves the drop arms: wrong EtherType, wrong
 // transportSpecific, wrong PTP version, foreign domainNumber, truncation,
-// rx_err.
+// a short messageLength, a Follow_Up without its information TLV, rx_err.
 
 #include <cstdint>
 #include <cstdio>
@@ -334,7 +334,111 @@ int main(int argc, char **argv) {
     expect_eq("domain 0x80 sig drop: one drop", dut->drop_cnt_o,
               (uint16_t)(d0 + 1));
   }
-  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 10));
+  // 802.1AS-2011 Table 11-9: a Follow_Up is 76 octets, the header, the
+  // preciseOriginTimestamp and the Follow_Up information TLV, which
+  // 11.4.4.3 makes a field of the message (tlvType 0x3, lengthField 28,
+  // organizationId 00-80-C2, organizationSubType 1: 11.4.4.3.2 to
+  // 11.4.4.3.5) and 11.4.4.2.2 places first; 10.5.2.2.4 counts exactly
+  // those 76 octets in messageLength. Until #11 the parser's Follow_Up
+  // minimum was the 44-octet header-and-timestamp shape and a TLV type
+  // mismatch only withheld bank word 11, so a TLV-less Follow_Up
+  // dispatched and steered. Arms: the issue's 44-octet shape and a
+  // declared length of 75, each refused at the messageLength byte with
+  // no event, no bank write and one counted drop; a declared 76 cut at
+  // 75 octets, refused at the end-of-frame gate (no event, one drop);
+  // then a TLV header wrong in exactly one field (tlvType 0x0008,
+  // lengthField 27, organizationId 00-1B-19, organizationSubType 2),
+  // each refused at the TLV arm with no event, no word-11 write and one
+  // drop. Controls: the complete Follow_Up dispatches with its word 11
+  // after the arms as it did before them, and a Follow_Up with a second
+  // TLV appended after the information TLV (messageLength 88) is
+  // accepted: 11.4.1 has a receiver skip a TLV it does not parse.
+  auto fu_frame = [&](uint16_t seq, uint16_t tlvt, uint16_t tlvl,
+                      uint32_t org, uint32_t sub) {
+    Hdr h; h.mtype = 0x8; h.seq = seq; h.srcid = 0xAABBCCFFFE001122ull;
+    h.srcpn = 1;
+    Frame f = common(h, 10 + 32);
+    f.u48(0x000012345678ull); f.u32(0x2FAF0800);
+    f.u16(tlvt); f.u16(tlvl);
+    f.u8((uint8_t)(org >> 16)); f.u8((uint8_t)(org >> 8)); f.u8((uint8_t)org);
+    f.u8((uint8_t)(sub >> 16)); f.u8((uint8_t)(sub >> 8)); f.u8((uint8_t)sub);
+    f.u32(0xFFFFF000); f.u16(0x0007);
+    for (int i = 0; i < 12; i++) f.u8(0);
+    f.u32(0x00000123);
+    return f;
+  };
+  const uint64_t W11 = (0xFFFFF000ull << 32) | (0x0007ull << 16);
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x8; h.seq = 0x0F44; h.srcid = 0xAABBCCFFFE001122ull;
+    h.srcpn = 1;
+    Frame f = common(h, 10);                         // messageLength 44
+    f.u48(0x000012345678ull); f.u32(0x2FAF0800);     // and no TLV
+    feed(f.b, false);
+    expect_eq("TLV-less fu drop: no event", ev_seen, 0);
+    expect_eq("TLV-less fu drop: no bank write", bank.size(), 0);
+    expect_eq("TLV-less fu drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F4B, 0x0003, 28, 0x0080C2, 1);
+    f.b[16] = 0; f.b[17] = 75;                       // messageLength 75
+    f.b.pop_back();                                  // in 75 octets
+    feed(f.b, false);
+    expect_eq("75-octet fu drop: no event", ev_seen, 0);
+    expect_eq("75-octet fu drop: no bank write", bank.size(), 0);
+    expect_eq("75-octet fu drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F4C, 0x0003, 28, 0x0080C2, 1);
+    f.b.pop_back();                                  // declared 76, cut at 75
+    feed(f.b, false);
+    expect_eq("cut fu drop: no event", ev_seen, 0);
+    expect_eq("cut fu drop: one drop", dut->drop_cnt_o, (uint16_t)(d0 + 1));
+  }
+  struct BadTlv { const char *tag; uint16_t tlvt, tlvl; uint32_t org, sub; };
+  const BadTlv bad_tlv[] = {
+    {"fu tlvType 0x0008 drop", 0x0008, 28, 0x0080C2, 1},
+    {"fu lengthField 27 drop", 0x0003, 27, 0x0080C2, 1},
+    {"fu orgId 00-1B-19 drop", 0x0003, 28, 0x001B19, 1},
+    {"fu orgSubType 2 drop", 0x0003, 28, 0x0080C2, 2},
+  };
+  for (const BadTlv &t : bad_tlv) {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F50, t.tlvt, t.tlvl, t.org, t.sub);
+    feed(f.b, false);
+    char n[64];
+    snprintf(n, sizeof n, "%s: no event", t.tag);
+    expect_eq(n, ev_seen, 0);
+    snprintf(n, sizeof n, "%s: no w11 write", t.tag);
+    expect_eq(n, bank.count(11), 0);
+    snprintf(n, sizeof n, "%s: one drop", t.tag);
+    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F76, 0x0003, 28, 0x0080C2, 1);
+    feed(f.b, false);
+    expect_eq("complete fu after the arms: event", ev_seen ? ev_code : 0, 2);
+    expect_eq("complete fu after the arms: ev_seq", ev_seq, 0x0F76);
+    expect_eq("complete fu after the arms: w11", bank[11], W11);
+    expect_eq("complete fu after the arms: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = fu_frame(0x0F88, 0x0003, 28, 0x0080C2, 1);
+    f.b[16] = 0; f.b[17] = 88;                       // messageLength 88:
+    f.u16(0x0008); f.u16(8);                         // a path trace TLV
+    f.u64(0x3333333333333333ull);                    // after the info TLV
+    feed(f.b, false);
+    expect_eq("fu with a trailing TLV: event", ev_seen ? ev_code : 0, 2);
+    expect_eq("fu with a trailing TLV: w11", bank[11], W11);
+    expect_eq("fu with a trailing TLV: no drop", dut->drop_cnt_o, d0);
+  }
+  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 17));
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;

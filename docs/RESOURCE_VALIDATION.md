@@ -184,3 +184,42 @@ planted mutations red (the three new ones: the domain arm removed fails
 16 parser and 23 engine checks, the compare narrowed to its low nibble
 7 and 2, the end-of-frame gate without its bad_r term 5 and 2), lint
 clean.
+
+## The Follow_Up round re-measured: the information TLV arms
+
+FPGA-gPTP #11, found by the parent's field campaign: the receive path
+accepted a 44-octet Follow_Up, the header and preciseOriginTimestamp
+without the information TLV that 802.1AS-2011 11.4.4.3 makes a field
+of the 76-octet message (Table 11-9), and that frame paired with a
+pending Sync and steered the servo. The fix is three arms in
+`KL_gptp_rx_parser`: the per-type minimum for a Follow_Up becomes the
+last octet of the 76 (the end-of-frame gate), the declared
+messageLength is compared against the same per-type table at header
+octets 2..3, ahead of every message-bank write (10.5.2.2.4 counts the
+TLV in it), and the TLV header at octets 44..53 must be
+{0x0003, 28, 00-80-C2, 1} (11.4.4.3.2 to 11.4.4.3.5) or the frame is
+refused. The 16-bit and 64-bit compares against constants are the
+cost; the per-type minimum flag that mirrored the end-of-frame gate
+and the TLV-type flag that only withheld bank word 11 are retired,
+which is the two flops back. Same instrument, Vivado 2026.1 OOC on
+`xc7a100tfgg484-2` at 100 MHz, 2026-08-22. The baseline is the tree
+at 5c330fc8 (PR #16, a ROM-only change that re-measures
+byte-identical to the domain-arm row above):
+
+| | 5c330fc8 (PR #16) | the Follow_Up arms | delta |
+|---|---|---|---|
+| Slice LUTs | 3,081 (2,755 logic + 326 LUTRAM) | **3,115** (2,789 + 326) | **+34** |
+| `u_parser` LUTs | 508 | 542 | +34 |
+| Registers | 2,392 | 2,390 | -2 |
+| `u_parser` registers | 259 | 257 | -2 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+Verification at this measurement: ucpu 768 / parser 78 / engine 203
+checks, thirty-nine planted mutations red (the two new ones: the
+Follow_Up minimum reverted to the 44-octet shape fails 9 parser and
+12 engine checks, the TLV header arms removed 13 and 6; two more are
+visible to the parser suite alone: the messageLength arm removed
+fails its two `no bank write` checks, the tlvType compared alone
+fails 10), lint clean.

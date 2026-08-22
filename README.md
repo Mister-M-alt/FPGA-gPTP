@@ -38,8 +38,14 @@ one identity are not a storm), and the parent's field campaign then
 found the receive side ignoring domainNumber (#6): the parser refuses
 any domain but 0 at the header byte, ahead of every bank write, so no
 handler can see a foreign-domain frame (-15 LUT: the domain byte of
-bank word 0 became the constant the parser admits). Next: the
-parent-side integration.
+bank word 0 became the constant the parser admits), and accepting a
+Follow_Up without the mandatory information TLV (#11): the parser now
+requires the 76-octet message of Table 11-9, refuses a short
+messageLength ahead of every bank write and the wrong TLV header
+(11.4.4.3) ahead of the event, so a TLV-less or truncated Follow_Up
+no longer reaches the servo (+34 LUT for the two compares, the
+redundant per-type minimum flag retired). Next: the parent-side
+integration.
 
 ## Why a µCPU with an ALU
 
