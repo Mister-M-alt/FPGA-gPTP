@@ -68,7 +68,9 @@ package gptp_ucpu_pkg;
     OP_SET_MASKED = 5'd6,
     // State (engine-side region map: msg bank / ts regs / scratch /
     // publish / phc / timer — see KL_gptp_engine)
-    OP_DESC_ADDR  = 5'd7,   // kept for encoding compatibility; unused
+    OP_DESC_ADDR  = 5'd7,   // loads the state-port base register: the
+                            // announce handler's path-trace walk indexes
+                            // the bank hops with it (10.3.10.2.1 c)
     OP_READ_ST    = 5'd8,
     OP_WRITE_ST   = 5'd9,
     OP_NAME_RD    = 5'd10,  // kept; unused (no name region in this plane)

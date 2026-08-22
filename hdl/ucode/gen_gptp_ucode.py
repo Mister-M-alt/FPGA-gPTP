@@ -1,7 +1,38 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""gPTP µcode ROM image generator -- v7, the cease-rule round.
+"""gPTP µcode ROM image generator -- v8, the announce qualification round.
+
+FPGA-gPTP #7, found by the parent's field campaign: the announce handler
+fed BTCA every well-formed Announce, so a better vector that 802.1AS-2011
+10.3.10.2.1 (qualifyAnnounce) disqualifies still moved the grandmaster.
+The three rules now run ahead of every write the handler makes:
+
+  * (a) sourcePortIdentity.clockIdentity equal to thisClock: an Announce
+    that claims to come from our own clock (our own frame reflected by a
+    switch, or forged) is not qualified. IEEE 1588-2008 9.3.2.5 a) is the
+    same rule.
+  * (b) stepsRemoved >= 255: not qualified (9.3.2.5 d): rogue frames are
+    extinguished; the mandatory backup to the path trace).
+  * (c) a path trace TLV whose pathSequence contains thisClock: the
+    loop-prevention rule. The parser lands the TLV's true hop count in
+    bank word 12 and the first eight hops in words 16..23; the walk is
+    gated by that count (a shorter trace leaves the previous frame's
+    hops standing in the upper words of the same bank) and capped at
+    the eight the bank holds. Hops beyond the cap are invisible to the
+    walk -- a loop through more than eight hops is caught by (b) only
+    once stepsRemoved reaches 255, the 1588 backstop.
+
+The indexed read of (c) is the first consumer of OP_DESC_ADDR: the
+µCPU's state-port base register is loaded from the S_PTIDX cell and
+restored from the always-zero S_ZERO cell before any other state access,
+because the base offsets EVERY read and write until it is cleared and
+nothing clears it at dispatch. (d)'s pathTrace copy for a SlavePort is
+moot on a single-port end station: a slave port transmits no Announce
+(the ANNTX leg is gated on the master role), so the global array has no
+reader here.
+
+--- v7, the cease-rule round ---
 
 The round that deliberately ends the zero-RTL era: the engine grows a
 SECOND message bank (each accepted frame lands in the bank its event
@@ -182,9 +213,21 @@ S_SSEQ, S_ASEQ, S_ANNBODY = 29, 30, 31
 # the widened half (the engine's 64-word scratch, v7)
 S_RSP1, S_IVMULTI, S_MULTI, S_CEASE = 32, 33, 34, 35
 S_CEASECNT = 36                          # cadence beats to resume
+S_PTIDX, S_ZERO = 37, 38                 # path-trace walk: the DESC_ADDR
+                                         # pointer cell (written before
+                                         # each read) and the base-restore
+                                         # cell, which nothing ever writes:
+                                         # LUTRAM powers on at zero and the
+                                         # init leg does not need to spend
+                                         # a word on either
 # S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
 # (steps ranks BELOW the identity in 10.3.5, so it never joins the
 # packed compare -- the pv compare masks the low 16 first)
+
+# ---- 802.1AS-2011 10.3.10.2.1 qualifyAnnounce -----------------------------
+STEPS_MAX_C = 255               # stepsRemoved >= this: not qualified (b)
+PT_CAP_C = 8                    # hops the message bank holds (w16..w23):
+                                # mirrors KL_gptp_rx_parser's cap
 
 # ---- our clock vector (Milan defaults) -------------------------------------
 P1_C, P2_C = 248, 248
@@ -540,18 +583,59 @@ def prog_rx_announce(base):
     e_guard_init(p, "out")
     # 802.1AS: a port that is not asCapable does not enter the contest
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "out")
+    # ---- 10.3.10.2.1 qualifyAnnounce, ahead of every write -----------
+    # (a) sent by this time-aware system: sourcePortIdentity.clockIdentity
+    #     equal to thisClock (IEEE 1588-2008 9.3.2.5 a); an Announce that
+    #     claims our own identity never re-elects anything
+    p.emit("RDST", rd=RD_, imm=RG_BANK | 2, fmt=FMT_Q)     # their source
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    p.emit("CMP", ra=RD_, rb=RT, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="out")
+    # (b) stepsRemoved >= 255 (IEEE 1588-2008 9.3.2.5 d): rogue frames
+    #     are extinguished; the raw field, before the receiver-side +1
+    p.emit("RDST", rd=RC, imm=RG_BANK | 10, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_SHR, imm=48)  # stepsRemoved
+    p.emit("CMP", ra=RC, rb=0, fmt=FMT_W, imm=STEPS_MAX_C)
+    p.emit("BRS", cnd=BRS_LT, label="steps_ok")
+    p.emit("BR", label="out")
+    p.label("steps_ok")
+    # (c) the path trace TLV carries thisClock: the loop-prevention rule.
+    #     Bank word 12 is the TLV's true hop count, words 16.. the hops the
+    #     bank holds: the walk is gated by the count (a shorter trace
+    #     leaves the previous frame's hops standing above it) and capped
+    #     at the bank's eight. Each hop is an indexed read through
+    #     OP_DESC_ADDR: the base register loads from the S_PTIDX cell and
+    #     is restored from S_ZERO BEFORE any other state access -- the
+    #     base offsets every RDST/WRST until then and dispatch never
+    #     clears it
+    p.emit("RDST", rd=RV, imm=RG_BANK | 12, fmt=FMT_Q)     # hop count
+    p.emit("CMP", ra=RV, rb=0, fmt=FMT_D, imm=PT_CAP_C + 1)
+    p.emit("BRS", cnd=BRS_LT, label="pt_n")
+    p.emit("MOVE", rd=RV, ra=0, imm=PT_CAP_C)              # capped walk
+    p.label("pt_n")
+    p.emit("RDST", rd=RW, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    p.emit("MOVE", rd=RU, ra=0, imm=0)                     # hop index
+    p.label("pt_loop")
+    p.emit("CMP", ra=RU, rb=RV, fmt=FMT_D)
+    p.emit("BRS", cnd=BRS_LT, label="pt_hop")
+    p.emit("BR", label="qualified")
+    p.label("pt_hop")
+    p.emit("WRST", ra=RU, imm=RG_SCR | S_PTIDX, fmt=FMT_Q)
+    p.emit("DADDR", ra=0, imm=RG_SCR | S_PTIDX)            # base = index
+    p.emit("RDST", rd=RT, imm=RG_BANK | 16, fmt=FMT_Q)     # hop[index]
+    p.emit("DADDR", ra=0, imm=RG_SCR | S_ZERO)             # base = 0
+    p.emit("CMP", ra=RT, rb=RW, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="out")                  # our hop: loop
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_ADD, imm=1)
+    p.emit("BR", label="pt_loop")
+    p.label("qualified")
+    # ---- (d) qualified: the vector, published raw first (bench) -------
     p.emit("RDST", rd=RA, imm=RG_BANK | 8, fmt=FMT_Q)   # their {utc,p1,cq,p2}
     p.emit("WRST", ra=RA, imm=RG_PUB | 5, fmt=FMT_Q)    # publish raw: bench
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_SHL, imm=16)  # {p1,cq,p2,0}
     p.emit("RDST", rd=RB, imm=RG_BANK | 9, fmt=FMT_Q)   # their gm identity
-    # snapshot the rest of the announce NOW: the single message bank
-    # belongs to the NEXT frame the moment it arrives, and this handler
-    # is long (the deferred double-bank engine revision retires this)
-    p.emit("RDST", rd=RC, imm=RG_BANK | 10, fmt=FMT_Q)
-    p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_SHR, imm=48)
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_ADD, imm=1)  # steps+1
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_AND, imm=0xFFFF)
-    p.emit("RDST", rd=RD_, imm=RG_BANK | 2, fmt=FMT_Q)     # their source
     # the snapshot closes by proving the bank still belongs to THIS
     # event: a delayed dispatch behind a busy handler would otherwise
     # read the NEXT frame and hand its source a parent-update take

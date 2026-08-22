@@ -254,3 +254,43 @@ was already there for the other five types. Verification at this
 measurement: ucpu 768 / parser 140 / engine 215 checks, forty-one
 planted mutations red (the new one: the Pdelay_Req minimum reverted to
 the 34-octet header fails 15 parser and 2 engine checks), lint clean.
+
+## The qualification round re-measured: ROM words only
+
+FPGA-gPTP #7, found by the parent's field campaign: the announce handler
+fed BTCA every well-formed Announce, so a better vector from our own
+clockIdentity, with stepsRemoved 255, or carrying our identity in its
+path trace moved the grandmaster. The fix is 802.1AS-2011 10.3.10.2.1
+qualifyAnnounce in ucode, ahead of every write the handler makes; its
+count-gated walk of the bank's path-trace hops is the first consumer
+of OP_DESC_ADDR, the state-port base register the ISA always had. No
+RTL logic changed (the package gained a comment). The ROM grew from 872
+to 895 real words of 1,024 (the announce handler 28 to 51 in its own
+slot; every leg address unchanged). Same instrument, Vivado 2026.1 OOC
+on `xc7a100tfgg484-2` at 100 MHz, 2026-08-22, against main at 310a6ea
+(PR #19) re-measured the same day (the parser arms of #18 and #19 moved the
+baseline by +34 LUT; this round moves nothing):
+
+| | 310a6ea (PR #19) | the qualification round | delta |
+|---|---|---|---|
+| Slice LUTs | 3,115 (2,789 logic + 326 LUTRAM) | **3,115** (2,789 + 326) | **0** |
+| `u_ucpu` LUTs | 1,997 | 1,997 | 0 |
+| Registers | 2,390 | 2,390 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+Byte-identical, as a ROM-only change must be: protocol behavior is ROM
+words, not fabric. Verification at this
+measurement: ucpu 768 / parser 140 / engine 284 checks, fifty-three
+planted mutations red (the twelve new ones, engine checks failed: the
+own-source rule removed 42 and its identity compare narrowed to 32 bits
+3, the stepsRemoved bound off by one 48 upward and 3 downward and its
+compare narrowed to a byte 30, a dead path-trace compare 44, the hop
+compare narrowed to 32 bits 3, the hop read from the next bank word 32,
+the hop-count gate removed 56, a walk one hop past the count 19, a
+one-hop walk 45, the state-port base left offset after the walk 78),
+lint clean. The review round added the first-hop loop (the one an end
+station meets without forgery), stepsRemoved 0x0100 and 0xFFFF, and two
+half-identity adopt-controls; the five mutations that had escaped the
+first round are red with them.

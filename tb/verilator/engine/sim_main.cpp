@@ -13,6 +13,16 @@
 //         Sync/Follow_Up byte-exact, BTCA both directions, adoption
 //  8b     a better Announce in a foreign domain never reaches BTCA: GM,
 //         parent, flags and the raw published vector hold (8.1, #6)
+//  8c..8m 802.1AS-2011 10.3.10.2.1 qualifyAnnounce: a better Announce
+//         from our own clock identity, with stepsRemoved 255 / 0x0100 /
+//         0xFFFF, or with our identity in its path trace (second hop,
+//         eighth hop, fourth of twelve, FIRST hop of two, the only hop)
+//         is refused before any state moves and is not a parser drop;
+//         the boundary control (stepsRemoved 254, a one-hop trace
+//         without us, in a bank whose upper hop words still hold our
+//         identity) and two half-identity controls (source and first
+//         hop differing from ours in one 32-bit half) adopt, and a
+//         degrade hands mastership back each time (#7)
 // 10..12  slave sync path: offset, sync-ok verdict, the 125 ms
 //         Follow_Up and 375 ms sync receipt timeouts (Table 4.2)
 // 11b     a Sync/Follow_Up pair in a foreign domain never steers: the
@@ -377,6 +387,27 @@ static void announce(uint16_t seq, uint8_t p1, uint64_t gmid,
   run(6000);
 }
 
+// an announce carrying {p1, gmid, steps} from `src` with a path trace TLV
+// (802.1AS-2011 10.5.3.3: tlvType 0x0008, one clockIdentity per hop);
+// an empty path omits the TLV
+static void send_announce(uint16_t seq, uint8_t p1, uint64_t gmid,
+                          uint16_t steps, uint64_t src,
+                          const std::vector<uint64_t> &path, uint64_t rx_ts) {
+  uint16_t tlv = path.empty() ? 0 : (uint16_t)(4 + 8 * path.size());
+  Frame a = ptp(0xB, seq, 0, 0x0008, (uint16_t)(30 + tlv), src);
+  for (int i = 0; i < 10; i++) a.u8(0);
+  a.u16(0xFFC4); a.u8(0);
+  a.u8(p1); a.u32(OUR_CQ); a.u8(248);
+  a.u64(gmid);
+  a.u16(steps); a.u8(0xA0);
+  if (!path.empty()) {
+    a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
+    for (uint64_t hop : path) a.u64(hop);
+  }
+  send_frame(a.b, rx_ts);
+  run_svc(6000);
+}
+
 static uint64_t fld48(const std::vector<uint8_t> &f, size_t o) {
   uint64_t v = 0; for (int i = 0; i < 6; i++) v = (v << 8) | f[o + i];
   return v;
@@ -672,6 +703,124 @@ int main(int argc, char **argv) {
            dut->pub_annq_o, ANNQ8);
     expect("foreign-domain announce: dropped and counted",
            dut->dbg_rx_drop_o, (uint16_t)(drops + 1));
+  }
+
+  // ---- 8c..8m: 802.1AS-2011 10.3.10.2.1 qualifyAnnounce -----------------
+  // every probe carries priority1 1, which wins BTCA outright (phase 9
+  // adopts priority1 100), so the only way the plane stays master is the
+  // qualification refusing the frame before the compare. The handler's
+  // first write is the raw vector publish, so pub_annq_o holding proves
+  // nothing moved; the parser accepted every frame, so the drop counter
+  // must NOT move either. The order is deliberate: accepted frames
+  // alternate between the two message banks, and the boundary control
+  // lands two frames after the [foreign, OUR_CID] probe, in the bank
+  // whose word 17 still holds our identity: only a walk reading past
+  // the hop count can see it (FPGA-gPTP #7)
+  {
+    const uint64_t PEER2 = 0x0080E1FFFE445566ull;
+    auto refuse_probe = [&](const char *tag, uint16_t seq, uint64_t gm,
+                            uint16_t steps, uint64_t src,
+                            const std::vector<uint64_t> &path, uint64_t rx) {
+      uint32_t flags0 = dut->pub_flags_o;
+      uint64_t annq0 = dut->pub_annq_o;
+      uint16_t drops0 = dut->dbg_rx_drop_o;
+      send_announce(seq, 1, gm, steps, src, path, rx);
+      char n[96];
+      snprintf(n, 96, "%s: still master", tag);
+      expect(n, dut->pub_flags_o & FL_AMGM, FL_AMGM);
+      snprintf(n, 96, "%s: gm still us", tag);
+      expect(n, dut->pub_gm_id_o, OUR_CID);
+      snprintf(n, 96, "%s: parent still us", tag);
+      expect(n, dut->pub_parent_id_o, OUR_CID);
+      snprintf(n, 96, "%s: flags untouched", tag);
+      expect(n, dut->pub_flags_o, flags0);
+      snprintf(n, 96, "%s: raw vector never published", tag);
+      expect(n, dut->pub_annq_o, annq0);
+      snprintf(n, 96, "%s: not a parser drop", tag);
+      expect(n, dut->dbg_rx_drop_o, drops0);
+    };
+    // an adopt-control: a priority1-1 announce that MUST be adopted, then
+    // the same announcer degrades below us, a parent update our own
+    // vector then wins (10.3.5), and mastership returns at once
+    auto adopt_control = [&](const char *tag, uint16_t seq, uint64_t gm,
+                             uint16_t steps, uint64_t src,
+                             const std::vector<uint64_t> &path, uint64_t rx) {
+      char n[96];
+      send_announce(seq, 1, gm, steps, src, path, rx);
+      snprintf(n, 96, "%s: adopted", tag);
+      expect(n, dut->pub_gm_id_o, gm);
+      snprintf(n, 96, "%s: announcer is the parent", tag);
+      expect(n, dut->pub_parent_id_o, src);
+      snprintf(n, 96, "%s: no longer master", tag);
+      expect(n, dut->pub_flags_o & FL_AMGM, 0);
+      send_announce((uint16_t)(seq + 1), 250, gm, steps, src, path,
+                    rx + 100000);
+      snprintf(n, 96, "%s: degraded parent yields", tag);
+      expect(n, dut->pub_flags_o & 3, FL_PRESENT | FL_AMGM);
+      snprintf(n, 96, "%s: gm is us again", tag);
+      expect(n, dut->pub_gm_id_o, OUR_CID);
+    };
+    // 8c: (a) sent by this time-aware system: our own clockIdentity as
+    // the source, a foreign MAC (a reflected or forged frame)
+    refuse_probe("own-source announce", 12, 0x0000000000002222ull, 0,
+                 OUR_CID, {}, 5600000);
+    // 8d: (b) stepsRemoved 255 (IEEE 1588-2008 9.3.2.5 d)
+    refuse_probe("stepsRemoved-255 announce", 13, 0x0000000000002222ull, 255,
+                 PEER2, {}, 5700000);
+    // 8g: (c) beyond the cap: twelve hops, ours the fourth; the count
+    // reports twelve, the bank holds eight, the walk must still see it
+    {
+      std::vector<uint64_t> path;
+      for (int i = 0; i < 12; i++) path.push_back(0x6000 + i);
+      path[3] = OUR_CID;
+      refuse_probe("deep-trace loop announce", 16, 0x0000000000006000ull, 11,
+                   PEER2, path, 5800000);
+    }
+    // 8f: (c) at the bank's cap: eight hops, ours the eighth
+    {
+      std::vector<uint64_t> path;
+      for (int i = 0; i < 7; i++) path.push_back(0x5000 + i);
+      path.push_back(OUR_CID);
+      refuse_probe("eighth-hop loop announce", 15, 0x0000000000005000ull, 7,
+                   PEER2, path, 5900000);
+    }
+    // 8i: (c) at the FIRST hop, the one loop an end station meets without
+    // forgery: our own Announce as grandmaster returned through a bridge
+    // (the bridge's source identity, so (a) does not fire; pathSequence[0]
+    // is us, the bridge behind it). A walk reading the next bank word
+    // would miss it
+    refuse_probe("first-hop loop announce", 19, 0x0000000000007777ull, 1,
+                 PEER2, {OUR_CID, 0x0000000000007777ull}, 6000000);
+    // 8j: (c) a single-hop trace that is us, the grandmaster field ours too
+    refuse_probe("single-hop loop announce", 20, OUR_CID, 0, PEER2,
+                 {OUR_CID}, 6100000);
+    // 8e: (c) our identity as the second hop of a two-hop path trace
+    // (the parent campaign's probe shape); this frame leaves our
+    // identity in word 17 of its bank for the boundary control below
+    refuse_probe("path-trace-loop announce", 14, 0x0000000000003333ull, 1,
+                 PEER2, {0x0000000000003333ull, OUR_CID}, 6200000);
+    // 8m: (b) above 255: 0x0100, which a byte-wide compare would admit
+    refuse_probe("stepsRemoved-0x0100 announce", 21, 0x0000000000002222ull,
+                 0x0100, PEER2, {}, 6300000);
+    // 8h: the boundary control ADOPTS: stepsRemoved 254, a one-hop path
+    // trace without us, landing in the bank whose word 17 still holds
+    // our identity from 8e: a walk not gated by the hop count, or one
+    // hop past it, would refuse it
+    const uint64_t GMQ = 0x00D1D1FFFE000004ull, SRCQ = 0x00D1D1FFFE000005ull;
+    adopt_control("boundary-clean announce", 17, GMQ, 254, SRCQ, {GMQ},
+                  6400000);
+    // 8m: (b) the field's maximum
+    refuse_probe("stepsRemoved-0xFFFF announce", 22, 0x0000000000002222ull,
+                 0xFFFF, PEER2, {}, 6600000);
+    // 8k, 8l: the identity compares are 64 bits wide. Two adopt-controls
+    // whose source clockIdentity and whose first hop each differ from
+    // ours in ONE 32-bit half only (8k: the source in the high half, the
+    // hop in the low half; 8l: the other way round): a compare narrowed
+    // to either half would refuse a legitimate master
+    adopt_control("half-identity control A", 23, 0x00D2D2FFFE000006ull, 0,
+                  OUR_CID ^ (1ull << 40), {OUR_CID ^ 1ull}, 6700000);
+    adopt_control("half-identity control B", 25, 0x00D3D3FFFE000007ull, 0,
+                  OUR_CID ^ 1ull, {OUR_CID ^ (1ull << 40)}, 6900000);
   }
 
   // ---- 9: better announce -> adopt, sync stops --------------------------
