@@ -489,3 +489,105 @@ that differs from us in only the other half), lint clean. Nothing is
 counted when the request is refused: the refusal is in ucode, and
 `dbg_rx_drop_o` counts what the parser refused, which holds no identity
 of its own.
+
+## The tag-matched stamp round re-measured: ROM words only
+
+FPGA-gPTP #28: one scratch cell said which pending transmission the next
+egress timestamp belonged to, so any Pdelay_Req arriving while our own
+request was still owed its stamp overwrote it, and our t1 was never
+stored. The exposure is not a race of a few cycles: measured by sweeping
+a genuine peer request against the stamp, the steal works at leads of 0,
+1, 10, 100, 2,000, 20,000, 200,000 and 1,000,000 cycles and stops only
+once the stamp has already arrived, so the window is the whole interval
+our request is outstanding. Its floor here is the frame's own
+serialization, 68 bytes at one byte per clock, and the rest of it is the
+parent's path to the MAC boundary and back, which this repository does
+not model; kebag-logic/milan-fpga#213 measures the real width and the
+real stamp separation on hardware.
+
+The arm routes each stamp to a claim by the sequenceId the stamp names,
+which narrows the credit without making it unambiguous, so #28 stays
+open. Sixteen bits of sequenceId is not an identity: two outstanding
+frames whose tags coincide cannot be told apart here, and since both
+ends of a link run this implementation and both start S_MYSEQ at zero
+and advance once a second, their request sequences are equal FROM BOOT
+rather than coinciding one time in 65,536. Three legs also SEND and
+leave no claim, prog_leg_anntx, prog_leg_syncfu and prog_leg_rfu, while
+the parent's stamper stamps every armed 0x88F7 frame without filtering
+on messageType, so a stamp from one of those can match and clear a claim
+belonging to a different frame. What this round does achieve is the
+shared cell gone, each claim explicit, and the case that was a certainty
+rather than a coincidence closed: a peer request landing anywhere in our
+outstanding interval no longer diverts our stamp. The clean closure is
+msgType beside the sequenceId (kebag-logic/milan-fpga#214), after which
+the compare takes both and #28 can close.
+KL_gptp_txstamp already reports that sequenceId, the engine already
+carries it in the event descriptor, and the dispatch already preloads
+the descriptor into REV; only the ucode ignored it. Matching on it is
+order-independent, so it rests on no assumption about the order stamps
+come back in, which is a parent property this repository cannot
+establish. Two claim cells are enough rather than three: the two
+timer-driven transmitters already skip their beat while a timer-driven
+stamp is owed, so no second timer-driven frame joins them, and a
+flag bit above the sequenceId says which of the two a timer claim is.
+That shape was forced by measurement, not chosen: the three-cell form
+put the timer program at 197 words against its hard 192-word slot. The
+flags sit at bits 20 and 21 because a bank-word-0 read leaves the
+messageType nibble at bits [19:16], which collided with a flag at bit
+16 and cost the responder its match until every claim was masked to
+TXQ_MASK_C before comparison. A third fact belongs beside them: the tag
+must be bounded to 16 bits BEFORE the flags are or'd in, because
+S_MYSEQ is a free-running counter whose bit 21 is TXP_SYNC_C. Unbounded,
+every Pdelay_Req stamp from request 2,097,152 onwards, 24.3 days at this
+cadence, routes to the Sync Follow_Up leg and the plane emits Follow_Ups
+built from a request's egress time while a slave, which 802.1AS-2011
+11.2.14 does not permit; it is a certainty at a fixed uptime rather than
+a race. The mask that bounds it needed a word, and entry 512 had none,
+which is the fourth fact: a fourth transmitter needs all of them.
+
+No RTL changed. The ROM grew from 932 to 941 real words of 1,024 (+9).
+The headline free figure, 83, is misleading on its own: the free words
+are in other gaps, and the timer program at entry 512 has almost none.
+It is 191 of its 192 words in the shipping image and 192 of 192 in the
+seeded regression image, whose two extra init instructions replace one,
+so the seeded build is the binding constraint and anything added to the
+timer program must free a word first. The mask above was paid for that
+way, by removing two init zero writes that are redundant under the
+invariant recorded beside their definitions, S_CEASECNT and S_MULTI.
+This round also moves legs: RFU 964 to 470, SYNCFU 914 to 967 and
+SYNCTX 459 to 914, with the other nine bases unchanged, so 288 word
+positions differ. Same instrument, Vivado 2026.1 OOC on
+`xc7a100tfgg484-2` at 100 MHz, 2026-08-22, against main at 5d4fcc67
+re-measured the same day in its own worktree:
+
+| | 5d4fcc67 (PR #29) | the tag-matched stamp | delta |
+|---|---|---|---|
+| Slice LUTs | 3,116 (2,790 logic + 326 LUTRAM) | **3,116** (2,790 + 326) | **0** |
+| `u_ucpu` LUTs | 1,997 | 1,997 | 0 |
+| `u_parser` LUTs | 543 | 543 | 0 |
+| Registers | 2,390 | 2,390 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+Byte-identical, as a ROM-only change must be. Verification at this
+measurement: ucpu 768 / parser 167 / engine 348 checks, seventy-three
+planted mutations red (this round's five, engine checks failed: the
+response's claim written into the timer transmitter's cell so the two
+share one again 12 of the 338 the run reaches, the stamp's sequenceId
+ignored so the first claim present takes it 4, the response leaving no
+claim at all 151 of 305, the compare narrowed to the low 8 bits 4, and
+the claim tag left unbounded 130 of the 314 the seeded regression image
+reaches while the shipping image passes it 352 of 352), lint clean.
+
+Two things this round does not close, both recorded rather than
+implied. The engine still holds ONE egress timestamp and samples it at
+dispatch, so two stamps closer together than the dispatch latency lose
+the first value whatever the claims say (#31); the equal-sequence phase
+above reproduces it in one line if its gap is removed. And #28 itself
+stays open for the reasons in the second paragraph: colliding tags and
+frames that leave no claim. The suite pins what the arm does achieve,
+including a pair of claims differing only in the high byte of the
+sequenceId, which a compare narrowed to the low 8 bits fails, and a
+seeded regression image that starts the request counter above 16 bits,
+which no ordinary run can reach.
