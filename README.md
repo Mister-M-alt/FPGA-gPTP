@@ -82,18 +82,28 @@ OOC at 3,115 LUT / 2,390 FF / WNS +1.898 ns
 
 **Parent status:** the splice is landed (parent #114, 2026-08-19,
 option-gated) and the pin advances by pin-bearing commits on the
-parent's `dev` (`5c330fc8`, the #16 merge, at the time of this commit;
-the parent tickets below move it forward). The parent's
+parent's `dev`, at `5c330fc8` (the #16 merge): the pin trails the donor
+by design, and the parent tickets below move it forward. The parent's
 `tb/verilator/tsn_fuzz` field campaign (`make ptp`, `fuzz_ptp.py`) grades
 the whole slice in both directions -- every spec-constrained field of all
 six of the plane's own TX message types (Pdelay_Req, Pdelay_Resp,
 Pdelay_Resp_Follow_Up, Announce, Sync and Follow_Up) against the tsn-gen
 8021as models, and the parser's drop and ignore arms under per-field
-illegal probes -- and found #6 through #10; each donor fix retires
-exactly its own tracked-gap allowance there at the repin, one parent
-ticket per donor issue: #138 (#6) done at the `dd0f56e3` pin, #139 (#9)
-done at the `5c330fc8` pin (PR #208, dev `4ec73a15`), #137 (#10), #140
-(#11), #142 (#12), #136 (#7) and #141 (#8) pending. Parent PR #135
+illegal probes -- and found #6 through #10. Each donor fix retires its
+own allowance at the repin, one parent ticket per donor issue, by one of
+two mechanisms. A tracked gap marker covers #6, #9, #10, #7 and #8: the
+ones still standing on `dev` `4ec73a15` are
+`gaps={"origin_timestamp": 10}` (`fuzz_ptp.py:489`, #137 for #10), the
+issue-8 arm (`:675`, #141 for #8) and the issue-7 arms (`:747`, plus
+`:719` reached from its two issue-7 `reject_probe` call sites `:736`
+and `:739`, #136 for #7), while #138 (#6) is done at the `dd0f56e3` pin
+and #139 (#9) at the `5c330fc8` pin (PR #208, dev `4ec73a15`), both
+markers already gone. For #11 and #12 there is no allowance to delete:
+what moves is the campaign's truncation oracle, which cuts at this
+parser's donor minima (`:573-582`, in frame bytes: Sync 58, Follow_Up
+58, Announce 78, Pdelay_Req 48), so #140 (#11) carries the Follow_Up cut
+to the legal 90 bytes and #142 (#12) the Pdelay_Req cut to 68. #137,
+#140, #142, #136 and #141 are pending. Parent PR #135
 (default on at VERSION
 0x0002_0055) was closed unmerged: the default flip, the CSR compatibility
 transition and the rootfs service retirement stay with parent issue #116,
