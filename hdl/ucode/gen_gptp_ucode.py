@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""gPTP µcode ROM image generator -- v8, the announce qualification round.
+"""gPTP µcode ROM image generator -- v8, the announce qualification and the
+Pdelay_Resp_Follow_Up pairing rounds.
 
 FPGA-gPTP #7, found by the parent's field campaign: the announce handler
 fed BTCA every well-formed Announce, so a better vector that 802.1AS-2011
@@ -31,6 +32,44 @@ nothing clears it at dispatch. (d)'s pathTrace copy for a SlavePort is
 moot on a single-port end station: a slave port transmits no Announce
 (the ANNTX leg is gated on the master role), so the global array has no
 reader here.
+
+FPGA-gPTP #8, found by the parent's field campaign: the
+Pdelay_Resp_Follow_Up handler qualified requestingPortIdentity and
+nothing else, so ONE unsolicited Follow_Up carrying our identity and a
+stale sequenceId computed a delay from whatever t1/t2/t4 were lying in
+scratch, published 20 ms of neighborPropDelay and dropped asCapable.
+802.1AS-2011 11.2.15.3 (Figure 11-8, the MDPdelayReq state machine) is
+now the receive rule on both messages:
+
+  * WAITING_FOR_PDELAY_RESP: a Pdelay_Resp is taken only when its
+    sequenceId is the OUTSTANDING request's (S_MYSEQ - 1 on the wire's
+    16 bits) and its requestingPortIdentity is ours. It arms the
+    pairing: S_RSPSEQ holds the sequence with bit 16 set (a zero word is
+    "no response"), S_RSPSRC the responder's clockIdentity.
+  * WAITING_FOR_PDELAY_RESP_FOLLOW_UP: a Pdelay_Resp_Follow_Up is
+    consumed only when it carries the armed sequenceId and comes from
+    the armed responder (the figure's "sourcePortIdentity equal to the
+    Pdelay_Resp's"); consumption clears the arm, so a duplicate pairs
+    with nothing. Every other Follow_Up is ignored: neighborPropDelay,
+    the ladder and asCapable do not move, nothing is counted lost.
+  * Each new Pdelay_Req clears the arm: a Follow_Up for a superseded
+    request cannot pair with the new request's t1.
+  * A completed exchange stays completed: while S_PDGOT stands (set by
+    both verdict paths, cleared by each new request) a Pdelay_Resp for
+    the outstanding sequenceId does not re-arm, so a replayed or
+    duplicated pair neither recomputes neighborPropDelay nor climbs the
+    ladder twice in one interval (Figure 11-8 as corrected by
+    Cor2-2015: after the pair, only the interval timer leaves
+    WAITING_FOR_PDELAY_INTERVAL_TIMER). The identity bookkeeping of the
+    cease rule still sees that response.
+
+With more than one responder in an interval the LAST matching
+Pdelay_Resp owns the stored t2/t4 and the pairing, which keeps one
+exchange's timestamps from one clock; the multiple-responder policy
+itself stays the Milan 4.2.6.2.5 cease rule below (the 2011 figure's
+RESET on a second response is not adopted, as the v7 round decided for
+same-identity duplicates). Identity scope is unchanged: the clockIdentity
+alone, never the portNumber.
 
 --- v7, the cease-rule round ---
 
@@ -220,6 +259,10 @@ S_PTIDX, S_ZERO = 37, 38                 # path-trace walk: the DESC_ADDR
                                          # LUTRAM powers on at zero and the
                                          # init leg does not need to spend
                                          # a word on either
+S_RSPSEQ, S_RSPSRC = 39, 40              # the armed Pdelay_Resp: its
+                                         # sequenceId | RSP_ARMED_C, and
+                                         # its sourcePortIdentity (written
+                                         # before it is ever read: no init)
 # S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
 # (steps ranks BELOW the identity in 10.3.5, so it never joins the
 # packed compare -- the pv compare masks the low 16 first)
@@ -228,6 +271,10 @@ S_PTIDX, S_ZERO = 37, 38                 # path-trace walk: the DESC_ADDR
 STEPS_MAX_C = 255               # stepsRemoved >= this: not qualified (b)
 PT_CAP_C = 8                    # hops the message bank holds (w16..w23):
                                 # mirrors KL_gptp_rx_parser's cap
+
+# ---- 802.1AS-2011 11.2.15.3 Pdelay_Resp / Resp_Follow_Up pairing ------------
+RSP_ARMED_C = 0x10000           # set above the 16-bit sequenceId in
+                                # S_RSPSEQ: a zero word is "no response"
 
 # ---- our clock vector (Milan defaults) -------------------------------------
 P1_C, P2_C = 248, 248
@@ -691,13 +738,49 @@ def prog_rx_pdresp(base):
     p.emit("BRS", cnd=BRS_Z, label="mine")
     p.emit("BR", label="out")
     p.label("mine")
+    # 11.2.15.3 (Figure 11-8, WAITING_FOR_PDELAY_RESP): the response must
+    # carry the sequenceId of OUR outstanding request, S_MYSEQ - 1 on the
+    # wire's 16 bits (S_MYSEQ is never 0 here: the init leg sends the
+    # first request in the dispatch that sets S_INIT, and scratch
+    # survives a warm reset)
+    p.emit("RDST", rd=RU, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=1)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=0xFFFF)
+    p.emit("RDST", rd=RT, imm=RG_BANK | 0, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=0xFFFF)   # their seq
+    p.emit("CMP", ra=RT, rb=RU, fmt=FMT_W)
+    p.emit("BRS", cnd=BRS_Z, label="rs_ok")
+    p.emit("BR", label="out")
+    p.label("rs_ok")
+    # Figure 11-8 (as corrected by Cor2-2015): once the outstanding
+    # request's pair has completed, the machine waits for the interval
+    # timer, and a further Pdelay_Resp for that sequenceId is not an
+    # exchange. S_PDGOT is set by both verdict paths of the completion
+    # and cleared by each new request, so while it stands nothing
+    # re-arms: a replayed pair can neither recompute the delay nor climb
+    # the ladder a second time in one interval. The Milan 4.2.6.2.5
+    # identity bookkeeping below still sees every matching response
+    p.emit("RDST", rd=RC, imm=RG_BANK | 2, fmt=FMT_Q)            # their source
+    p.emit("RDST", rd=RU, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="arm")
+    p.emit("BR", label="multi")                                   # completed
+    p.label("arm")
+    # arm the Follow_Up pairing: this sequence, this responder. The LAST
+    # matching response before the Follow_Up owns the stored t2/t4, so
+    # the Follow_Up must come from it; a second identity is the Milan
+    # 4.2.6.2.5 bookkeeping below, not a reset
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_OR, imm=RSP_ARMED_C)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_RSPSRC, fmt=FMT_Q)
     e_full_ts(p, RA)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_T2, fmt=FMT_Q)
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_T4, fmt=FMT_Q)
+    p.label("multi")
     # 4.2.6.2.5 bookkeeping: a SECOND distinct responder identity in
     # one request interval marks it multi (duplicates are not a storm)
     p.emit("RDST", rd=RB, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
-    p.emit("RDST", rd=RC, imm=RG_BANK | 2, fmt=FMT_Q)
     p.emit("CMP", ra=RB, rb=0, fmt=FMT_Q, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="rsp1")
     p.emit("CMP", ra=RB, rb=RC, fmt=FMT_Q)
@@ -797,7 +880,8 @@ def prog_tmr(base, mac):
     for s in (S_SYNCTS, S_PDELAY, S_T2, S_SSEQFLY,
               S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NR4, S_NRR, S_INTG,
               S_T1, S_T4, S_PEND, S_MYSEQ, S_SSEQ, S_ASEQ,
-              S_RSP1, S_IVMULTI, S_MULTI, S_CEASE, S_CEASECNT):
+              S_RSP1, S_IVMULTI, S_MULTI, S_CEASE, S_CEASECNT,
+              S_RSPSEQ):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_INIT, fmt=FMT_Q)
@@ -876,6 +960,7 @@ def prog_tmr(base, mac):
     p.emit("COMMIT")
     p.label("pd_go")
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)  # no arm yet
     p.emit("RDST", rd=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
     e_hdr(p, 0x2, 0x0000, RA, 0x00, 54)
     p.emit("BFLD", ra=0, fmt=FMT_Q)
@@ -1029,6 +1114,31 @@ def prog_leg_pdpost(base):
     """Pdelay exchange complete; RC = t3. neighborRateRatio, corrected
     link delay, the threshold verdict and the asCapable ladder."""
     p = Prog(base)
+    # 11.2.15.3 (Figure 11-8, WAITING_FOR_PDELAY_RESP_FOLLOW_UP): the
+    # Follow_Up is consumed only when a Pdelay_Resp with this sequenceId
+    # answered the outstanding request (the arm is cleared by each new
+    # request and by consumption) and it comes from that responder;
+    # anything else is ignored here, ahead of every write, and
+    # neighborPropDelay, the ladder and asCapable stay where they are.
+    # This leg is the Follow_Up handler's only continuation; it lives
+    # here rather than in the fixed slot so SERVO keeps its 48-word home
+    # behind that slot (the ROM is 88 percent full; see the packer)
+    p.emit("RDST", rd=RT, imm=RG_BANK | 0, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=0xFFFF)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_OR, imm=RSP_ARMED_C)
+    p.emit("RDST", rd=RU, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)
+    p.emit("CMP", ra=RT, rb=RU, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="fu_seq")
+    p.emit("END")
+    p.label("fu_seq")
+    p.emit("RDST", rd=RT, imm=RG_BANK | 2, fmt=FMT_Q)
+    p.emit("RDST", rd=RU, imm=RG_SCR | S_RSPSRC, fmt=FMT_Q)
+    p.emit("CMP", ra=RT, rb=RU, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="paired")
+    p.emit("END")
+    p.label("paired")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)  # one FU per Resp
     # ceased: no exchange may climb the ladder (a forged or straggling
     # response pair must not re-raise asCapable mid-cease)
     p.emit("RDST", rd=RT, imm=RG_SCR | S_CEASE, fmt=FMT_Q)

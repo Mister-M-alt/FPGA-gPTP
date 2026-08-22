@@ -19,10 +19,12 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 |---|---|
 | 1, 3, 6, 7 | Table 11-7 `controlField`: Sync = 0, Follow_Up = 2, Announce and every Pdelay message = 5 |
 | 1, 2 | asCapable is NOT set after one good exchange (4.2.6.2.4) |
+| 1b | a Follow_Up for the boot request (sequence 0) ahead of any Resp, sourced from the zero identity a never-armed pairing holds, is ignored: "armed with sequence 0" is not "nothing armed" (11.2.15.3) |
 | 3b | a foreign-domain Pdelay_Req (domain 0x10) draws no Pdelay_Resp and counts one drop; a domain-0 request right after it is answered with its own sequence and its Resp_FU |
 | 3c | a header-only Pdelay_Req (messageLength 34 in a 48-byte frame) and a declared 54 cut at 53 octets draw no Pdelay_Resp and count one drop each; the complete request right after them is answered with its own sequence and its Resp_FU (Table 11-11, #12) |
 | 4 | it IS set at the second; pdelay matches the nrr-corrected model |
 | 5 | become-master waits for asCapable |
+| 7b | 802.1AS-2011 11.2.15.3 (Figure 11-8): a Pdelay_Resp_Follow_Up pairs with ONE Pdelay_Resp for the outstanding request. Before any Resp, with a stale sequenceId (the parent campaign's 0xEEEE probe), behind a stale-sequence Resp (0xEEEE, and the outstanding sequence with its high byte flipped), from another responder, duplicated, or for a superseded request it leaves pdelay and asCapable unmoved (a wrongly consumed one would publish -400 ns and clear asCapable); the paired Follow_Up and the next exchange compute the model value |
 | 8b | a BETTER Announce in a foreign domain never reaches BTCA: GM, parent, flags and the raw published vector hold and the drop is counted (802.1AS-2011 8.1, IEEE 1588-2008 9.5.1) |
 | 8c..8m | 802.1AS-2011 10.3.10.2.1 qualifyAnnounce: a priority1-1 Announce from our own clockIdentity (a), with stepsRemoved 255, 0x0100 or 0xFFFF (b: the 16-bit field, not its low byte), or with our identity in its path trace (c: the second hop, the eighth hop at the bank's cap, the fourth of twelve beyond it, the FIRST hop of two with a bridge behind us, the only hop) is refused ahead of every write: GM, parent, flags and the raw published vector hold, and the parser's drop counter does not move (a qualification refusal is not a header drop). The first-hop shape is the one loop an end station meets without forgery, our own Announce returned through a bridge; it pins the walk's base word |
 | 8h, 8k, 8l | the controls adopt: stepsRemoved 254 and a one-hop path trace without us, landing in a bank whose upper hop words still hold our identity (the walk is gated by the TLV's hop count, not the bank's depth); then two announces whose source clockIdentity and first hop each differ from ours in one 32-bit half only (the compares are 64 bits wide, never a half); each announcer's degrade hands mastership straight back (10.3.5) |
@@ -48,18 +50,24 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 24 | recovery needs two good exchanges again |
 | 25 | the FOURTH lost response clears it (802.1AS-2011 11.2.12.4) |
 | 26 | a ratio window wider than 2^32 ns is skipped, not divided stale |
-| 27 | the Milan 4.2.6.2.5 cease rule: three multi-identity intervals stop Pdelay_Req and drop asCapable, the cadence countdown resumes them, the ladder re-earns; SAME-identity duplicates are not a storm; replayed forged response pairs cannot climb mid-cease |
+| 26b | a completed exchange cannot be completed again (Figure 11-8 as corrected by Cor2-2015): with asCapable down and one exchange in, the identical Resp + Follow_Up pair replayed is not a second exchange (asCapable holds down, Milan 4.2.6.2.4) and a replay with t4 skewed +2 us cannot move the published delay |
+| 27 | the Milan 4.2.6.2.5 cease rule: three multi-identity intervals stop Pdelay_Req and drop asCapable, the cadence countdown resumes them, the ladder re-earns; SAME-identity duplicates are not a storm; replayed forged response pairs (t3 skewed) can neither climb nor publish mid-cease |
 | 28 | a warm reset during a cease still resumes: the countdown lives in reset-surviving scratch and the boot re-arms the cadence |
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All fifty-three planted mutations (the own-source rule removed, its
+All sixty-two planted mutations (the own-source rule removed, its
 identity compare narrowed to 32 bits, the stepsRemoved bound off by one
 in either direction, its compare narrowed to a byte, a dead path-trace
 compare, the hop compare narrowed to 32 bits, the hop read from the next
 bank word, the hop-count gate removed, a walk one hop past the count, a
-one-hop walk, the state-port base left offset after the walk, the shared
-TX control value, ladder trigger, both pdelay
+one-hop walk, the state-port base left offset after the walk, a
+Pdelay_Resp taken for any sequenceId, its sequence compare narrowed to a
+byte, the arm cleared on the Resp itself, a Follow_Up taken with nothing
+armed, the armed bit dropped from its compare, the pairing not consumed,
+the responder identity not paired, the arm surviving the next request, a
+completed exchange armed again, the shared TX control value, ladder
+trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
 sync void, a dead step threshold, both servo sign errors, a dead

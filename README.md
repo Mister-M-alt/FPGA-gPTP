@@ -53,7 +53,13 @@ handler admitting every well-formed Announce (#7): 802.1AS-2011
 the handler makes (our own clockIdentity as the source, stepsRemoved 255
 and above, our identity anywhere in the path trace the bank holds), its
 count-gated hop walk the first consumer of OP_DESC_ADDR (+23 ROM words,
-zero LUT). Next: the parent-side integration.
+zero LUT), and then one unsolicited Pdelay_Resp_Follow_Up poisoning
+neighborPropDelay and dropping asCapable (#8): both Pdelay receive
+handlers now pair per 802.1AS-2011 11.2.15.3, a Pdelay_Resp taken only
+for the outstanding request's sequenceId and never again once its
+exchange has completed, a Follow_Up only behind that Pdelay_Resp and
+from its sender (+32 ROM words, zero LUT). Next: the parent-side
+integration.
 
 ## Why a µCPU with an ALU
 
