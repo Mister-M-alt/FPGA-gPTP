@@ -68,18 +68,25 @@ handlers now pair per 802.1AS-2011 11.2.15.3, a Pdelay_Resp taken only
 for the outstanding request's sequenceId and never again once its
 exchange has completed, a Follow_Up only behind that Pdelay_Resp and
 from its sender (+32 ROM words, zero LUT). Nothing of #6 through #12
-remains open, nor does #23, and #26 closes here. The donor issues open
-at this commit are all review findings on pre-existing behaviour: #28 (a
-Pdelay_Req arriving while our own request waits for its egress timestamp
-steals it through the shared pending cell, so the delay reads 500,600 ns
-and asCapable cannot climb), #27 (a zero-gap 1-byte runt landing the
-cycle after a dropped frame is not counted) and #30 (the
-requestingPortIdentity gate is unpinned and omits Figure 11-8's
-portNumber term); the issue tracker is the authority, not this
-paragraph. Measured at this commit (`main` 03ad3caf plus the
-reflected-request arm): ucpu 768 / parser 167 / engine 340 checks,
-seventy planted mutations red, lint clean; the ROM is 932 of 1,024
-words, 92 free; the engine synthesizes OOC at 3,116 LUT / 2,390 FF /
+remains open, nor do #23 and #26. An egress timestamp now goes to a
+claim named by the sequenceId the stamp carries rather than to whichever
+transmission a single shared cell last named, which closes the case that
+was a certainty, a peer request landing anywhere in our outstanding
+interval, but not #28 itself: sixteen bits of sequenceId is not an
+identity, and three legs send while leaving no claim. The donor issues
+open at this commit are all review findings on pre-existing behaviour:
+#28 (the remainder above, closable once the parent exports msgType
+beside the sequenceId), #31 (the engine holds ONE egress timestamp and
+samples it at dispatch, so a second stamp arriving first destroys it),
+#30 (the requestingPortIdentity gate is unpinned and omits Figure
+11-8's portNumber term), #27 (a zero-gap 1-byte runt landing the cycle
+after a dropped frame is not counted) and #33 (the bench pins
+`tx_ready_i` high, so the TX backpressure path is unobserved); the issue
+tracker is the authority, not this paragraph. Measured at this commit
+(`main` 5d4fcc67 plus the tag-matched stamp): ucpu 768 / parser 167 /
+engine 352 checks, seventy-five planted mutations red, lint clean; the
+ROM is 941 of 1,024 words, and the timer program is at 192 of 192 with
+no headroom; the engine synthesizes OOC at 3,116 LUT / 2,390 FF /
 WNS +1.898 ns
 (`docs/RESOURCE_VALIDATION.md`).
 
