@@ -24,8 +24,8 @@
 //         sync-ok flicker; a delayed dispatch reads the frame its event
 //         names (the second bank), so a worse announce rejects cleanly
 // 19..21  parent degradation yields mastership immediately (10.3.5);
-//         the Sync origin carries the live PHC (gather consumes
-//         phc_ns_i); an asCapable fall stops consumption and steering
+//         the Sync body stays zero while its Follow_Up carries the live
+//         egress stamp; an asCapable fall stops consumption and steering
 // 21b,21c become resets the best record (no ghost GM after a quiet
 //         ride to mastership); the priority vector outranks the
 //         identity in the compare order
@@ -538,6 +538,9 @@ int main(int argc, char **argv) {
   uint16_t sseq = 0;
   if (!sy.empty()) {
     check_common("sync", sy, 0x0, 0x0208, 44, 0xFD);
+    uint8_t reserved = 0;
+    for (int i = 48; i < 58; i++) reserved |= sy[i];
+    expect("sync reserved body zero", reserved, 0);
     sseq = fld16(sy, 44);
   }
   run_svc(20000);                                // let its FU emerge
@@ -947,17 +950,14 @@ int main(int argc, char **argv) {
     expect("gm is us again", dut->pub_gm_id_o, OUR_CID);
   }
 
-  // ---- 20: the Sync originTimestamp carries the live PHC ----------------
-  // 11.4.3 approximate origin via gather sel 0 -- the first functional
-  // consumer of phc_ns_i, observable on the wire
+  // ---- 20: every two-step Sync carries a zero reserved body --------------
   {
     tx_seen = txf.size();
     std::vector<uint8_t> sy = wait_tx(0x0, 800000);
     if (!sy.empty()) {
-      uint64_t origin = fld48(sy, 48) * 1000000000ull + fld32(sy, 54);
-      uint64_t now = phc();
-      int64_t d = (int64_t)(now - origin);
-      expect("origin is the live clock", d >= 0 && d < 300000, 1);
+      uint8_t reserved = 0;
+      for (int i = 48; i < 58; i++) reserved |= sy[i];
+      expect("later sync body stays zero", reserved, 0);
     }
   }
 
