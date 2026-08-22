@@ -24,6 +24,10 @@
 //  26b    a completed exchange cannot be completed again: the identical
 //         pair replayed is not a second exchange (asCapable holds down),
 //         a skewed replay cannot move the delay (Figure 11-8, Cor2) (#8)
+//  27b    a second identity answering AFTER the first responder's
+//         Follow_Up still counts for the Milan 4.2.6.2.5 cease: the
+//         completed exchange's post-completion path reaches the identity
+//         bookkeeping (cease, silence, resume, re-earn) (#8)
 //  8b     a better Announce in a foreign domain never reaches BTCA: GM,
 //         parent, flags and the raw published vector hold (8.1, #6)
 //  8c..8m 802.1AS-2011 10.3.10.2.1 qualifyAnnounce: a better Announce
@@ -287,7 +291,7 @@ static void servo_mirror(int64_t off) {
 // peer clock runs at +2^-13 (~122 ppm) against ours; turnaround fields are
 // constants of the mode, the ingress stamp is t1 + wire turnaround.
 enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_DUAL,
-              PD_DUP };
+              PD_DUP, PD_DUAL_LATE };
 static PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
 static size_t pd_seen = 0;
 
@@ -330,6 +334,16 @@ static void service_pdelay() {
     g.ts(t3); g.u64(OUR_CID); g.u16(1);
     send_frame(g.b, t4 + 1000);
     run(400);
+    if (pd_mode == PD_DUAL_LATE) {
+      // the second identity answers AFTER the first responder's
+      // Follow_Up: the exchange has completed, so this response takes
+      // the handler's post-completion path, which must still reach the
+      // Milan 4.2.6.2.5 identity bookkeeping
+      Frame d = ptp(0x3, seq, 0, 0x0200, 20, 0x0077770077FE0077ull);
+      d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
+      send_frame(d.b, t4 + 2000);
+      run(400);
+    }
     model_exchange(t1, t2, t3, t4);
   }
 }
@@ -1688,6 +1702,41 @@ int main(int argc, char **argv) {
     expect("duplicates are not a storm",
            dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     pd_mode = PD_NORMAL;
+  }
+
+  // ---- 27b: a late second identity still ceases --------------------------
+  // the second identity answers AFTER the first responder's Follow_Up,
+  // so the exchange has already completed when its Pdelay_Resp arrives:
+  // the handler refuses to re-arm (26b) but must still count the
+  // identity for the Milan 4.2.6.2.5 rule. Three such intervals cease
+  // Pdelay_Req and drop asCapable, the countdown resumes them, the
+  // ladder re-earns (the review's probe; a completed path sent to END
+  // instead of the bookkeeping passes phase 27, whose second identity
+  // answers before the Follow_Up, and fails here)
+  {
+    pd_mode = PD_NORMAL;
+    expect("27b: capable before the late-second storm",
+           wait_flags(FL_ASCAP, FL_ASCAP, 6000000ull), 1);
+    pd_mode = PD_DUAL_LATE;
+    expect("27b: a late second identity still ceases",
+           wait_flags(FL_ASCAP, 0, 16000000ull), 1);
+    size_t mark = txf.size();
+    run_svc(5000000);                            // 2.5 s of silence?
+    int reqs = 0;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) reqs++;
+    expect("27b: ceased, no requests", reqs, 0);
+    pd_mode = PD_NORMAL;
+    size_t mark2 = txf.size();
+    bool resumed = false;
+    for (int k = 0; k < 40 && !resumed; k++) {
+      run_svc(200000);
+      for (size_t i = mark2; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) resumed = true;
+    }
+    expect("27b: the countdown resumes requests", resumed, 1);
+    expect("27b: the ladder re-earns",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
   }
 
   // ---- 28: a warm reset during a cease still resumes ---------------------

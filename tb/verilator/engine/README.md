@@ -52,11 +52,12 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 26 | a ratio window wider than 2^32 ns is skipped, not divided stale |
 | 26b | a completed exchange cannot be completed again (Figure 11-8 as corrected by Cor2-2015): with asCapable down and one exchange in, the identical Resp + Follow_Up pair replayed is not a second exchange (asCapable holds down, Milan 4.2.6.2.4) and a replay with t4 skewed +2 us cannot move the published delay |
 | 27 | the Milan 4.2.6.2.5 cease rule: three multi-identity intervals stop Pdelay_Req and drop asCapable, the cadence countdown resumes them, the ladder re-earns; SAME-identity duplicates are not a storm; replayed forged response pairs (t3 skewed) can neither climb nor publish mid-cease |
+| 27b | a second identity answering AFTER the first responder's Follow_Up (the exchange already completed, so its Pdelay_Resp takes the handler's post-completion path) still counts for the Milan 4.2.6.2.5 cease: asCapable falls, no requests over the window, the countdown resumes them, the ladder re-earns |
 | 28 | a warm reset during a cease still resumes: the countdown lives in reset-surviving scratch and the boot re-arms the cadence |
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All sixty-two planted mutations (the own-source rule removed, its
+All sixty-three planted mutations (the own-source rule removed, its
 identity compare narrowed to 32 bits, the stepsRemoved bound off by one
 in either direction, its compare narrowed to a byte, a dead path-trace
 compare, the hop compare narrowed to 32 bits, the hop read from the next
@@ -66,8 +67,8 @@ Pdelay_Resp taken for any sequenceId, its sequence compare narrowed to a
 byte, the arm cleared on the Resp itself, a Follow_Up taken with nothing
 armed, the armed bit dropped from its compare, the pairing not consumed,
 the responder identity not paired, the arm surviving the next request, a
-completed exchange armed again, the shared TX control value, ladder
-trigger, both pdelay
+completed exchange armed again, the completed path skipping the identity
+bookkeeping, the shared TX control value, ladder trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
 sync void, a dead step threshold, both servo sign errors, a dead

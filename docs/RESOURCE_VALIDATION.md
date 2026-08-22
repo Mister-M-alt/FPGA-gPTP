@@ -325,22 +325,25 @@ takes its old gap). Same instrument, Vivado 2026.1 OOC on
 | WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
 
 Byte-identical, as a ROM-only change must be. Verification at this
-measurement: ucpu 768 / parser 140 / engine 314 checks, sixty-two
-planted mutations red (this round's nine, engine checks failed: a
+measurement: ucpu 768 / parser 140 / engine 319 checks, sixty-three
+planted mutations red (this round's ten, engine checks failed: a
 Pdelay_Resp taken for any sequenceId 46 and its sequence compare
-narrowed to a byte 44, the arm cleared on the Resp itself 126 of 276
+narrowed to a byte 44, the arm cleared on the Resp itself 129 of 281
 before the run times out, a Follow_Up taken with nothing armed 64 and
 the armed bit dropped from its compare 3, the pairing not consumed 44,
 the responder identity not paired 42, the arm surviving the next request
-42, a completed exchange armed again 2; the qualification round's twelve
-re-run at this ROM layout, since the packer moved four legs: the
-own-source rule removed 42 and its compare narrowed 3, the stepsRemoved
-bound off by one 48 and 3 and its compare narrowed 30, the dead
-path-trace compare 44, the hop compare narrowed 3, the hop read from the
-next word 32, the count gate removed 56, the walk one past the count 19,
-the one-hop walk 45, the base left offset 81), lint clean. The review
-round added the completed-exchange rule (the round's earlier head fails
-its two probes exactly as the review measured: asCapable 4 after a
-replayed pair, the delay 601 to 1600 ns after a skewed one), the
-high-byte-stale pair, the boot Follow_Up, and the skewed forged pairs of
-the cease phase.
+42, a completed exchange armed again 2, the completed path skipping the
+identity bookkeeping 2; the qualification round's twelve re-run at this
+ROM layout, since the packer moved four legs: the own-source rule
+removed 42 and its compare narrowed 3, the stepsRemoved bound off by one
+48 and 3 and its compare narrowed 30, the dead path-trace compare 44,
+the hop compare narrowed 3, the hop read from the next word 32, the count
+gate removed 56, the walk one past the count 19, the one-hop walk 45, the
+base left offset 83), lint clean. The review rounds added the
+completed-exchange rule (the round's earlier head fails its two probes
+exactly as the review measured: asCapable 4 after a replayed pair, the
+delay 601 to 1600 ns after a skewed one), the high-byte-stale pair, the
+boot Follow_Up, the skewed forged pairs of the cease phase, and the
+late second identity of phase 27b, which pins the completed path's
+identity bookkeeping (a completed path sent to END passes phase 27 and
+fails 27b).
