@@ -370,6 +370,12 @@ static void check_common(const char *tag, const std::vector<uint8_t> &f,
                          uint8_t mtype, uint16_t flags, int msglen,
                          uint8_t logint) {
   char n[64];
+  // 802.1AS-2011 Table 11-7: Sync and Follow_Up have their own control
+  // values; Announce and every Pdelay message use the delay-management
+  // value. Keep this oracle independent from the µcode header builder.
+  uint8_t control = 0x05;
+  if (mtype == 0x0) control = 0x00;
+  if (mtype == 0x8) control = 0x02;
   if ((int)f.size() != 14 + msglen) {
     snprintf(n, 64, "%s size", tag);
     expect(n, f.size(), (uint64_t)(14 + msglen));
@@ -382,6 +388,7 @@ static void check_common(const char *tag, const std::vector<uint8_t> &f,
   snprintf(n, 64, "%s flags", tag);  expect(n, fld16(f, 20), flags);
   snprintf(n, 64, "%s srcCID", tag); expect(n, fld64(f, 34), OUR_CID);
   snprintf(n, 64, "%s srcPN", tag);  expect(n, fld16(f, 42), 1);
+  snprintf(n, 64, "%s control", tag); expect(n, f[46], control);
   snprintf(n, 64, "%s logint", tag); expect(n, f[47], logint);
 }
 

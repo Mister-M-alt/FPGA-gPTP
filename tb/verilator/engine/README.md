@@ -17,6 +17,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 
 | phase | claim |
 |---|---|
+| 1, 3, 6, 7 | Table 11-7 `controlField`: Sync = 0, Follow_Up = 2, Announce and every Pdelay message = 5 |
 | 1, 2 | asCapable is NOT set after one good exchange (4.2.6.2.4) |
 | 3b | a foreign-domain Pdelay_Req (domain 0x10) draws no Pdelay_Resp and counts one drop; a domain-0 request right after it is answered with its own sequence and its Resp_FU |
 | 4 | it IS set at the second; pdelay matches the nrr-corrected model |
@@ -47,7 +48,8 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All thirty-six planted mutations (ladder trigger, both pdelay
+All thirty-seven planted mutations (the shared TX control value, ladder
+trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
 sync void, a dead step threshold, both servo sign errors, a dead

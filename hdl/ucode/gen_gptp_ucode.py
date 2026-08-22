@@ -222,6 +222,18 @@ def set_servo_gains(clk_hz):
 # publish flags bits
 FL_PRESENT_C, FL_AMGM_C, FL_ASCAP_C, FL_SYNCOK_C = 1, 2, 4, 8
 
+# 802.1AS-2011 Table 11-7 controlField values for every message this plane
+# transmits. Keep the map exhaustive so adding a TX message cannot silently
+# inherit the old shared delay-management value.
+TX_CONTROL_BY_TYPE_C = {
+    0x0: 0x0,  # Sync
+    0x2: 0x5,  # Pdelay_Req
+    0x3: 0x5,  # Pdelay_Resp
+    0x8: 0x2,  # Follow_Up
+    0xA: 0x5,  # Pdelay_Resp_Follow_Up
+    0xB: 0x5,  # Announce
+}
+
 # ---- register conventions --------------------------------------------------
 R0, RA, RB, RC, RD_, RT, RU, RSEC, RNS, RP = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
 RV, RW = 10, 11
@@ -325,6 +337,7 @@ def e_flag_gate(p, mask, want, tag, out_label):
 
 def e_hdr(p, mtype, flags, seq_reg, logint, msglen):
     """Bytes 0..47: eth + 802.1AS common header."""
+    control = TX_CONTROL_BY_TYPE_C[mtype]
     p.emit("RDST", rd=RC, imm=RG_SCR | S_HDR8, fmt=FMT_Q)
     p.emit("BFLD", ra=RC, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_SALO, fmt=FMT_Q)
@@ -351,7 +364,7 @@ def e_hdr(p, mtype, flags, seq_reg, logint, msglen):
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("BFLD", ra=RT, fmt=FMT_W)
     p.emit("BFLD", ra=seq_reg, fmt=FMT_W)
-    p.emit("MOVE", rd=RT, ra=0, imm=5)
+    p.emit("MOVE", rd=RT, ra=0, imm=control)
     p.emit("BFLD", ra=RT, fmt=FMT_B)
     p.emit("MOVE", rd=RT, ra=0, imm=logint)
     p.emit("BFLD", ra=RT, fmt=FMT_B)
