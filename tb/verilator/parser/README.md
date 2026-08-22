@@ -27,15 +27,22 @@ Follow_Up still dispatches with its word 11 after the arms, and one
 with a second TLV appended after the information TLV (messageLength 88)
 is accepted, 11.4.1 having a receiver skip a TLV it does not parse;
 the messageLength bound for every other type the per-type table names
-(Sync 44, Announce 64, Pdelay_Resp and Pdelay_Resp_Follow_Up 54,
-Signaling 34): a physically complete frame declaring one octet fewer
+(Sync 44, Announce 64, Pdelay_Resp, Pdelay_Resp_Follow_Up and
+Pdelay_Req 54, Signaling 34): a physically complete frame declaring
+one octet fewer
 is refused at the messageLength byte with no event, no bank write and
 one drop, and the exact minimum dispatches; and the padded Sync: a
 44-octet Sync leaves its MAC padded to the 60-byte Ethernet minimum
 (IEEE 1588-2008 13.3.2.4 NOTE: messageLength excludes the padding), so
 four padded Syncs (zero padding, padding shaped like the information
 TLV's tlvType, padding 0x0008, and 74 bytes) are each accepted with
-their event, their six bank words and no drop. 119 checks,
+their event, their six bank words and no drop; and the Pdelay_Req
+shape (11.4.5 / Table 11-11: 54 octets, the header and two reserved
+fields; FPGA-gPTP #12): the issue's header-only shape, messageLength
+44 and messageLength 53 are refused at the messageLength byte with no
+event, no bank write and one drop, a declared 54 cut at 53 octets at
+the end-of-frame gate, and the complete request still dispatches after
+the arms. 140 checks,
 mutation-proven: the domain arm removed fails 16, the compare narrowed
 to its low nibble fails 7 (the zero-low-nibble values 0x10 and 0x80
 catch it), the end-of-frame gate without its bad_r term, a drop that
@@ -52,7 +59,11 @@ this suite alone, every engine frame declaring its true length), and
 the Follow_Up TLV block applied to Sync as well fails 3 (the 74-byte
 padded Sync; the 60-byte one cannot show it, because a poison raised
 on a frame's eof byte is not seen by the end-of-frame gate, which
-samples bad_r as registered).
+samples bad_r as registered), the Pdelay_Req minimum reverted to the
+34-octet header fails 15 (one octet short 9, grouped with Sync 12),
+Signaling raised to 54 as well fails 5 (its header-only controls: the
+suite pins that minimum too), and the messageLength arm narrowed to
+Follow_Up and Pdelay_Req fails 16.
 
 This suite is what caught the three field-straddle bugs (announce
 currentUtcOffset outside the 8-byte accumulator window, the stepsRemoved

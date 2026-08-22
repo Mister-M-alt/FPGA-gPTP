@@ -44,7 +44,10 @@ requires the 76-octet message of Table 11-9, refuses a short
 messageLength ahead of every bank write and the wrong TLV header
 (11.4.4.3) ahead of the event, so a TLV-less or truncated Follow_Up
 no longer reaches the servo (+34 LUT for the two compares, the
-redundant per-type minimum flag retired). Next: the parent-side
+redundant per-type minimum flag retired), and a header-only Pdelay_Req
+drawing a Pdelay_Resp (#12): the request's minimum is the 54 octets of
+Table 11-11, one line of the same per-type table, so a truncated
+request is refused ahead of the responder. Next: the parent-side
 integration.
 
 ## Why a µCPU with an ALU

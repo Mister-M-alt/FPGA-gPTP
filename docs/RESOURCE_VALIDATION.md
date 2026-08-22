@@ -223,3 +223,34 @@ checks, the TLV header arms removed 13 and 6, the Follow_Up TLV block
 applied to Sync as well 3 and 3; three more are visible to the parser
 suite alone: the messageLength arm removed fails 18, the arm narrowed
 to Follow_Up 16, the tlvType compared alone 10), lint clean.
+
+## The Pdelay_Req round re-measured: the 54-octet minimum
+
+FPGA-gPTP #12, found by the parent's field campaign beside #11: the
+receive path accepted a header-only Pdelay_Req, the 34-octet common
+header without the two reserved 10-octet fields that 802.1AS-2011
+11.4.5 / Table 11-11 make the 54-octet message (IEEE 1588-2008 13.9
+pads the request to the response's length on purpose), and the
+responder answered it. The fix is one line of the per-type minimum
+table in `KL_gptp_rx_parser`: Pdelay_Req joins the Pdelay_Resp /
+Pdelay_Resp_Follow_Up line at byte 67, so the end-of-frame gate needs
+the 54 octets and the messageLength arm of the Follow_Up round refuses
+a declared length below 54 ahead of every bank write. Same instrument,
+Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100 MHz, 2026-08-22; the
+baseline is the Follow_Up row above (the #18 head):
+
+| | the Follow_Up arms (#18) | the Pdelay_Req line | delta |
+|---|---|---|---|
+| Slice LUTs | 3,115 (2,789 logic + 326 LUTRAM) | **3,115** (2,789 + 326) | **0** |
+| `u_parser` LUTs | 542 | 542 | 0 |
+| Registers | 2,390 | 2,390 | 0 |
+| `u_parser` registers | 257 | 257 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+Re-grouping one constant in the table moves no LUT: the minimum mux
+was already there for the other five types. Verification at this
+measurement: ucpu 768 / parser 140 / engine 215 checks, forty-one
+planted mutations red (the new one: the Pdelay_Req minimum reverted to
+the 34-octet header fails 15 parser and 2 engine checks), lint clean.

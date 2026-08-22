@@ -7,6 +7,8 @@
 //         second good exchange and not the first (Milan 4.2.6.2.4)
 //  3b     a foreign-domain Pdelay_Req draws no frame and counts one drop;
 //         a domain-0 request right after it is answered (8.1, #6)
+//  3c     a header-only and a cut Pdelay_Req draw no frame and count one
+//         drop each; the complete request after them is answered (#12)
 //  5..9   grandmaster life: timeout become (asCapable-gated), Announce/
 //         Sync/Follow_Up byte-exact, BTCA both directions, adoption
 //  8b     a better Announce in a foreign domain never reaches BTCA: GM,
@@ -522,6 +524,51 @@ int main(int argc, char **argv) {
     if (!u2.empty())
       expect("domestic request after it: Resp_FU pairs", fld16(u2, 44),
              0x55AC);
+  }
+
+  // ---- 3c: a truncated Pdelay_Req draws no frame; a complete one does ---
+  // 802.1AS-2011 11.4.5 / Table 11-11: a Pdelay_Req is 54 octets, the
+  // header and two reserved 10-octet fields; until #12 the parser's
+  // minimum was the 34-octet header, so a header-only request dispatched
+  // and the responder answered it from that header. Three shapes in turn:
+  // header-only (messageLength 34 in a 48-byte frame, the issue's shape,
+  // refused at the messageLength byte ahead of every bank write), a
+  // declared 54 cut at 53 octets (refused at the end-of-frame gate), then
+  // the complete request. The first two draw no Pdelay_Resp over the
+  // window and count one drop each; the third is answered with its own
+  // sequence and its Resp_FU, so the refusals left the responder intact
+  {
+    uint16_t drops = dut->dbg_rx_drop_o;
+    size_t mark = txf.size();
+    Frame f = ptp(0x2, 0x55AD, 0, 0x0000, 0);      // 34 octets: header only
+    send_frame(f.b, T2R + 300000);
+    run(4000);
+    Frame g = ptp(0x2, 0x55AE, 0, 0x0000, 20);
+    g.u64(0); g.u16(0); g.ts(0);
+    g.b.resize(67);                                // declared 54, cut at 53
+    send_frame(g.b, T2R + 350000);
+    run(4000);
+    int resps = 0;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) resps++;
+    expect("truncated requests: no Pdelay_Resp", resps, 0);
+    expect("truncated requests: dropped and counted", dut->dbg_rx_drop_o,
+           (uint16_t)(drops + 2));
+    tx_seen = txf.size();
+    Frame k = ptp(0x2, 0x55AF, 0, 0x0000, 20);     // the complete request
+    k.u64(0); k.u16(0); k.ts(0);
+    k.b.resize(68);
+    send_frame(k.b, T2R + 400000);
+    std::vector<uint8_t> r3 = wait_tx(0x3, 400000);
+    if (!r3.empty()) {
+      expect("complete request after them: answered", fld16(r3, 44), 0x55AF);
+      expect("complete request after them: reqCID", fld64(r3, 58), PEER_CID);
+    }
+    txts(T3R + 400000);
+    std::vector<uint8_t> u3 = wait_tx(0xA, 400000);
+    if (!u3.empty())
+      expect("complete request after them: Resp_FU pairs", fld16(u3, 44),
+             0x55AF);
   }
 
   // ---- 4: the live peer raises asCapable on the SECOND exchange ---------

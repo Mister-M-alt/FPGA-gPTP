@@ -10,8 +10,9 @@
 // words. Also proves the drop arms: wrong EtherType, wrong
 // transportSpecific, wrong PTP version, foreign domainNumber, truncation,
 // a short messageLength (one arm per type the per-type table names), a
-// Follow_Up without its information TLV, rx_err; and that a Sync padded
-// to the 60-byte Ethernet minimum is accepted.
+// Follow_Up without its information TLV, a Pdelay_Req shorter than its
+// two reserved fields, rx_err; and that a Sync padded to the 60-byte
+// Ethernet minimum is accepted.
 
 #include <cstdint>
 #include <cstdio>
@@ -445,15 +446,15 @@ int main(int argc, char **argv) {
   // that motivated it (the #18 review's MR8, the arm narrowed to
   // Follow_Up, passed both suites). For each of Sync (44, Table 11-8),
   // Announce (64, Table 10-7), Pdelay_Resp and Pdelay_Resp_Follow_Up
-  // (54, Tables 11-12 / 11-13) and Signaling (34, the header alone): a
-  // physically complete frame declaring one octet below the minimum is
-  // refused at the messageLength byte with no event, no bank write and
-  // one drop, and the same frame declaring the exact minimum dispatches
-  // with no drop. Pdelay_Req (54, Table 11-11) gets its arm with #19.
+  // (54, Tables 11-12 / 11-13), Pdelay_Req (54, Table 11-11, #12) and
+  // Signaling (34, the header alone): a physically complete frame
+  // declaring one octet below the minimum is refused at the
+  // messageLength byte with no event, no bank write and one drop, and
+  // the same frame declaring the exact minimum dispatches with no drop.
   struct LenArm { const char *tag; uint8_t mtype; uint16_t minlen; uint8_t ev; };
   const LenArm len_arms[] = {
     {"sync", 0x0, 44, 1}, {"announce", 0xB, 64, 3}, {"pdresp", 0x3, 54, 5},
-    {"pdrfu", 0xA, 54, 6}, {"signaling", 0xC, 34, 7},
+    {"pdrfu", 0xA, 54, 6}, {"pdreq", 0x2, 54, 4}, {"signaling", 0xC, 34, 7},
   };
   for (const LenArm &a : len_arms) {
     char n[64];
@@ -523,7 +524,79 @@ int main(int argc, char **argv) {
       expect_eq(n, dut->drop_cnt_o, d0);
     }
   }
-  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 22));
+  // 802.1AS-2011 11.4.5 / Table 11-11: a Pdelay_Req is 54 octets, the
+  // header and two reserved 10-octet fields (IEEE 1588-2008 13.9 NOTE:
+  // the second reserved field gives the request the response's length).
+  // Until #12 the parser's minimum was the 34-octet header, so a
+  // header-only request dispatched and the responder answered it. Arms:
+  // the issue's header-only shape (messageLength 34, a 48-byte frame),
+  // messageLength 44 and messageLength 53, each refused at the
+  // messageLength byte with no event, no bank write and one drop; a
+  // declared 54 cut at 53 octets, refused at the end-of-frame gate (no
+  // event, one drop). Control: the complete 54-octet request dispatches
+  // after the arms as the domain-0 control did before them. The declared
+  // 53 in a complete 54-octet frame is the Pdelay_Req row of the
+  // per-type table above.
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x2; h.seq = 0x0E22; h.srcid = 0x00220FFFFE334455ull;
+    h.srcpn = 2;
+    Frame f = common(h, 0);                          // messageLength 34
+    feed(f.b, false);
+    expect_eq("header-only pdreq drop: no event", ev_seen, 0);
+    expect_eq("header-only pdreq drop: no bank write", bank.size(), 0);
+    expect_eq("header-only pdreq drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x2; h.seq = 0x0E2C; h.srcid = 0x00220FFFFE334455ull;
+    h.srcpn = 2;
+    Frame f = common(h, 10);                         // messageLength 44
+    for (int i = 0; i < 10; i++) f.u8(0);
+    feed(f.b, false);
+    expect_eq("44-octet pdreq drop: no event", ev_seen, 0);
+    expect_eq("44-octet pdreq drop: no bank write", bank.size(), 0);
+    expect_eq("44-octet pdreq drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x2; h.seq = 0x0E35; h.srcid = 0x00220FFFFE334455ull;
+    h.srcpn = 2;
+    Frame f = common(h, 19);                         // messageLength 53
+    for (int i = 0; i < 19; i++) f.u8(0);
+    feed(f.b, false);
+    expect_eq("53-octet pdreq drop: no event", ev_seen, 0);
+    expect_eq("53-octet pdreq drop: no bank write", bank.size(), 0);
+    expect_eq("53-octet pdreq drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x2; h.seq = 0x0E36; h.srcid = 0x00220FFFFE334455ull;
+    h.srcpn = 2;
+    Frame f = common(h, 20);                         // declared 54,
+    for (int i = 0; i < 19; i++) f.u8(0);            // cut at 53
+    feed(f.b, false);
+    expect_eq("cut pdreq drop: no event", ev_seen, 0);
+    expect_eq("cut pdreq drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x2; h.seq = 0x0E54; h.srcid = 0x00220FFFFE334455ull;
+    h.srcpn = 2;
+    Frame f = common(h, 20);                         // the complete request
+    for (int i = 0; i < 20; i++) f.u8(0);
+    feed(f.b, false);
+    expect_eq("complete pdreq after the arms: event", ev_seen ? ev_code : 0, 4);
+    expect_eq("complete pdreq after the arms: ev_seq", ev_seq, 0x0E54);
+    expect_eq("complete pdreq after the arms: w0", bank[0], w0_of(h));
+    expect_eq("complete pdreq after the arms: w2 srcid", bank[2], h.srcid);
+    expect_eq("complete pdreq after the arms: no drop", dut->drop_cnt_o, d0);
+  }
+  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 27));
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;
