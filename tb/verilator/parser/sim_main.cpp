@@ -8,7 +8,8 @@
 // streams them into the parser, records every message-bank write and the
 // end-of-frame event, and compares against independently packed expected
 // words. Also proves the drop arms: wrong EtherType, wrong
-// transportSpecific, wrong PTP version, truncation, rx_err.
+// transportSpecific, wrong PTP version, foreign domainNumber, truncation,
+// rx_err.
 
 #include <cstdint>
 #include <cstdio>
@@ -235,7 +236,105 @@ int main(int argc, char **argv) {
     feed(f.b, true);
     expect_eq("rx_err drop: no event", ev_seen, 0);
   }
-  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 5));
+  // 802.1AS-2011 8.1: the domain number of a gPTP domain shall be 0, and
+  // IEEE 1588-2008 9.5.1 accepts only messages whose domainNumber matches
+  // the local domain. The arm sits at header byte 4, ahead of every bank
+  // write, so a foreign-domain frame of ANY type leaves no event and no
+  // bank word for a handler to read: BTCA (Announce), the servo (Sync,
+  // Follow_Up) and both Pdelay roles are covered by the one compare
+  // (FPGA-gPTP #6). Five shapes, otherwise valid: a Sync in domain 5, a
+  // better-priority Announce in domain 1, a Pdelay_Resp in domain 255,
+  // and the two header-only types whose min_ok_r is set regardless of
+  // bad_r, so that the end-of-frame gate's !bad_r term is their only
+  // barrier: a Pdelay_Req in domain 0x10 and a Signaling in domain 0x80,
+  // the zero-low-nibble values that pin the compare's full width. Each
+  // arm counts exactly one drop; the header-only types first prove their
+  // domain-0 shape dispatches, so the refusals cannot pass vacuously.
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x0; h.dom = 5; h.seq = 0x0D05; h.flags = 0x0208;
+    h.srcid = 0xAABBCCFFFE001122ull; h.srcpn = 1; h.logint = 0xFD;
+    Frame f = common(h, 10);
+    f.u48(0x000012345678ull); f.u32(0x1DCD6500);
+    feed(f.b, false);
+    expect_eq("domain 5 sync drop: no event", ev_seen, 0);
+    expect_eq("domain 5 sync drop: no bank write", bank.size(), 0);
+    expect_eq("domain 5 sync drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0xB; h.dom = 1; h.seq = 0x0D01; h.flags = 0x0008;
+    h.srcid = 0x00220FFFFE334455ull; h.srcpn = 2;
+    Frame f = common(h, 30);
+    for (int i = 0; i < 10; i++) f.u8(0);
+    f.u16(0xFFC4); f.u8(0);
+    f.u8(1); f.u32(0xF8FE436A); f.u8(248);            // priority1 1: wins
+    f.u64(0x00220FFFFE334455ull);
+    f.u16(0); f.u8(0xA0);
+    feed(f.b, false);
+    expect_eq("domain 1 announce drop: no event", ev_seen, 0);
+    expect_eq("domain 1 announce drop: no bank write", bank.size(), 0);
+    expect_eq("domain 1 announce drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x3; h.dom = 0xFF; h.seq = 0x0DFF; h.flags = 0x0200;
+    h.srcid = 0x00220FFFFE334455ull; h.srcpn = 2;
+    Frame f = common(h, 20);
+    f.u48(0x00000000ABCDull); f.u32(0x075BCD15);
+    f.u64(0xDEADBEEFCAFEF00Dull); f.u16(1);
+    feed(f.b, false);
+    expect_eq("domain 255 pdresp drop: no event", ev_seen, 0);
+    expect_eq("domain 255 pdresp drop: no bank write", bank.size(), 0);
+    expect_eq("domain 255 pdresp drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    Hdr h; h.mtype = 0x2; h.seq = 0x0C02; h.srcid = 0x00220FFFFE334455ull;
+    h.srcpn = 2;
+    Frame f = common(h, 20);
+    for (int i = 0; i < 20; i++) f.u8(0);            // two reserved fields
+    feed(f.b, false);
+    expect_eq("pdreq event", ev_seen ? ev_code : 0, 4);
+    expect_eq("pdreq w0", bank[0], w0_of(h));
+    expect_eq("pdreq w2 srcid", bank[2], h.srcid);
+  }
+  {
+    Hdr h; h.mtype = 0xC; h.seq = 0x0C0C; h.flags = 0x0008;
+    h.srcid = 0x00220FFFFE334455ull; h.srcpn = 2;
+    Frame f = common(h, 10);
+    f.u64(0xFFFFFFFFFFFFFFFFull); f.u16(0xFFFF);     // targetPortIdentity
+    feed(f.b, false);
+    expect_eq("sig event", ev_seen ? ev_code : 0, 7);
+    expect_eq("sig w0", bank[0], w0_of(h));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0x2; h.dom = 0x10; h.seq = 0x0D10;
+    h.srcid = 0x00220FFFFE334455ull; h.srcpn = 2;
+    Frame f = common(h, 20);
+    for (int i = 0; i < 20; i++) f.u8(0);
+    feed(f.b, false);
+    expect_eq("domain 0x10 pdreq drop: no event", ev_seen, 0);
+    expect_eq("domain 0x10 pdreq drop: no bank write", bank.size(), 0);
+    expect_eq("domain 0x10 pdreq drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Hdr h; h.mtype = 0xC; h.dom = 0x80; h.seq = 0x0D80; h.flags = 0x0008;
+    h.srcid = 0x00220FFFFE334455ull; h.srcpn = 2;
+    Frame f = common(h, 10);
+    f.u64(0xFFFFFFFFFFFFFFFFull); f.u16(0xFFFF);
+    feed(f.b, false);
+    expect_eq("domain 0x80 sig drop: no event", ev_seen, 0);
+    expect_eq("domain 0x80 sig drop: no bank write", bank.size(), 0);
+    expect_eq("domain 0x80 sig drop: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 10));
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;

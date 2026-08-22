@@ -5,10 +5,17 @@
 //
 //  1..4   pdelay bring-up: byte-exact both roles, asCapable at the
 //         second good exchange and not the first (Milan 4.2.6.2.4)
+//  3b     a foreign-domain Pdelay_Req draws no frame and counts one drop;
+//         a domain-0 request right after it is answered (8.1, #6)
 //  5..9   grandmaster life: timeout become (asCapable-gated), Announce/
 //         Sync/Follow_Up byte-exact, BTCA both directions, adoption
+//  8b     a better Announce in a foreign domain never reaches BTCA: GM,
+//         parent, flags and the raw published vector hold (8.1, #6)
 // 10..12  slave sync path: offset, sync-ok verdict, the 125 ms
 //         Follow_Up and 375 ms sync receipt timeouts (Table 4.2)
+// 11b     a Sync/Follow_Up pair in a foreign domain never steers: the
+//         offset, the PHC writes and the flags hold, and the foreign
+//         Sync leaves no pending slot for a domain-0 Follow_Up (#6)
 // 13..15  the servo: step-vs-slew at 20 us, the PI addend against an
 //         exact-integer mirror, closed-loop lock on a +140 ppm master
 //         (one re-base carrying the surviving integrator)
@@ -447,6 +454,45 @@ int main(int argc, char **argv) {
     expect("pdrfu reqCID", fld64(rfu, 58), PEER_CID);
   }
 
+  // ---- 3b: a foreign-domain Pdelay_Req draws no frame; domain 0 does ----
+  // the responder is the wire-visible role, and Pdelay_Req is one of the
+  // two header-only types whose min_ok_r is set regardless of bad_r, so
+  // the parser's end-of-frame gate is the only barrier after the domain
+  // arm: a gate that dropped the frame but still dispatched the event
+  // would answer from the STALE bank. Domain 0x10 has a zero low nibble,
+  // so a compare narrowed to four bits would admit it (FPGA-gPTP #6)
+  {
+    uint16_t drops = dut->dbg_rx_drop_o;
+    size_t mark = txf.size();
+    Frame f = ptp(0x2, 0x55AB, 0, 0x0000, 20);
+    f.b[18] = 0x10;                              // domainNumber, byte 4
+    f.u64(0); f.u16(0); f.ts(0);
+    f.b.resize(68);
+    send_frame(f.b, T2R + 100000);
+    run(4000);
+    int resps = 0;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) resps++;
+    expect("foreign-domain request: no Pdelay_Resp", resps, 0);
+    expect("foreign-domain request: dropped and counted",
+           dut->dbg_rx_drop_o, (uint16_t)(drops + 1));
+    tx_seen = txf.size();
+    Frame g = ptp(0x2, 0x55AC, 0, 0x0000, 20);   // domain 0, right after
+    g.u64(0); g.u16(0); g.ts(0);
+    g.b.resize(68);
+    send_frame(g.b, T2R + 200000);
+    std::vector<uint8_t> r2 = wait_tx(0x3, 400000);
+    if (!r2.empty()) {
+      expect("domestic request after it: answered", fld16(r2, 44), 0x55AC);
+      expect("domestic request after it: reqCID", fld64(r2, 58), PEER_CID);
+    }
+    txts(T3R + 200000);
+    std::vector<uint8_t> u2 = wait_tx(0xA, 400000);
+    if (!u2.empty())
+      expect("domestic request after it: Resp_FU pairs", fld16(u2, 44),
+             0x55AC);
+  }
+
   // ---- 4: the live peer raises asCapable on the SECOND exchange ---------
   auto_txts = true;
   pd_seen = txf.size();                  // answer only fresh requests
@@ -511,10 +557,41 @@ int main(int argc, char **argv) {
   }
   expect("still master", dut->pub_flags_o & FL_AMGM, FL_AMGM);
   expect("gm still us", dut->pub_gm_id_o, OUR_CID);
-  expect("annq published",
-         dut->pub_annq_o,
-         (0xFFC4ull << 48) | (250ull << 40) | ((uint64_t)OUR_CQ << 8) |
-         248ull);
+  const uint64_t ANNQ8 =
+      (0xFFC4ull << 48) | (250ull << 40) | ((uint64_t)OUR_CQ << 8) | 248ull;
+  expect("annq published", dut->pub_annq_o, ANNQ8);
+
+  // ---- 8b: a BETTER announce in a foreign domain cannot move the GM ----
+  // 802.1AS-2011 8.1: the gPTP domain number is 0; IEEE 1588-2008 9.5.1:
+  // only messages whose domainNumber matches are accepted for processing.
+  // priority1 1 wins BTCA outright in domain 0; in domain 5 it must never
+  // reach the announce handler, whose FIRST act is publishing the raw
+  // vector -- so pub_annq_o still holding phase 8's vector proves the
+  // frame was refused before any state moved (FPGA-gPTP #6)
+  {
+    uint16_t drops = dut->dbg_rx_drop_o;
+    uint32_t flags = dut->pub_flags_o;
+    Frame f = ptp(0xB, 11, 0, 0x0008, 30, 0x00A5A5FFFE000005ull);
+    f.b[18] = 5;                                 // domainNumber, byte 4
+    for (int i = 0; i < 10; i++) f.u8(0);
+    f.u16(0xFFC4); f.u8(0);
+    f.u8(1); f.u32(OUR_CQ); f.u8(248);
+    f.u64(0x0000000000005555ull);
+    f.u16(0); f.u8(0xA0);
+    send_frame(f.b, 5500000);
+    run_svc(6000);
+    expect("foreign-domain announce: still master",
+           dut->pub_flags_o & FL_AMGM, FL_AMGM);
+    expect("foreign-domain announce: gm still us", dut->pub_gm_id_o, OUR_CID);
+    expect("foreign-domain announce: parent still us", dut->pub_parent_id_o,
+           OUR_CID);
+    expect("foreign-domain announce: flags untouched", dut->pub_flags_o,
+           flags);
+    expect("foreign-domain announce: raw vector never published",
+           dut->pub_annq_o, ANNQ8);
+    expect("foreign-domain announce: dropped and counted",
+           dut->dbg_rx_drop_o, (uint16_t)(drops + 1));
+  }
 
   // ---- 9: better announce -> adopt, sync stops --------------------------
   // a rogue Sync heard while still master would leave a stale ingress
@@ -609,6 +686,46 @@ int main(int argc, char **argv) {
   const uint64_t OFF2 = TRX2 - (ORIGIN2 + CORR_NS + (uint64_t)pdm.d);
   expect("next pair lands", (uint32_t)dut->pub_offset_o, (uint32_t)OFF2);
   servo_mirror((int64_t)OFF2);
+
+  // ---- 11b: a Sync + Follow_Up pair in a foreign domain never steers ---
+  // the pair is otherwise perfect (matching sequenceId and source, the
+  // origin skewed -777 ns so a wrong acceptance would move the published
+  // offset by +777) but carries domainNumber 5: both frames drop at the
+  // header, the offset and the PHC knobs are untouched, and the foreign
+  // Sync left no pending slot, so a domain-0 Follow_Up with its sequence
+  // pairs with nothing either (FPGA-gPTP #6)
+  {
+    uint16_t drops = dut->dbg_rx_drop_o;
+    size_t writes = steps_seen.size() + adj_seen.size();
+    uint32_t flags = dut->pub_flags_o;
+    const uint64_t TRXF = TRX2 + 500000000ull;
+    const uint64_t ORGF = ORIGIN2 + 500000000ull - 777ull;
+    Frame f = ptp(0x0, 0x0110, 0, 0x0208, 10);
+    f.b[18] = 5;                                 // domainNumber, byte 4
+    f.ts(0);
+    send_frame(f.b, TRXF);
+    run(2000);
+    Frame g = ptp(0x8, 0x0110, CORR_NS << 16, 0x0000, 10);
+    g.b[18] = 5;
+    g.ts(ORGF);
+    send_frame(g.b, TRXF + 500);
+    run(6000);
+    expect("foreign-domain pair: offset unmoved", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF2);
+    expect("foreign-domain pair: never steers",
+           steps_seen.size() + adj_seen.size(), writes);
+    expect("foreign-domain pair: flags untouched", dut->pub_flags_o, flags);
+    expect("foreign-domain pair: both dropped and counted",
+           dut->dbg_rx_drop_o, (uint16_t)(drops + 2));
+    Frame h = ptp(0x8, 0x0110, CORR_NS << 16, 0x0000, 10);   // domain 0
+    h.ts(ORGF);
+    send_frame(h.b, TRXF + 600);
+    run(6000);
+    expect("foreign Sync left no pending slot", (uint32_t)dut->pub_offset_o,
+           (uint32_t)OFF2);
+    expect("orphan Follow_Up never steers",
+           steps_seen.size() + adj_seen.size(), writes);
+  }
 
   // ---- 12: syncReceiptTimeout (375 ms) -> sync-ok falls -----------------
   expect("sync-ok falls on timeout",

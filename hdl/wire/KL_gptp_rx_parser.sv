@@ -16,12 +16,21 @@
 //                exactly as in the protocol-processor's KL_pp_shadow.
 //
 //                Checks that DROP (counted, no event): EtherType not
-//                0x88F7, transportSpecific != 1, versionPTP != 2, frame
-//                truncated before the per-type minimum, rx_err_i.
+//                0x88F7, transportSpecific != 1, versionPTP != 2,
+//                domainNumber != DOMAIN_C (802.1AS-2011 8.1: a gPTP
+//                domain is domain 0; IEEE 1588-2008 9.5.1: a message
+//                whose domainNumber does not match is not accepted for
+//                processing), frame truncated before the per-type
+//                minimum, rx_err_i. The domain arm sits at header byte
+//                4, ahead of every message-bank write, so a foreign-
+//                domain frame leaves nothing a handler could read.
 //
 //                Message bank map (64-bit words, region 0 of the µCPU
 //                state port):
 //                  w0  {8'd0, msgType, seqId, domain, flags, logInterval}
+//                      (domain reads DOMAIN_C: the parser admits exactly
+//                      one domain, so the byte is the constant, not a
+//                      register)
 //                  w1  correctionField
 //                  w2  sourcePortIdentity.clockIdentity
 //                  w3  {48'd0, sourcePortIdentity.portNumber}
@@ -86,6 +95,15 @@ module KL_gptp_rx_parser
   localparam logic [3:0] MT_ANN_C    = 4'hB;
   localparam logic [3:0] MT_SIG_C    = 4'hC;
 
+  // ---- the one gPTP domain ----------------------------------------------
+  //! 802.1AS-2011 8.1: the domain number of a gPTP domain shall be 0, and
+  //! 10.5.2.2.5 carries that value in every message. IEEE 1588-2008 9.5.1
+  //! is the receive rule: only a message whose domainNumber matches the
+  //! local domain is accepted for processing. Derived here, in the one
+  //! place the receive side qualifies it; the TX builder emits the same
+  //! zero from the register file's zero source (e_hdr).
+  localparam logic [7:0] DOMAIN_C = 8'd0;
+
   // ---- absolute byte offsets (DA = byte 0, PTP header = byte 14) --------
   localparam int unsigned OFF_ETYPE_HI_C = 12;
   localparam int unsigned OFF_ETYPE_LO_C = 13;
@@ -123,7 +141,6 @@ module KL_gptp_rx_parser
   logic        bad_r;          //! poisoned: consume to eof, then drop
   logic [3:0]  mtype_r;
   logic [15:0] seq_r;
-  logic [7:0]  dom_r;
   logic [15:0] flags_r;
   logic [63:0] acc_r;          //! big-endian byte accumulator
   logic        min_ok_r;       //! per-type minimum body consumed
@@ -181,7 +198,6 @@ module KL_gptp_rx_parser
       bad_r       <= 1'b0;
       mtype_r     <= '0;
       seq_r       <= '0;
-      dom_r       <= '0;
       flags_r     <= '0;
       acc_r       <= '0;
       min_ok_r    <= 1'b0;
@@ -245,7 +261,8 @@ module KL_gptp_rx_parser
             end
             11'(OFF_VER_C):
               if (rx_data_i[3:0] != 4'h2) bad_r <= 1'b1;
-            11'(OFF_DOM_C): dom_r <= rx_data_i;
+            11'(OFF_DOM_C):
+              if (rx_data_i != DOMAIN_C) bad_r <= 1'b1;
             11'(OFF_CORR_END_C): begin
               bank_we_o    <= !bad_r;
               bank_addr_o  <= 5'd1;
@@ -266,7 +283,7 @@ module KL_gptp_rx_parser
             11'(OFF_LOGI_C): begin
               bank_we_o    <= !bad_r;
               bank_addr_o  <= 5'd0;
-              bank_wdata_o <= {8'd0, 4'd0, mtype_r, seq_r, dom_r,
+              bank_wdata_o <= {8'd0, 4'd0, mtype_r, seq_r, DOMAIN_C,
                                flags_r, rx_data_i};
               min_ok_r     <= (mtype_r inside {MT_PDREQ_C, MT_SIG_C});
             end
