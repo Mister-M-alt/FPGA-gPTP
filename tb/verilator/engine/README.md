@@ -20,6 +20,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 1, 3, 6, 7 | Table 11-7 `controlField`: Sync = 0, Follow_Up = 2, Announce and every Pdelay message = 5 |
 | 1, 2 | asCapable is NOT set after one good exchange (4.2.6.2.4) |
 | 3b | a foreign-domain Pdelay_Req (domain 0x10) draws no Pdelay_Resp and counts one drop; a domain-0 request right after it is answered with its own sequence and its Resp_FU |
+| 3c | a header-only Pdelay_Req (messageLength 34 in a 48-byte frame) and a declared 54 cut at 53 octets draw no Pdelay_Resp and count one drop each; the complete request right after them is answered with its own sequence and its Resp_FU (Table 11-11, #12) |
 | 4 | it IS set at the second; pdelay matches the nrr-corrected model |
 | 5 | become-master waits for asCapable |
 | 8b | a BETTER Announce in a foreign domain never reaches BTCA: GM, parent, flags and the raw published vector hold and the drop is counted (802.1AS-2011 8.1, IEEE 1588-2008 9.5.1) |
@@ -50,7 +51,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All forty planted mutations (the shared TX control value, ladder
+All forty-one planted mutations (the shared TX control value, ladder
 trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
@@ -61,14 +62,15 @@ parent update, a non-zero Sync reserved body, a reverted consumption gate, a
 removed dispatch seq guard, a dropped become-side best reset, a
 swapped vector/identity compare order, a 30-interval cease threshold,
 duplicates counted as a storm, a dead resume countdown, a removed
-mid-cease completion gate, and nine RTL mutations: the read bank
+mid-cease completion gate, and ten RTL mutations: the read bank
 tied to the write bank, the ingress stamp reverted to a single
 register, the runt length qualification removed, the parser's
 domainNumber drop arm removed, its compare narrowed to the low nibble,
 the end-of-frame gate's bad_r term dropped so a refused frame still
 dispatches, the Follow_Up minimum reverted to the 44-octet
 header-and-timestamp shape, the information TLV header arms removed,
-and the Follow_Up TLV block applied to Sync as well) turn the run red.
+the Follow_Up TLV block applied to Sync as well, and the Pdelay_Req
+minimum reverted to the 34-octet header) turn the run red.
 
 ```sh
 make        # regenerates gptp_ucode.hex from hdl/ucode/, builds, runs
