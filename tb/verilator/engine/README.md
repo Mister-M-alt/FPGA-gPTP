@@ -26,6 +26,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 10, 12 | sync-ok rises on a completed pair, falls at 375 ms (Table 4.2) |
 | 11 | a Follow_Up later than 125 ms pairs with nothing (Table 4.2) |
 | 11b | a Sync/Follow_Up pair in a foreign domain never steers: offset, PHC writes and flags hold, both drops are counted, and the foreign Sync leaves no pending slot for a domain-0 Follow_Up |
+| 11c | a Follow_Up without its information TLV never steers (Table 11-9: 76 octets, the TLV of 11.4.4.3 a field of the message): the 44-octet shape, a declared 76 cut at 75 octets and a 76-octet frame with tlvType 0x0008 each count one drop and leave the offset, the PHC writes and the flags unmoved, none consumes the pending Sync, and the complete Follow_Up that follows pairs with it and re-bases the PHC |
 | 10, 13 | offsets beyond 20 us re-base the modeled PHC by their exact negation, and the step's addend write is the bare surviving integrator |
 | 14 | a +5 us offset SLEWS: the PI addend equals the integer mirror |
 | 15 | closed loop: a +140 ppm master (above half the clamp on purpose) locks under 200 ns after one re-base, the addend carrying its rate |
@@ -48,7 +49,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All thirty-seven planted mutations (the shared TX control value, ladder
+All thirty-nine planted mutations (the shared TX control value, ladder
 trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
@@ -59,12 +60,14 @@ parent update, a non-zero Sync reserved body, a reverted consumption gate, a
 removed dispatch seq guard, a dropped become-side best reset, a
 swapped vector/identity compare order, a 30-interval cease threshold,
 duplicates counted as a storm, a dead resume countdown, a removed
-mid-cease completion gate, and six RTL mutations: the read bank
+mid-cease completion gate, and eight RTL mutations: the read bank
 tied to the write bank, the ingress stamp reverted to a single
 register, the runt length qualification removed, the parser's
 domainNumber drop arm removed, its compare narrowed to the low nibble,
-and the end-of-frame gate's bad_r term dropped so a refused frame still
-dispatches) turn the run red.
+the end-of-frame gate's bad_r term dropped so a refused frame still
+dispatches, the Follow_Up minimum reverted to the 44-octet
+header-and-timestamp shape, and the information TLV header arms
+removed) turn the run red.
 
 ```sh
 make        # regenerates gptp_ucode.hex from hdl/ucode/, builds, runs
