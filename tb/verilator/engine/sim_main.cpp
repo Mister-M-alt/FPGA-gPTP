@@ -5,12 +5,29 @@
 //
 //  1..4   pdelay bring-up: byte-exact both roles, asCapable at the
 //         second good exchange and not the first (Milan 4.2.6.2.4)
+//  1b     a Follow_Up for the boot request (sequence 0) ahead of any
+//         Resp, from the zero identity a never-armed pairing holds, is
+//         ignored: "armed with sequence 0" is not "nothing armed" (#8)
 //  3b     a foreign-domain Pdelay_Req draws no frame and counts one drop;
 //         a domain-0 request right after it is answered (8.1, #6)
 //  3c     a header-only and a cut Pdelay_Req draw no frame and count one
 //         drop each; the complete request after them is answered (#12)
 //  5..9   grandmaster life: timeout become (asCapable-gated), Announce/
 //         Sync/Follow_Up byte-exact, BTCA both directions, adoption
+//  7b     802.1AS-2011 11.2.15.3: a Pdelay_Resp_Follow_Up pairs with one
+//         Pdelay_Resp for the outstanding request only -- before any
+//         Resp, with a stale sequenceId, behind a stale Resp (0xEEEE,
+//         and the outstanding sequence with its high byte flipped),
+//         from another responder, duplicated, or for a superseded
+//         request it leaves the delay and asCapable unmoved; the paired
+//         one and the next exchange still compute (#8)
+//  26b    a completed exchange cannot be completed again: the identical
+//         pair replayed is not a second exchange (asCapable holds down),
+//         a skewed replay cannot move the delay (Figure 11-8, Cor2) (#8)
+//  27b    a second identity answering AFTER the first responder's
+//         Follow_Up still counts for the Milan 4.2.6.2.5 cease: the
+//         completed exchange's post-completion path reaches the identity
+//         bookkeeping (cease, silence, resume, re-earn) (#8)
 //  8b     a better Announce in a foreign domain never reaches BTCA: GM,
 //         parent, flags and the raw published vector hold (8.1, #6)
 //  8c..8m 802.1AS-2011 10.3.10.2.1 qualifyAnnounce: a better Announce
@@ -274,7 +291,7 @@ static void servo_mirror(int64_t off) {
 // peer clock runs at +2^-13 (~122 ppm) against ours; turnaround fields are
 // constants of the mode, the ingress stamp is t1 + wire turnaround.
 enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_DUAL,
-              PD_DUP };
+              PD_DUP, PD_DUAL_LATE };
 static PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
 static size_t pd_seen = 0;
 
@@ -317,6 +334,16 @@ static void service_pdelay() {
     g.ts(t3); g.u64(OUR_CID); g.u16(1);
     send_frame(g.b, t4 + 1000);
     run(400);
+    if (pd_mode == PD_DUAL_LATE) {
+      // the second identity answers AFTER the first responder's
+      // Follow_Up: the exchange has completed, so this response takes
+      // the handler's post-completion path, which must still reach the
+      // Milan 4.2.6.2.5 identity bookkeeping
+      Frame d = ptp(0x3, seq, 0, 0x0200, 20, 0x0077770077FE0077ull);
+      d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
+      send_frame(d.b, t4 + 2000);
+      run(400);
+    }
     model_exchange(t1, t2, t3, t4);
   }
 }
@@ -474,6 +501,23 @@ int main(int argc, char **argv) {
   const uint64_t T1 = 1000000ull;
   txts(T1);
   run(2000);
+
+  // ---- 1b: a Follow_Up for the boot request ahead of any Resp ----------
+  // sequence 0 is the first request the plane sends (and recurs every
+  // 65,536 requests): "armed with sequence 0" must differ from "nothing
+  // armed". A never-armed pairing holds a zero responder identity, so
+  // the forged frame carries exactly that identity: only the armed bit
+  // can refuse it (FPGA-gPTP #8)
+  {
+    Frame g = ptp(0xA, 0, 0, 0x0000, 20, 0);
+    g.ts(T1 + 20000); g.u64(OUR_CID); g.u16(1);
+    send_frame(g.b, T1 + 22200);
+    run(6000);
+    expect("boot Follow_Up before any Resp: pdelay unmoved",
+           dut->pub_pdelay_ns_o, 0);
+    expect("boot Follow_Up before any Resp: asCapable unmoved",
+           dut->pub_flags_o & FL_ASCAP, 0);
+  }
 
   // ---- 2: one good exchange (D = 600); not capable yet ------------------
   const uint64_t T2 = peer_ns(T1 + 300), T3 = T2 + 20000,
@@ -654,6 +698,117 @@ int main(int argc, char **argv) {
            txns[sidx]);
     expect("syncfu tlv", fld32(fu, 58), 0x0003001C);
     expect("syncfu org", fld48(fu, 62), 0x0080C2000001ull);
+  }
+
+  // ---- 7b: a Pdelay_Resp_Follow_Up pairs with one Pdelay_Resp only ------
+  // 802.1AS-2011 11.2.15.3 (Figure 11-8): a Pdelay_Resp is taken only
+  // when it answers the OUTSTANDING request (its sequenceId, our
+  // requestingPortIdentity), and a Pdelay_Resp_Follow_Up only when it
+  // carries that sequenceId and comes from that responder; everything
+  // else is ignored and neither neighborPropDelay nor the ladder moves.
+  // The auto-peer is silenced so every frame is hand-built against the
+  // DUT's own request; a wrongly consumed Follow_Up carries a t3 skewed
+  // +2 us, so the published delay would move by -1 us and the verdict
+  // would fall below the Milan floor (FPGA-gPTP #8)
+  {
+    const uint64_t STRANGER = 0x00BAD0FFFE000002ull;
+    pd_mode = PD_SKIP;
+    tx_seen = txf.size();
+    std::vector<uint8_t> rq = wait_tx(0x2, 4000000);
+    expect("7b: a request to pair against", !rq.empty(), 1);
+    uint16_t seq = rq.empty() ? 0 : fld16(rq, 44);
+    size_t rqi = tx_seen - 1;
+    for (int k = 0; k < 400 && txns[rqi] == 0; k++) tick();
+    uint64_t t1 = txns[rqi];
+    uint64_t t2 = peer_ns(t1 + 300), t3 = t2 + 20000, t4 = t1 + 21200;
+    uint32_t pd0 = dut->pub_pdelay_ns_o;
+    uint32_t fl0 = dut->pub_flags_o;
+    auto resp = [&](uint16_t s, uint64_t src, uint64_t t2v, uint64_t rx) {
+      Frame f = ptp(0x3, s, 0, 0x0200, 20, src);
+      f.ts(t2v); f.u64(OUR_CID); f.u16(1);
+      send_frame(f.b, rx);
+      run(2000);
+    };
+    auto rfu = [&](uint16_t s, uint64_t src, uint64_t t3v, uint64_t rx) {
+      Frame g = ptp(0xA, s, 0, 0x0000, 20, src);
+      g.ts(t3v); g.u64(OUR_CID); g.u16(1);
+      send_frame(g.b, rx);
+      run(6000);
+    };
+    // the completion path can only touch asCapable (the ladder and the
+    // threshold verdict), so that is the bit pinned; the role bits are
+    // the announce machinery's and move on their own cadence
+    auto unmoved = [&](const char *tag) {
+      char n[96];
+      snprintf(n, 96, "%s: pdelay unmoved", tag);
+      expect(n, dut->pub_pdelay_ns_o, pd0);
+      snprintf(n, 96, "%s: asCapable unmoved", tag);
+      expect(n, dut->pub_flags_o & FL_ASCAP, fl0 & FL_ASCAP);
+    };
+    // (i) a Follow_Up before any Pdelay_Resp: nothing is armed
+    rfu(seq, PEER_CID, t3 + 2000, t4 + 1000);
+    unmoved("Follow_Up before any Resp");
+    // (ii) the parent campaign's probe: a stale sequenceId, our identity
+    rfu(0xEEEE, PEER_CID, 1000, t4 + 1100);
+    unmoved("stale-sequence Follow_Up");
+    // (iii) a stale Resp + Follow_Up pair: the Resp answers nothing
+    // outstanding, so it must not arm the pairing either
+    resp(0xEEEE, PEER_CID, t2, t4);
+    rfu(0xEEEE, PEER_CID, t3 + 2000, t4 + 1200);
+    unmoved("stale-sequence Resp + Follow_Up pair");
+    // (iii-b) a stale pair whose sequenceId differs from the outstanding
+    // one in the HIGH byte only: a byte-wide sequence compare would arm
+    resp((uint16_t)(seq ^ 0x0100), PEER_CID, t2, t4);
+    rfu((uint16_t)(seq ^ 0x0100), PEER_CID, t3 + 2000, t4 + 1250);
+    unmoved("high-byte-stale Resp + Follow_Up pair");
+    // (iv) the legitimate Resp arms the pairing; a Follow_Up with the
+    // right sequenceId and our identity from ANOTHER source is not it
+    resp(seq, PEER_CID, t2, t4);
+    rfu(seq, STRANGER, t3 + 2000, t4 + 1300);
+    unmoved("Follow_Up from another responder");
+    // (v) the paired Follow_Up still computes
+    rfu(seq, PEER_CID, t3, t4 + 1400);
+    model_exchange(t1, t2, t3, t4);
+    expect("the paired Follow_Up computes", dut->pub_pdelay_ns_o,
+           (uint32_t)pdm.d);
+    expect("the paired Follow_Up keeps capable",
+           dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    pd0 = dut->pub_pdelay_ns_o;
+    fl0 = dut->pub_flags_o;
+    // (vi) a duplicate Follow_Up: the pairing was consumed, one per Resp
+    rfu(seq, PEER_CID, t3 + 2000, t4 + 1500);
+    unmoved("duplicate Follow_Up");
+    // (vii) a Follow_Up for a superseded request: its Resp did arrive,
+    // but the next request owns the pairing now, so it must not compute
+    // against the new request's t1
+    tx_seen = txf.size();
+    std::vector<uint8_t> rq2 = wait_tx(0x2, 4000000);
+    expect("7b: a second request", !rq2.empty(), 1);
+    uint16_t seq2 = rq2.empty() ? 0 : fld16(rq2, 44);
+    size_t rq2i = tx_seen - 1;
+    for (int k = 0; k < 400 && txns[rq2i] == 0; k++) tick();
+    uint64_t t1b = txns[rq2i];
+    uint64_t t2b = peer_ns(t1b + 300), t3b = t2b + 20000, t4b = t1b + 21200;
+    resp(seq2, PEER_CID, t2b, t4b);               // and no Follow_Up
+    tx_seen = txf.size();
+    std::vector<uint8_t> rq3 = wait_tx(0x2, 4000000);
+    expect("7b: a third request", !rq3.empty(), 1);
+    uint16_t seq3 = rq3.empty() ? 0 : fld16(rq3, 44);
+    size_t rq3i = tx_seen - 1;
+    for (int k = 0; k < 400 && txns[rq3i] == 0; k++) tick();
+    uint64_t t1c = txns[rq3i];
+    uint64_t t2c = peer_ns(t1c + 300), t3c = t2c + 20000, t4c = t1c + 21200;
+    rfu(seq2, PEER_CID, t3b, t4c + 1000);
+    unmoved("Follow_Up for a superseded request");
+    resp(seq3, PEER_CID, t2c, t4c);
+    rfu(seq3, PEER_CID, t3c, t4c + 1100);
+    model_exchange(t1c, t2c, t3c, t4c);
+    expect("the next exchange computes", dut->pub_pdelay_ns_o,
+           (uint32_t)pdm.d);
+    expect("still capable after the probes",
+           dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    pd_seen = txf.size();                  // the peer answers fresh ones only
+    pd_mode = PD_NORMAL;
   }
 
   // ---- 8: worse announce -> stay master ---------------------------------
@@ -1426,6 +1581,52 @@ int main(int argc, char **argv) {
   expect("gap took the stale path", pdm.stale_skip, 1);
   expect("stale window skips ratio", dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
 
+  // ---- 26b: a completed exchange cannot be completed again --------------
+  // Figure 11-8 (Cor2-2015): after the pair, only the interval timer
+  // leaves WAITING_FOR_PDELAY_INTERVAL_TIMER; a replayed Pdelay_Resp +
+  // Follow_Up for the same sequenceId is not an exchange. asCapable is
+  // down (phase 25) with ONE exchange in (phase 26), so a second
+  // completion in this interval would raise it a request early (Milan
+  // 4.2.6.2.4); a skewed replay (t4 + 2000: D 600 -> 1600) would
+  // overwrite the genuine delay and clear the ladder (FPGA-gPTP #8)
+  {
+    pd_mode = PD_SKIP;
+    size_t rqi = 0;
+    bool found = false;
+    for (size_t i = txf.size(); i-- > 0;)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2 && txns[i]) {
+        rqi = i;
+        found = true;
+        break;
+      }
+    expect("26b: the request phase 26 answered", found, 1);
+    uint16_t seq = found ? fld16(txf[rqi], 44) : 0;
+    uint64_t t1 = found ? txns[rqi] : 0;
+    uint64_t t2 = peer_ns(t1 + 300), t3 = t2 + 20000, t4 = t1 + 21200;
+    uint32_t pd0 = dut->pub_pdelay_ns_o;
+    expect("26b: asCapable down, one exchange in",
+           dut->pub_flags_o & FL_ASCAP, 0);
+    for (int k = 0; k < 2; k++) {
+      uint64_t skew = k ? 2000 : 0;          // the identical pair, then skewed
+      Frame f = ptp(0x3, seq, 0, 0x0200, 20);
+      f.ts(t2); f.u64(OUR_CID); f.u16(1);
+      send_frame(f.b, t4 + skew);
+      run(2000);
+      Frame g = ptp(0xA, seq, 0, 0x0000, 20);
+      g.ts(t3); g.u64(OUR_CID); g.u16(1);
+      send_frame(g.b, t4 + skew + 1000);
+      run(6000);
+      const char *tag = k ? "skewed replay" : "replayed identical pair";
+      char n[96];
+      snprintf(n, 96, "%s: not a second exchange", tag);
+      expect(n, dut->pub_flags_o & FL_ASCAP, 0);
+      snprintf(n, 96, "%s: pdelay unmoved", tag);
+      expect(n, dut->pub_pdelay_ns_o, pd0);
+    }
+    pd_seen = txf.size();
+    pd_mode = PD_NORMAL;
+  }
+
   // ---- 27: the multiple-responder cease rule (Milan 4.2.6.2.5) ----------
   // three successive requests each answered by two distinct identities
   // stop Pdelay_Req transmission and drop asCapable; the (bench-
@@ -1445,30 +1646,39 @@ int main(int argc, char **argv) {
     expect("ceased: no requests", reqs, 0);
     // forged Resp+Resp_FU pairs echoing our identity must not climb
     // the ladder while ceased (the completion path is gated). A real
-    // forger replays against the LAST genuine request: the engine
-    // computes the turnaround from its stored t1, so the forgery must
-    // reuse it or self-defeat on the delay range
+    // forger replays against the LAST genuine request: the engine pairs
+    // on its sequenceId (11.2.15.3) and computes the turnaround from its
+    // stored t1, so the forgery must reuse both or self-defeat before
+    // the gate it is here to probe. The pair's t3 is skewed +2 us: a
+    // completion behind a missing gate would publish -400 ns (once
+    // completed, the request admits no second pair, so the delay is the
+    // observable, not a second climb)
     uint64_t t1_last = 0;
+    uint16_t seq_last = 0;
     for (size_t i = txf.size(); i-- > 0;)
       if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2 && txns[i]) {
         t1_last = txns[i];
+        seq_last = fld16(txf[i], 44);
         break;
       }
     expect("a genuine t1 to replay against", t1_last != 0, 1);
+    uint32_t pd_cease = dut->pub_pdelay_ns_o;
     for (int k = 0; k < 2; k++) {
       uint64_t t1f = t1_last, t2f = peer_ns(t1f + 300),
-               t3f = t2f + 20000, t4f = t1f + 21200;
-      Frame f = ptp(0x3, (uint16_t)(0x999 + k), 0, 0x0200, 20);
+               t3f = t2f + 20000 + 2000, t4f = t1f + 21200;
+      Frame f = ptp(0x3, seq_last, 0, 0x0200, 20);
       f.ts(t2f); f.u64(OUR_CID); f.u16(1);
       send_frame(f.b, t4f);
       run(2000);
-      Frame g = ptp(0xA, (uint16_t)(0x999 + k), 0, 0x0000, 20);
+      Frame g = ptp(0xA, seq_last, 0, 0x0000, 20);
       g.ts(t3f); g.u64(OUR_CID); g.u16(1);
       send_frame(g.b, t4f + 1000);
       run(4000);
     }
     expect("forged pairs cannot climb mid-cease",
            dut->pub_flags_o & FL_ASCAP, 0);
+    expect("forged pairs cannot publish mid-cease",
+           dut->pub_pdelay_ns_o, pd_cease);
     pd_mode = PD_NORMAL;
     size_t mark2 = txf.size();
     bool resumed = false;
@@ -1492,6 +1702,41 @@ int main(int argc, char **argv) {
     expect("duplicates are not a storm",
            dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     pd_mode = PD_NORMAL;
+  }
+
+  // ---- 27b: a late second identity still ceases --------------------------
+  // the second identity answers AFTER the first responder's Follow_Up,
+  // so the exchange has already completed when its Pdelay_Resp arrives:
+  // the handler refuses to re-arm (26b) but must still count the
+  // identity for the Milan 4.2.6.2.5 rule. Three such intervals cease
+  // Pdelay_Req and drop asCapable, the countdown resumes them, the
+  // ladder re-earns (the review's probe; a completed path sent to END
+  // instead of the bookkeeping passes phase 27, whose second identity
+  // answers before the Follow_Up, and fails here)
+  {
+    pd_mode = PD_NORMAL;
+    expect("27b: capable before the late-second storm",
+           wait_flags(FL_ASCAP, FL_ASCAP, 6000000ull), 1);
+    pd_mode = PD_DUAL_LATE;
+    expect("27b: a late second identity still ceases",
+           wait_flags(FL_ASCAP, 0, 16000000ull), 1);
+    size_t mark = txf.size();
+    run_svc(5000000);                            // 2.5 s of silence?
+    int reqs = 0;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) reqs++;
+    expect("27b: ceased, no requests", reqs, 0);
+    pd_mode = PD_NORMAL;
+    size_t mark2 = txf.size();
+    bool resumed = false;
+    for (int k = 0; k < 40 && !resumed; k++) {
+      run_svc(200000);
+      for (size_t i = mark2; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) resumed = true;
+    }
+    expect("27b: the countdown resumes requests", resumed, 1);
+    expect("27b: the ladder re-earns",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
   }
 
   // ---- 28: a warm reset during a cease still resumes ---------------------

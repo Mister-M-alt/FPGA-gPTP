@@ -294,3 +294,56 @@ lint clean. The review round added the first-hop loop (the one an end
 station meets without forgery), stepsRemoved 0x0100 and 0xFFFF, and two
 half-identity adopt-controls; the five mutations that had escaped the
 first round are red with them.
+
+## The pairing round re-measured: ROM words only
+
+FPGA-gPTP #8, found by the parent's field campaign: the
+Pdelay_Resp_Follow_Up handler qualified requestingPortIdentity and
+nothing else, so one unsolicited Follow_Up with a stale sequenceId
+computed a delay from stale scratch, published 20 ms of
+neighborPropDelay and dropped asCapable. The fix is 802.1AS-2011
+11.2.15.3 (Figure 11-8) in ucode on both Pdelay receive messages: a
+Pdelay_Resp is taken only for the outstanding request's sequenceId and
+arms the pairing, a Follow_Up only behind that Pdelay_Resp and from its
+sender, one per Resp, and each new request clears the arm. No RTL
+changed. The ROM grew from 895 to 927 real words of 1,024 (+32: the
+Pdelay_Resp handler 27 to 43 in its own slot; the Follow_Up handler
+kept at 16 so SERVO keeps the 48-word gap behind it; the pairing opens
+the PDPOST leg, 63 to 77, which the packer moves to the tail and ANNTX
+takes its old gap). Same instrument, Vivado 2026.1 OOC on
+`xc7a100tfgg484-2` at 100 MHz, 2026-08-22, against main at 48f299ab
+(PR #20, the announce qualification) re-measured the same day (main carries the qualification round's ROM and the parser arms of
+#18 and #19; this round moves nothing):
+
+| | 48f299ab (PR #20, the announce qualification) | the pairing round | delta |
+|---|---|---|---|
+| Slice LUTs | 3,115 (2,789 logic + 326 LUTRAM) | **3,115** (2,789 + 326) | **0** |
+| `u_ucpu` LUTs | 1,997 | 1,997 | 0 |
+| Registers | 2,390 | 2,390 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+Byte-identical, as a ROM-only change must be. Verification at this
+measurement: ucpu 768 / parser 140 / engine 319 checks, sixty-three
+planted mutations red (this round's ten, engine checks failed: a
+Pdelay_Resp taken for any sequenceId 46 and its sequence compare
+narrowed to a byte 44, the arm cleared on the Resp itself 129 of 281
+before the run times out, a Follow_Up taken with nothing armed 64 and
+the armed bit dropped from its compare 3, the pairing not consumed 44,
+the responder identity not paired 42, the arm surviving the next request
+42, a completed exchange armed again 2, the completed path skipping the
+identity bookkeeping 2; the qualification round's twelve re-run at this
+ROM layout, since the packer moved four legs: the own-source rule
+removed 42 and its compare narrowed 3, the stepsRemoved bound off by one
+48 and 3 and its compare narrowed 30, the dead path-trace compare 44,
+the hop compare narrowed 3, the hop read from the next word 32, the count
+gate removed 56, the walk one past the count 19, the one-hop walk 45, the
+base left offset 83), lint clean. The review rounds added the
+completed-exchange rule (the round's earlier head fails its two probes
+exactly as the review measured: asCapable 4 after a replayed pair, the
+delay 601 to 1600 ns after a skewed one), the high-byte-stale pair, the
+boot Follow_Up, the skewed forged pairs of the cease phase, and the
+late second identity of phase 27b, which pins the completed path's
+identity bookkeeping (a completed path sent to END passes phase 27 and
+fails 27b).
