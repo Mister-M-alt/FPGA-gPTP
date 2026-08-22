@@ -708,10 +708,27 @@ def prog_rx_announce(base):
 def prog_rx_pdreq(base):
     p = Prog(base)
     e_guard_init(p, "out")
+    # IEEE 1588-2008 9.5.2.2: "A message received at the same port that
+    # issued the message shall be ignored", identified by comparing the
+    # received sourcePortIdentity against the port's own portIdentity
+    # (its Table 17). 802.1AS-2011 Figure 11-9, the MDPdelayResp machine
+    # this handler implements, carries no such condition of its own, so
+    # 9.5.2.2 is the whole mandate on this side, unlike the requester
+    # side where Figure 11-8 states it (FPGA-gPTP #26). Answering our own
+    # reflected request is not merely useless: the response takes the
+    # shared S_PEND cell, so an egress timestamp our own outstanding
+    # Pdelay_Req was waiting for is routed to the Follow_Up leg instead
+    # and t1 is lost (#28, which this compare does not close: any peer's
+    # request in that window does the same). Refused ahead of every
+    # scratch write, so a refused request leaves no residue. RB carries
+    # their source on to the S_RQCID write below
+    p.emit("RDST", rd=RB, imm=RG_BANK | 2, fmt=FMT_Q)            # their source
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    p.emit("CMP", ra=RB, rb=RT, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="out")
     p.emit("RDST", rd=RA, imm=RG_BANK | 0, fmt=FMT_Q)
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_SHR, imm=32)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_RQSEQ, fmt=FMT_Q)
-    p.emit("RDST", rd=RB, imm=RG_BANK | 2, fmt=FMT_Q)
     p.emit("WRST", ra=RB, imm=RG_SCR | S_RQCID, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_BANK | 3, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_RQPN, fmt=FMT_Q)
