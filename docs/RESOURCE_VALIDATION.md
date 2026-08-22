@@ -179,6 +179,8 @@ same day, not the v7 row above, which predates that PR:
 
 The compare against a constant is cheaper than the register it
 replaced and the mux that fed bank word 0 from it. Verification at this
-measurement: ucpu 768 / parser 37 / engine 178 checks, thirty-four
-planted mutations red (the new one, the domain arm removed, fails 7
-parser and 21 engine checks), lint clean.
+measurement: ucpu 768 / parser 51 / engine 183 checks, thirty-six
+planted mutations red (the three new ones: the domain arm removed fails
+16 parser and 23 engine checks, the compare narrowed to its low nibble
+7 and 2, the end-of-frame gate without its bad_r term 5 and 2), lint
+clean.

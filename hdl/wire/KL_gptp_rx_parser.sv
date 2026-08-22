@@ -97,10 +97,11 @@ module KL_gptp_rx_parser
 
   // ---- the one gPTP domain ----------------------------------------------
   //! 802.1AS-2011 8.1: the domain number of a gPTP domain shall be 0, and
-  //! 10.5.2.2.5 scopes every message's domainNumber to it; Milan v1.2
-  //! runs one gPTP domain per AVB interface (5.3.6.1). Derived here, in
-  //! the one place the receive side qualifies it; the TX builder emits
-  //! the same zero from the register file's zero source (e_hdr).
+  //! 10.5.2.2.5 carries that value in every message. IEEE 1588-2008 9.5.1
+  //! is the receive rule: only a message whose domainNumber matches the
+  //! local domain is accepted for processing. Derived here, in the one
+  //! place the receive side qualifies it; the TX builder emits the same
+  //! zero from the register file's zero source (e_hdr).
   localparam logic [7:0] DOMAIN_C = 8'd0;
 
   // ---- absolute byte offsets (DA = byte 0, PTP header = byte 14) --------

@@ -5,6 +5,8 @@
 //
 //  1..4   pdelay bring-up: byte-exact both roles, asCapable at the
 //         second good exchange and not the first (Milan 4.2.6.2.4)
+//  3b     a foreign-domain Pdelay_Req draws no frame and counts one drop;
+//         a domain-0 request right after it is answered (8.1, #6)
 //  5..9   grandmaster life: timeout become (asCapable-gated), Announce/
 //         Sync/Follow_Up byte-exact, BTCA both directions, adoption
 //  8b     a better Announce in a foreign domain never reaches BTCA: GM,
@@ -450,6 +452,45 @@ int main(int argc, char **argv) {
     expect("pdrfu t3", fld48(rfu, 48) * 1000000000ull + fld32(rfu, 54),
            T3R);
     expect("pdrfu reqCID", fld64(rfu, 58), PEER_CID);
+  }
+
+  // ---- 3b: a foreign-domain Pdelay_Req draws no frame; domain 0 does ----
+  // the responder is the wire-visible role, and Pdelay_Req is one of the
+  // two header-only types whose min_ok_r is set regardless of bad_r, so
+  // the parser's end-of-frame gate is the only barrier after the domain
+  // arm: a gate that dropped the frame but still dispatched the event
+  // would answer from the STALE bank. Domain 0x10 has a zero low nibble,
+  // so a compare narrowed to four bits would admit it (FPGA-gPTP #6)
+  {
+    uint16_t drops = dut->dbg_rx_drop_o;
+    size_t mark = txf.size();
+    Frame f = ptp(0x2, 0x55AB, 0, 0x0000, 20);
+    f.b[18] = 0x10;                              // domainNumber, byte 4
+    f.u64(0); f.u16(0); f.ts(0);
+    f.b.resize(68);
+    send_frame(f.b, T2R + 100000);
+    run(4000);
+    int resps = 0;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) resps++;
+    expect("foreign-domain request: no Pdelay_Resp", resps, 0);
+    expect("foreign-domain request: dropped and counted",
+           dut->dbg_rx_drop_o, (uint16_t)(drops + 1));
+    tx_seen = txf.size();
+    Frame g = ptp(0x2, 0x55AC, 0, 0x0000, 20);   // domain 0, right after
+    g.u64(0); g.u16(0); g.ts(0);
+    g.b.resize(68);
+    send_frame(g.b, T2R + 200000);
+    std::vector<uint8_t> r2 = wait_tx(0x3, 400000);
+    if (!r2.empty()) {
+      expect("domestic request after it: answered", fld16(r2, 44), 0x55AC);
+      expect("domestic request after it: reqCID", fld64(r2, 58), PEER_CID);
+    }
+    txts(T3R + 200000);
+    std::vector<uint8_t> u2 = wait_tx(0xA, 400000);
+    if (!u2.empty())
+      expect("domestic request after it: Resp_FU pairs", fld16(u2, 44),
+             0x55AC);
   }
 
   // ---- 4: the live peer raises asCapable on the SECOND exchange ---------
