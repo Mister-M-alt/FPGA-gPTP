@@ -438,3 +438,54 @@ identity of the Milan 4.2.6.2.5 probes, which now shares our low 32
 bits and differs above them), lint clean. The parser suite is untouched
 at 167: the parser holds no identity of its own, so the rule cannot be
 qualified there.
+
+## The reflected-request round re-measured: ROM words only
+
+FPGA-gPTP #26, found while measuring #23: the responder answered any
+Pdelay_Req with a valid header, including one carrying our own
+clockIdentity as its source, which is our own request returned by a loop
+or a misconfigured bridge. IEEE 1588-2008 9.5.2.2 is the rule ("A
+message received at the same port that issued the message shall be
+ignored", compared on sourcePortIdentity against the port's own
+portIdentity, its Table 17); 802.1AS-2011 Figure 11-9, the MDPdelayResp
+machine this handler implements, carries no condition of its own, so
+9.5.2.2 is the whole mandate on this side, unlike the requester side
+where Figure 11-8 states it. Answering is not merely useless: the
+response claims the shared S_PEND cell, so the egress timestamp our own
+outstanding Pdelay_Req was waiting for is routed to the Follow_Up leg
+and t1 is lost, which publishes 500,600 ns against a modelled 600 and
+puts the measurement far outside the -80 to 800 ns verdict window. That
+theft is its own defect, #28, reachable by any peer's request in the
+same window and NOT closed by this change; what this change removes is
+the one trigger guaranteed to land there, since a reflection of our own
+request arrives immediately after we send it. The fix is one 64-bit
+compare of bank word 2 against the S_CID cell, ahead of every scratch
+write, so a refused request leaves no residue. No RTL changed. The ROM
+grew from 929 to 932 real words of 1,024, 92 free (+3: the two reads,
+the compare and its branch, less the handler's existing read of their
+source, hoisted to feed it), every leg base unchanged and 54 word
+positions differing, all inside the Pdelay_Req handler's own slot. Same
+instrument, Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100 MHz,
+2026-08-22, against main at 03ad3caf re-measured the same day in its own
+worktree:
+
+| | 03ad3caf (PR #25) | the reflected-request arm | delta |
+|---|---|---|---|
+| Slice LUTs | 3,116 (2,790 logic + 326 LUTRAM) | **3,116** (2,790 + 326) | **0** |
+| `u_ucpu` LUTs | 1,997 | 1,997 | 0 |
+| `u_parser` LUTs | 543 | 543 | 0 |
+| Registers | 2,390 | 2,390 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+Byte-identical, as a ROM-only change must be. Verification at this
+measurement: ucpu 768 / parser 167 / engine 340 checks, seventy
+planted mutations red (this round's three, engine checks failed: the
+compare removed 17, because the answered reflection also steals the
+boot request's egress timestamp; the compare narrowed to the low half 4
+and narrowed to the high half 4, each caught by the genuine requester
+that differs from us in only the other half), lint clean. Nothing is
+counted when the request is refused: the refusal is in ucode, and
+`dbg_rx_drop_o` counts what the parser refused, which holds no identity
+of its own.

@@ -5,6 +5,13 @@
 //
 //  1..4   pdelay bring-up: byte-exact both roles, asCapable at the
 //         second good exchange and not the first (Milan 4.2.6.2.4)
+//  1a     a Pdelay_Req sourced from OUR OWN clockIdentity, arriving
+//         while the boot request waits for its egress timestamp, draws
+//         no frame and cannot steal that timestamp (1588-2008 9.5.2.2,
+//         #26; the theft itself is #28)
+//  3a     a requester differing from us in only one half of its
+//         clockIdentity is a neighbour and is still answered, so a
+//         compare narrowed to either half goes red (#26)
 //  1b     a Follow_Up for the boot request (sequence 0) ahead of any
 //         Resp, from the zero identity a never-armed pairing holds, is
 //         ignored: "armed with sequence 0" is not "nothing armed" (#8)
@@ -91,12 +98,33 @@
 static const uint64_t OUR_MAC = 0x02A1B2C3D4E5ull;
 static const uint64_t OUR_CID = 0x02A1B2FFFEC3D4E5ull;
 static const uint64_t PEER_CID = 0x0080E1FFFE112233ull;
-//! the second responder identity of the Milan 4.2.6.2.5 probes, chosen
-//! to share OUR clockIdentity's low 32 bits and differ above them: it is
-//! a genuine responder, so the 1588-2008 9.5.2.2 compare must admit it,
-//! and a compare narrowed to 32 bits refuses it instead and never
-//! reaches the bookkeeping the cease phases read (FPGA-gPTP #23)
-static const uint64_t NEAR_CID = 0x00777700FEC3D4E5ull;
+//! an identity that shares OUR clockIdentity's low 32 bits and differs
+//! above them, used by two rounds: as the second responder of the Milan
+//! 4.2.6.2.5 probes, which the 1588-2008 9.5.2.2 compare must admit
+//! (FPGA-gPTP #23), and as a genuine requester the responder must answer
+//! (#26). A compare narrowed to the low half refuses it, which is how
+//! both rounds catch that narrowing.
+//!
+//! DERIVED from OUR_CID, never hand-copied. A literal keeps the halves it
+//! was written with, and --mac moves OUR_CID: measured on this suite, one
+//! byte of difference in the high-half fixture and the high-half
+//! narrowing mutation escapes silently at 340/340, where the derived form
+//! gives 336/340. The static_asserts below are the second lock, so the
+//! shared halves cannot drift without the build saying so
+static const uint64_t NEAR_CID =
+    0x0077770000000000ull | (OUR_CID & 0xFFFFFFFFull);
+//! its mirror: a requester sharing our HIGH 32 bits and differing below,
+//! so a compare narrowed to the high half refuses this one instead (#26)
+static const uint64_t REQ_HI_CID =
+    (OUR_CID & 0xFFFFFFFF00000000ull) | 0x00112233ull;
+static_assert((NEAR_CID & 0xFFFFFFFFull) == (OUR_CID & 0xFFFFFFFFull),
+              "NEAR_CID must share OUR_CID's low half");
+static_assert((NEAR_CID >> 32) != (OUR_CID >> 32),
+              "NEAR_CID must differ from OUR_CID above the halfway line");
+static_assert((REQ_HI_CID >> 32) == (OUR_CID >> 32),
+              "REQ_HI_CID must share OUR_CID's high half");
+static_assert((REQ_HI_CID & 0xFFFFFFFFull) != (OUR_CID & 0xFFFFFFFFull),
+              "REQ_HI_CID must differ from OUR_CID below the halfway line");
 static const uint32_t OUR_CQ = 0xF8FE436A;
 
 // publish flags bits (the retired software contract)
@@ -532,6 +560,38 @@ int main(int argc, char **argv) {
   }
   expect("asCapable low at boot", dut->pub_flags_o & FL_ASCAP, 0);
   const uint64_t T1 = 1000000ull;
+
+  // ---- 1a: a self-sourced Pdelay_Req draws nothing -----------------------
+  // IEEE 1588-2008 9.5.2.2: "A message received at the same port that
+  // issued the message shall be ignored", compared on sourcePortIdentity
+  // against the port's own portIdentity (its Table 17). 802.1AS-2011
+  // Figure 11-9 (MDPdelayResp) carries no such condition, so 9.5.2.2 is
+  // the whole mandate on this side (#26). The window is chosen, not
+  // incidental: the boot Pdelay_Req is still waiting for its egress
+  // timestamp, which is exactly when a reflection of it arrives, and
+  // answering steals that timestamp through the shared S_PEND cell
+  // (#28), so phase 2's published delay below is this phase's real
+  // oracle: 600 if the request was ignored, 500,600 if it was answered.
+  // No counter moves, because the refusal is in the ucode and
+  // dbg_rx_drop_o counts what the parser refused
+  {
+    size_t mark = txf.size();
+    uint16_t drops = dut->dbg_rx_drop_o;
+    uint32_t flags0 = dut->pub_flags_o;
+    Frame q = ptp(0x2, 0x9901, 0, 0x0000, 20, OUR_CID);
+    q.u64(0); q.u16(0); q.ts(0);
+    q.b.resize(68);
+    send_frame(q.b, T1 - 1000);
+    run(8000);
+    int resps = 0;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) resps++;
+    expect("self-sourced request: no Pdelay_Resp", resps, 0);
+    expect("self-sourced request: no frame at all", txf.size(), mark);
+    expect("self-sourced request: not a parser drop", dut->dbg_rx_drop_o,
+           drops);
+    expect("self-sourced request: flags unmoved", dut->pub_flags_o, flags0);
+  }
   txts(T1);
   run(2000);
 
@@ -631,6 +691,46 @@ int main(int argc, char **argv) {
     expect("pdrfu t3", fld48(rfu, 48) * 1000000000ull + fld32(rfu, 54),
            T3R);
     expect("pdrfu reqCID", fld64(rfu, 58), PEER_CID);
+  }
+
+  // ---- 3a: a requester whose identity nearly matches ours is answered ---
+  // the refusal above compares all 64 bits of the clockIdentity. These
+  // two requesters differ from ours in only one half each, so a compare
+  // narrowed to the low half refuses the first and one narrowed to the
+  // high half refuses the second: either way a genuine neighbour loses
+  // its Pdelay_Resp and this phase goes red.
+  //
+  // Only FMT_D is a symmetric narrowing here. The ISA masks operand A
+  // alone (KL_gptp_ucpu.sv:188-194; b_or_imm_w keeps all 64 bits), so
+  // FMT_W and FMT_B make the compare unsatisfiable rather than narrow:
+  // nothing is ever refused, this phase stays green, and the loss shows
+  // in phase 1a instead, where the self-sourced request is answered
+  {
+    struct Near { const char *tag; uint64_t cid; uint16_t seq; uint64_t rx, tx; };
+    const Near near[] = {
+      {"low-half", NEAR_CID, 0x55B1, T2R + 20000, T3R + 20000},
+      {"high-half", REQ_HI_CID, 0x55B2, T2R + 40000, T3R + 40000},
+    };
+    for (const Near &n : near) {
+      Frame f = ptp(0x2, n.seq, 0, 0x0000, 20, n.cid);
+      f.u64(0); f.u16(0); f.ts(0);
+      f.b.resize(68);
+      send_frame(f.b, n.rx);
+      std::vector<uint8_t> r = wait_tx(0x3, 400000);
+      char nm[80];
+      snprintf(nm, sizeof nm, "%s requester: answered", n.tag);
+      expect(nm, r.empty() ? 0 : 1, 1);
+      if (!r.empty()) {
+        snprintf(nm, sizeof nm, "%s requester: its sequence", n.tag);
+        expect(nm, fld16(r, 44), n.seq);
+        snprintf(nm, sizeof nm, "%s requester: its reqCID", n.tag);
+        expect(nm, fld64(r, 58), n.cid);
+      }
+      txts(n.tx);
+      std::vector<uint8_t> u = wait_tx(0xA, 400000);
+      snprintf(nm, sizeof nm, "%s requester: Resp_FU pairs", n.tag);
+      expect(nm, u.empty() ? 0 : (uint64_t)fld16(u, 44), n.seq);
+    }
   }
 
   // ---- 3b: a foreign-domain Pdelay_Req draws no frame; domain 0 does ----

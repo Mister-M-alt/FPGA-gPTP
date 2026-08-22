@@ -708,10 +708,44 @@ def prog_rx_announce(base):
 def prog_rx_pdreq(base):
     p = Prog(base)
     e_guard_init(p, "out")
+    # IEEE 1588-2008 9.5.2.2: "A message received at the same port that
+    # issued the message shall be ignored". The subclause identifies that
+    # by comparing the received sourcePortIdentity against the port's own
+    # portIdentity, both members; this gate compares the clockIdentity
+    # member alone (bank word 2), which is the identity scope this plane
+    # keeps everywhere -- see the note at the head of this file. Table
+    # 17's third row, our clockIdentity from a different portNumber, is
+    # therefore refused here as well, which 9.5.2.2 does not require of a
+    # single-port end station and 9.5.2.3 handles for boundary clocks;
+    # the portNumber half is #30's, not this round's.
+    #
+    # 802.1AS-2011 Figure 11-9, the MDPdelayResp machine this handler
+    # implements, carries no such condition of its own, so 9.5.2.2 is the
+    # whole mandate on this side, unlike the requester side where Figure
+    # 11-8 states it (FPGA-gPTP #26). 802.1AS-2011 7.1 is what makes it
+    # bind: the standard is a stand-alone document and a proper profile
+    # of 1588, so the base clause applies through the profile rather than
+    # through any 802.1AS clause of its own.
+    #
+    # Answering our own reflected request is not merely useless: the
+    # response takes the shared S_PEND cell, so an egress timestamp our
+    # own outstanding Pdelay_Req was waiting for is routed to the
+    # Follow_Up leg instead and t1 is lost (#28, which this compare does
+    # not close: any peer's request in that window does the same).
+    #
+    # Refusing ahead of the scratch writes is belt-and-braces, not
+    # load-bearing: measured, moving the compare below them leaves the
+    # suite at 340/340, because S_RQSEQ, S_RQCID and S_RQPN are consumed
+    # within this same pass and by a PDPOST leg that a refused request
+    # never arms. It stays first because "no residue" is cheaper to keep
+    # true than to re-argue. RB carries their source on to S_RQCID below
+    p.emit("RDST", rd=RB, imm=RG_BANK | 2, fmt=FMT_Q)            # their source
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_CID, fmt=FMT_Q)
+    p.emit("CMP", ra=RB, rb=RT, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="out")
     p.emit("RDST", rd=RA, imm=RG_BANK | 0, fmt=FMT_Q)
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_SHR, imm=32)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_RQSEQ, fmt=FMT_Q)
-    p.emit("RDST", rd=RB, imm=RG_BANK | 2, fmt=FMT_Q)
     p.emit("WRST", ra=RB, imm=RG_SCR | S_RQCID, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_BANK | 3, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_RQPN, fmt=FMT_Q)
