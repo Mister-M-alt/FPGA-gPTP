@@ -50,7 +50,13 @@ three of them to Delay_Req, Delay_Resp and Management and reserving
 the rest; FPGA-gPTP #22): all nine, each in an otherwise valid
 44-octet frame every other arm admits, are refused at the type byte
 with no event, no bank write and one counted drop, and the complete
-Pdelay_Req after them still dispatches. 167 checks,
+Pdelay_Req after them still dispatches; and that a refusal is counted
+once per REFUSED FRAME rather than once per clock edge (FPGA-gPTP #27):
+a deferred end-of-frame that refused its frame and a one-byte frame
+arriving in that same cycle are two different frames and both are
+counted, at a zero gap and at a one-cycle gap and in both orderings,
+while a good frame arriving in the cycle a dropped one finalizes still
+dispatches with its event and a clean bank word. 174 checks,
 mutation-proven: the domain arm removed fails 16, the compare narrowed
 to its low nibble fails 7 (the zero-low-nibble values 0x10 and 0x80
 catch it), the end-of-frame gate without its bad_r term, a drop that
@@ -75,7 +81,14 @@ Follow_Up and Pdelay_Req fails 16, the unlisted messageType arm
 removed fails 28 (the nine types' twenty-seven checks and the running
 drop total, every one of them dispatching with the event code no
 handler claims), and one type dropped from that list, Signaling, fails
-5 (its own controls: the list is an exact membership, not a range).
+5 (its own controls: the list is an exact membership, not a range), the
+two-frame increment collapsed back to one, which is the collision this
+round removes, fails 2 (the zero-gap drop-then-runt pair and the running
+total; the reverse ordering never collided, because a runt resolves on
+its own edge while the frame behind it finalizes two cycles later), the
+same collision written the old way as two increment sites in one
+`always_ff` fails the same 2, and the runt term dropped from the counted
+condition fails 5.
 
 This suite is what caught the three field-straddle bugs (announce
 currentUtcOffset outside the 8-byte accumulator window, the stepsRemoved
