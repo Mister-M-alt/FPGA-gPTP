@@ -75,6 +75,11 @@ int main(int argc, char **argv) {
   auto *dut = new VKL_gptp_rx_parser;
 
   std::map<uint32_t, uint64_t> bank;
+  //! every event in a feed, with the word-0 the frame that raised it left
+  //! behind: a two-frame feed needs both, and one `ev_seen` cannot say
+  //! whether the second frame dispatched or only the first did twice
+  int ev_count = 0;
+  std::vector<uint64_t> ev_w0;
   bool ev_seen = false;
   uint8_t ev_code = 0;
   uint16_t ev_seq = 0;
@@ -84,11 +89,12 @@ int main(int argc, char **argv) {
     dut->clk_i = 1; dut->eval();
     if (dut->bank_we_o) bank[dut->bank_addr_o] = dut->bank_wdata_o;
     if (dut->ev_valid_o) { ev_seen = true; ev_code = dut->ev_code_o;
-                           ev_seq = dut->ev_seq_o; }
+                           ev_seq = dut->ev_seq_o; ev_count++;
+                           ev_w0.push_back(bank.count(0) ? bank[0] : 0); }
   };
 
   auto feed = [&](const std::vector<uint8_t> &bytes, bool err_at_eof) {
-    bank.clear(); ev_seen = false;
+    bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
     for (size_t i = 0; i < bytes.size(); i++) {
       dut->rx_valid_i = 1;
       dut->rx_data_i  = bytes[i];
@@ -106,13 +112,14 @@ int main(int argc, char **argv) {
   //! in the cycle a predecessor's deferred end-of-frame is still settling
   auto feed_gap = [&](const std::vector<uint8_t> &a,
                       const std::vector<uint8_t> &b, int gap) {
-    bank.clear(); ev_seen = false;
+    bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
     for (const std::vector<uint8_t> *f : {&a, &b}) {
       for (size_t i = 0; i < f->size(); i++) {
         dut->rx_valid_i = 1;
         dut->rx_data_i  = (*f)[i];
         dut->rx_sof_i   = (i == 0);
         dut->rx_eof_i   = (i + 1 == f->size());
+        dut->rx_err_i   = 0;         //! driven, not inherited from feed
         tick();
       }
       dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
@@ -681,6 +688,35 @@ int main(int argc, char **argv) {
               (uint16_t)(d1 + 1));
     expect_eq("drop then zero-gap sync: event", ev_seen ? ev_code : 0, 1);
     expect_eq("drop then zero-gap sync: w0", bank[0], w0_of(g));
+
+    // the mirror of that adjacency, which the drop case cannot cover: a
+    // good frame whose own finalize cycle IS a successor's sof. Both must
+    // dispatch, so the check is two events with each frame's own word 0;
+    // a deferred dispatch suppressed by a zero-gap successor passes every
+    // one-event check and fails here
+    Hdr g2 = g; g2.seq = 0x0778;
+    Frame good2 = common(g2, 10);
+    good2.u48(0x000012345678ull); good2.u32(0x1DCD6500);
+    uint16_t d2 = dut->drop_cnt_o;
+    feed_gap(good.b, good2.b, 0);
+    expect_eq("good then zero-gap good: two events", ev_count, 2);
+    expect_eq("good then zero-gap good: no drop", dut->drop_cnt_o, d2);
+    expect_eq("good then zero-gap good: first w0",
+              ev_w0.size() > 0 ? ev_w0[0] : 0, w0_of(g));
+    expect_eq("good then zero-gap good: second w0",
+              ev_w0.size() > 1 ? ev_w0[1] : 0, w0_of(g2));
+
+    // sof and eof raised with rx_valid_i LOW is not a frame. At base the
+    // runt increment sat inside `if (rx_valid_i)`, so that qualifier could
+    // not be deleted; as a term of runt_drop_w it can, and nothing else in
+    // this bench ever pulses the two flags without valid
+    uint16_t d3 = dut->drop_cnt_o;
+    dut->rx_valid_i = 0; dut->rx_sof_i = 1; dut->rx_eof_i = 1;
+    dut->rx_data_i = 0x01;
+    for (int i = 0; i < 4; i++) tick();
+    dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+    for (int i = 0; i < 3; i++) tick();
+    expect_eq("sof and eof without valid: not a frame", dut->drop_cnt_o, d3);
   }
   expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 45));
 
