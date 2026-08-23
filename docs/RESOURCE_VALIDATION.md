@@ -591,3 +591,75 @@ including a pair of claims differing only in the high byte of the
 sequenceId, which a compare narrowed to the low 8 bits fails, and a
 seeded regression image that starts the request counter above 16 bits,
 which no ordinary run can reach.
+
+## The counted-refusal round re-measured: one LUT
+
+FPGA-gPTP #27, found by the cleared-context review of PR #24: two
+increments of `drop_cnt_r` lived in one `always_ff`, the deferred
+end-of-frame arm and the one-byte-frame arm, and a one-byte frame
+arriving in the cycle after a dropped frame's end of frame drove both on
+the same edge, so only one survived and one refusal went uncounted.
+`dbg_rx_drop_o` is the oracle the parent's conformance probes read, and
+the parent's campaign asserts a counted refusal in many places, so a
+lost increment weakens each of them.
+
+Measured before the change: drop then zero-gap runt gives
+one drop where two are owed; the reverse ordering, runt then drop, gives
+two, because a runt resolves on its own edge while the frame behind it
+resolves on its own edge and a multi-byte frame exactly one cycle after
+its eof, so coincidence forces the drop-then-runt order whatever the
+frame length or gap; both orderings at a one-cycle gap give two.
+The issue measured only the first of those four. The fix is one write
+site fed by both conditions, `fin_drop_w` and `runt_drop_w`, adding two
+when they coincide. Per-frame exclusivity is untouched: a frame either
+dispatches or counts, never both, and what changes is only that two
+frames resolving on one edge now produce two outcomes instead of one.
+The parent's #210 review leaned on that exclusivity for its retry
+argument, and this round does not weaken it. No ucode changed, so the
+ROM stays at 941 real words of 1,024, and the three tracked
+images are byte-identical. Same instrument, Vivado 2026.1 OOC on
+`xc7a100tfgg484-2` at 100 MHz, 2026-08-23, against main at e74485a
+re-measured the same day in its own worktree, this round having been
+rebased onto the tag-matched stamp of #32 before it landed:
+
+| | e74485a (PR #32) | the counted-refusal arm | delta |
+|---|---|---|---|
+| Slice LUTs | 3,116 (2,790 logic + 326 LUTRAM) | **3,117** (2,791 + 326) | **+1** |
+| `u_parser` LUTs | 543 | 544 | +1 |
+| Registers | 2,390 | 2,390 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+One LUT for the coincidence term, all of it in the parser. Verification
+at this measurement: ucpu 768 / parser 179 / engine 352 checks,
+seventy-five planted mutations in the engine suite and the parser
+ledger's own five new ones red (the two-frame increment collapsed to
+one, 2; the same collision written the old way as two sites, the same 2;
+the runt term dropped, 5; that term's rx_valid_i qualifier dropped, 2,
+which was structural at base and became deletable here; and a zero-gap
+successor suppressing the predecessor's deferred dispatch, 3), lint
+clean. Two ledger figures elsewhere in that README moved with this
+round's frames and were re-measured rather than left: the domain arm
+removed is 21, not 16, and the end-of-frame gate without its bad_r term
+is 59, not 54. Their neighbours were re-measured too and did not move:
+the domain compare narrowed to its low nibble is 7 and the messageLength
+arm removed is 24, at base and at head alike.
+
+Swept for the same shape elsewhere in the parser while here: `drop_cnt_r`
+was the only register read-modify-written from two sites that can fire
+on one edge. Two of the reasons that first stood here did not establish
+that, and are replaced with the ones that do. The bank signals are not
+safe because a default is overridden later: they have fourteen set
+sites, and two of those colliding would lose a bank write, the same bug
+class on the data path. They are safe because the `unique case (cnt_r)`
+contributes at most one arm, and the per-type body writes sit at
+disjoint indices for every `mtype_r`: Sync at 53 and 57, Follow_Up
+adding 73, Pdelay_Resp and Pdelay_Resp_Follow_Up adding 65 and 67,
+Announce at 66, 74 and 77 plus a path-trace hop write that needs
+`pt_run_r` and so cannot fire below index 82. And `fin_r` is not a near
+miss whose later assignment happens to win: its two sites can never fire
+on one edge at all, because the end-of-frame arm needs `run_r`, which
+the eof that set `fin_r` already cleared, and the only way to raise it
+again in that cycle is a sof in the eof cycle, which on a one-byte face
+is a runt, and the runt arm clears `run_r` without entering the eof arm.

@@ -50,11 +50,20 @@ three of them to Delay_Req, Delay_Resp and Management and reserving
 the rest; FPGA-gPTP #22): all nine, each in an otherwise valid
 44-octet frame every other arm admits, are refused at the type byte
 with no event, no bank write and one counted drop, and the complete
-Pdelay_Req after them still dispatches. 167 checks,
-mutation-proven: the domain arm removed fails 16, the compare narrowed
+Pdelay_Req after them still dispatches; and that a refusal is counted
+once per REFUSED FRAME rather than once per clock edge (FPGA-gPTP #27):
+a deferred end-of-frame that refused its frame and a one-byte frame
+arriving in that same cycle are two different frames and both are
+counted, at a zero gap and at a one-cycle gap and in both orderings,
+while a good frame arriving in the cycle a dropped one finalizes still
+dispatches with its event and a clean bank word, that a good frame whose
+own finalize cycle IS a successor's sof still dispatches, both of them,
+each with its own word 0, and that sof and eof raised with rx_valid_i
+LOW is not a frame at all. 179 checks,
+mutation-proven: the domain arm removed fails 21, the compare narrowed
 to its low nibble fails 7 (the zero-low-nibble values 0x10 and 0x80
 catch it), the end-of-frame gate without its bad_r term, a drop that
-still dispatches, fails 54 (the #15 round's 5: retiring the per-type
+still dispatches, fails 59 (the #15 round's 5: retiring the per-type
 minimum flag made that term the sole barrier for every type, so every
 drop arm now shows under it), the Follow_Up minimum reverted to the
 44-octet shape fails 9, both TLV header arms removed fails 13, the
@@ -71,11 +80,25 @@ samples bad_r as registered), the Pdelay_Req minimum reverted to the
 34-octet header fails 15 (one octet short 9, grouped with Sync 12),
 Signaling raised to 54 as well fails 5 (its header-only controls: the
 suite pins that minimum too), and the messageLength arm narrowed to
-Follow_Up and Pdelay_Req fails 16, the unlisted messageType arm
+Follow_Up and Pdelay_Req fails 16, the runt term's rx_valid_i qualifier
+dropped fails 2 (structural at base, where the increment sat inside
+`if (rx_valid_i)`, and deletable once it became a term), a zero-gap
+successor suppressing the predecessor's deferred dispatch fails 3 (the
+mirror of the accepted-path case, which one-event checks cannot see),
+the unlisted messageType arm
 removed fails 28 (the nine types' twenty-seven checks and the running
 drop total, every one of them dispatching with the event code no
 handler claims), and one type dropped from that list, Signaling, fails
-5 (its own controls: the list is an exact membership, not a range).
+5 (its own controls: the list is an exact membership, not a range), the
+two-frame increment collapsed back to one, which is the collision this
+round removes, fails 2 (the zero-gap drop-then-runt pair and the running
+total; the reverse ordering never collided, because a runt resolves on
+its own edge and a multi-byte frame exactly one cycle after its eof, so
+coincidence forces the drop-then-runt order for any frame length and any
+gap; the figure is not two cycles, it grows with the successor), the
+same collision written the old way as two increment sites in one
+`always_ff` fails the same 2, and the runt term dropped from the counted
+condition fails 5.
 
 This suite is what caught the three field-straddle bugs (announce
 currentUtcOffset outside the 8-byte accumulator window, the stepsRemoved
