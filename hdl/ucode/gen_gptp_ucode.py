@@ -71,8 +71,13 @@ Pdelay_Resp owns the stored t2/t4 and the pairing, which keeps one
 exchange's timestamps from one clock; the multiple-responder policy
 itself stays the Milan 4.2.6.2.5 cease rule below (the 2011 figure's
 RESET on a second response is not adopted, as the v7 round decided for
-same-identity duplicates). Identity scope is unchanged: the clockIdentity
-alone, never the portNumber.
+same-identity duplicates). Identity scope on the Pdelay_Resp is the
+WHOLE requestingPortIdentity the figure names, the clockIdentity and
+the 16-bit portNumber behind it (bank words 6 and 7), so a response
+addressed to another port of this clock arms nothing (FPGA-gPTP #36).
+The Follow_Up's own requestingPortIdentity is not an arm of the figure
+at all; the portNumber half of the engine's hardening check on it sits
+in the PDPOST leg, where the ROM had room for it.
 
 --- v7, the cease-rule round ---
 
@@ -318,6 +323,14 @@ TXP_SYNC_C = 0x200000           # for the timer-driven claim, "the frame
 TXQ_MASK_C = 0xFFFF | TXT_TYPE_MASK_C | TXP_PEND_C | TXP_SYNC_C
 RSP_ARMED_C = 0x10000           # set above the 16-bit sequenceId in
                                 # S_RSPSEQ: a zero word is "no response"
+OUR_PORTNUM_C = 1               # thisPort. ONE definition, read by both
+                                # sides: e_hdr writes it into every
+                                # sourcePortIdentity we transmit, and the
+                                # Pdelay receive guards qualify a received
+                                # requestingPortIdentity.portNumber
+                                # against it. A second copy would let the
+                                # transmit and receive halves drift apart
+                                # in silence
 
 # ---- our clock vector (Milan defaults) -------------------------------------
 P1_C, P2_C = 248, 248
@@ -494,7 +507,7 @@ def e_hdr(p, mtype, flags, seq_reg, logint, msglen):
     p.emit("BFLD", ra=0, fmt=FMT_D)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("BFLD", ra=RC, fmt=FMT_Q)
-    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("MOVE", rd=RT, ra=0, imm=OUR_PORTNUM_C)
     p.emit("BFLD", ra=RT, fmt=FMT_W)
     p.emit("BFLD", ra=seq_reg, fmt=FMT_W)
     p.emit("MOVE", rd=RT, ra=0, imm=control)
@@ -780,9 +793,19 @@ def prog_rx_pdreq(base):
 def prog_rx_pdresp(base):
     p = Prog(base)
     e_guard_init(p, "out")
+    # 11.2.15.3 (Figure 11-8, WAITING_FOR_PDELAY_RESP): the response is
+    # ours only when its requestingPortIdentity is THIS PORT'S -- both
+    # halves. The clockIdentity is bank word 6, the 16-bit portNumber
+    # bank word 7, and they are separate branches so each is its own arm
+    # to plant against (FPGA-gPTP #36)
     p.emit("RDST", rd=RA, imm=RG_BANK | 6, fmt=FMT_Q)
     p.emit("RDST", rd=RB, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=RB, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="myclk")
+    p.emit("BR", label="out")
+    p.label("myclk")
+    p.emit("RDST", rd=RA, imm=RG_BANK | 7, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_W, imm=OUR_PORTNUM_C)
     p.emit("BRS", cnd=BRS_Z, label="mine")
     p.emit("BR", label="out")
     p.label("mine")
@@ -1254,6 +1277,20 @@ def prog_leg_pdpost(base):
     # This leg is the Follow_Up handler's only continuation; it lives
     # here rather than in the fixed slot so SERVO keeps its 48-word home
     # behind that slot (the ROM is 88 percent full; see the packer)
+    # the portNumber half of prog_rx_pdrfu's requesting-identity check,
+    # which is the ENGINE'S OWN hardening and not an arm of the figure
+    # (the figure names the sequenceId and the sourcePortIdentity, the
+    # two compares below). It is here and not beside its clockIdentity
+    # half for one measured reason: prog_rx_pdrfu's fixed slot has 48
+    # free words behind it and that is SERVO's only home, so four words
+    # spent there cost the packer the whole leg. This leg is the
+    # Follow_Up handler's only continuation and nothing is written
+    # before it, so the frame is refused in the same place either way
+    p.emit("RDST", rd=RT, imm=RG_BANK | 7, fmt=FMT_Q)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_W, imm=OUR_PORTNUM_C)
+    p.emit("BRS", cnd=BRS_Z, label="fu_pn")
+    p.emit("END")
+    p.label("fu_pn")
     p.emit("RDST", rd=RT, imm=RG_BANK | 0, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=0xFFFF)

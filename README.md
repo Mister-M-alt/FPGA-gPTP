@@ -113,14 +113,19 @@ is bounded to its 16-bit wire field before it forms a claim (#39).
 
 The donor issues still open at this commit are review findings on pre-existing
 behaviour: #31 (the engine holds one egress timestamp and samples it at
-dispatch, so a second stamp arriving first destroys it), #30 (the
-requestingPortIdentity gate omits Figure 11-8's portNumber term), and #35 (a
-mid-frame `rx_err_i` is ignored). The issue tracker remains the authority.
-Verification here is ucpu 768 / parser 268 / engine 656 checks in the shipping,
-high-request and high-Sync images, every planted mutation red, and lint clean.
-The ROM is 924 of 1,024 words: the parser's complete-path
+dispatch, so a second stamp arriving first destroys it) and #35 (a
+mid-frame `rx_err_i` is ignored). #30 and its parent-side duplicate #36 close
+with this round: the requestingPortIdentity gate now carries Figure 11-8's
+portNumber term on the Pdelay_Resp and on the Follow_Up path, and both
+directions of the gate are pinned by probes rather than only its positive
+one. The issue tracker remains the authority.
+Verification here is ucpu 768 / parser 268 / engine 664 checks in the shipping,
+high-request and high-Sync images, every planted engine mutation red,
+and lint clean. The ROM is 932 of 1,024 words: the parser's complete-path
 loop verdict retires the serial indexed qualification walk while the selected
-path stage remains atomic. The timer program remains
+path stage remains atomic; one word bounds the Sync sequence counter before its
+type-qualified claim, and eight compare the whole
+requestingPortIdentity. The timer program remains
 191 of 192 words in the shipping image and 192 of 192 in each seeded image.
 See `docs/RESOURCE_VALIDATION.md` for the measurement record.
 

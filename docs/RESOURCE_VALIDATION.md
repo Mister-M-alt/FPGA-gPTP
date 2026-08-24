@@ -906,3 +906,88 @@ failures in the count-eight-to-short transition and then terminates at the
 independent raw-empty/nonzero-tail RTL assertion on the next count-zero COMMIT.
 Production RTL was restored before the measured synthesis and exact-commit
 merge bar.
+## The portNumber half of the requestingPortIdentity gate: ROM words only
+
+FPGA-gPTP #30, filed by the cleared-context review of PR #25, and its
+parent-side duplicate #36, found by the parent's negative campaign: the
+Pdelay receive gate compared `requestingPortIdentity.clockIdentity` and
+stopped there. `FMT_Q` is a 64-bit compare against the parser's bank
+word 6; the 16-bit portNumber the same parser lands in bank word 7 was
+never read, and the generator's own header said so ("the clockIdentity
+alone, never the portNumber"). 802.1AS-2011 Figure 11-8's
+WAITING_FOR_PDELAY_RESP exit requires both terms, and 802.1AS-2020
+11.2.19.3 is identical. The parent measured the consequence: a
+Pdelay_Resp carrying OUR clockIdentity at a portNumber that is not ours
+was taken, the pair completed, `neighborPropDelay` was published at
+4,054,625 ns where the real exchange had left 599, and `asCapable` fell.
+
+The fix is `OUR_PORTNUM_C`, one definition of thisPort, read by both
+directions: `e_hdr` writes it into every `sourcePortIdentity` this engine
+transmits (it was a literal there), and the receive side compares bank
+word 7 against it. On the Pdelay_Resp it sits beside the clockIdentity
+compare, its own branch, so each half is its own arm to plant against.
+On the Follow_Up path it sits at the head of the PDPOST leg rather than
+in `prog_rx_pdrfu`, and that placement is measured, not stylistic:
+`prog_rx_pdrfu`'s fixed slot has exactly 48 free words behind it, which
+is the SERVO leg's only home, so four words spent there cost the packer
+the whole leg (`AssertionError: leg SERVO (48 words) does not fit`).
+PDPOST is the Follow_Up handler's only continuation and writes nothing
+before its guards, so the frame is refused in the same place either way.
+The same round pins the other direction of the gate, which #30 measured
+as unpinned: a Pdelay_Resp addressed to a neighbour's requesting
+clockIdentity sharing our low 32 bits.
+
+No RTL changed. The ROM grew from 924 to 932 real words of 1,024 (+8:
+four words per message, `RDST` the bank word, `CMP` against the
+constant, `BRS` past the exit, and the handler's own exit instruction).
+Same instrument, Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100 MHz,
+2026-08-25, against `main` at `d885a208` re-measured here rather than
+quoted from the round above, both runs in this same worktree:
+
+| | `main` at `d885a208` | the portNumber term | delta |
+|---|---|---|---|
+| Slice LUTs | 4,609 (4,143 logic + 466 LUTRAM) | **4,609** (4,143 + 466) | **0** |
+| Registers | 3,728 | 3,728 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.904 ns | **+1.904 ns, met** | 0 |
+
+The standalone microCPU is unchanged at 1,701 LUT (1,569 logic + 132
+LUTRAM) / 1.5 BRAM tiles / 4 DSP.
+
+Both columns are fresh runs made here, the baseline in its own worktree
+at `d885a208` rather than quoted, because a ROM-only change claiming a
+zero delta has to compare two measurements of the same instrument state.
+They agree exactly, which is the claim. One caveat belongs with them:
+the PathTrace round above records `d885a208` at 4,669 LUT / 3,734
+registers / +1.898 ns, and that figure does not reproduce on a fresh run
+of the same commit here (4,609 / 3,728 / +1.904). The delta claimed in
+this section is therefore made against the pair measured together, not
+against the earlier record, and the difference between the two records
+of the same commit is a separate question for whoever owns that round.
+
+Verification at this measurement: ucpu 768 / parser 268 / engine 664
+checks in the shipping, high-request and high-Sync images, lint clean.
+This round plants five mutations, each measured in its own run:
+
+| mutation | engine suite | first failure |
+|---|---|---|
+| the portNumber arm bypassed in `prog_rx_pdresp` (its `BR out` deleted) | 649 checks: 525 PASS, 124 FAIL | `Resp at a foreign requesting portNumber: pdelay unmoved` |
+| the portNumber arm bypassed in `prog_leg_pdpost` (its `END` deleted) | 649 checks: 529 PASS, 120 FAIL | `Follow_Up at a foreign requesting portNumber: pdelay unmoved` |
+| the `prog_rx_pdresp` clockIdentity compare narrowed to 32 bits (`FMT_Q` to `FMT_D`) | 649 checks: 523 PASS, 126 FAIL | `Resp at a neighbour's requesting clockIdentity: pdelay unmoved` |
+| the `prog_rx_pdrfu` clockIdentity compare narrowed the same way | 649 checks: 531 PASS, 118 FAIL | `Follow_Up at a neighbour's requesting clockIdentity: pdelay unmoved` |
+| the `prog_rx_pdrfu` requesting-clock guard deleted outright | 649 checks: 531 PASS, 118 FAIL | `Follow_Up at a neighbour's requesting clockIdentity: pdelay unmoved` |
+
+A mutated run executes 649 checks where the clean run executes 664. The
+poisoned `neighborPropDelay` travels downstream and this suite has no
+recovery gate between its sections, so a wrongly consumed pair
+desynchronises every exchange after it and the later sections stop
+short. Each row therefore carries its own total. The earlier revision of
+this table did not: it paired mutated PASS and FAIL counts with the
+clean run's total, and two of its three rows consequently did not add
+up.
+
+The rows are separable. With the Follow_Up arm bypassed the Pdelay_Resp
+probe does not appear in the failure list at all, and the last two rows
+are the direction FPGA-gPTP #30 recorded as unpinned on the Follow_Up
+path, which no probe drove before this round.

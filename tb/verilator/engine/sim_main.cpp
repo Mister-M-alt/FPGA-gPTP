@@ -110,6 +110,11 @@
 static const uint64_t OUR_MAC = 0x02A1B2C3D4E5ull;
 static const uint64_t OUR_CID = 0x02A1B2FFFEC3D4E5ull;
 static const uint64_t PEER_CID = 0x0080E1FFFE112233ull;
+// thisPort: the portNumber of our own portIdentity, and so the only
+// requestingPortIdentity.portNumber a Pdelay message addressed to us
+// can carry (802.1AS-2011 11.2.15.3, Figure 11-8). FOREIGN_PN is another
+// port of this same clock -- the identity half that used to be unchecked
+static const uint16_t OUR_PN = 1, FOREIGN_PN = 99;
 //! an identity that shares OUR clockIdentity's low 32 bits and differs
 //! above them, used by two rounds: as the second responder of the Milan
 //! 4.2.6.2.5 probes, which the 1588-2008 9.5.2.2 compare must admit
@@ -1260,15 +1265,19 @@ int main(int argc, char **argv) {
     uint64_t t2 = peer_ns(t1 + 300), t3 = t2 + 20000, t4 = t1 + 21200;
     uint32_t pd0 = dut->pub_pdelay_ns_o;
     uint32_t fl0 = dut->pub_flags_o;
-    auto resp = [&](uint16_t s, uint64_t src, uint64_t t2v, uint64_t rx) {
+    // the last argument is requestingPortIdentity.portNumber: ours
+    // unless a probe addresses the frame to another port of this clock
+    auto resp = [&](uint16_t s, uint64_t src, uint64_t t2v, uint64_t rx,
+                    uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID) {
       Frame f = ptp(0x3, s, 0, 0x0200, 20, src);
-      f.ts(t2v); f.u64(OUR_CID); f.u16(1);
+      f.ts(t2v); f.u64(rcid); f.u16(rpn);
       send_frame(f.b, rx);
       run(2000);
     };
-    auto rfu = [&](uint16_t s, uint64_t src, uint64_t t3v, uint64_t rx) {
+    auto rfu = [&](uint16_t s, uint64_t src, uint64_t t3v, uint64_t rx,
+                   uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID) {
       Frame g = ptp(0xA, s, 0, 0x0000, 20, src);
-      g.ts(t3v); g.u64(OUR_CID); g.u16(1);
+      g.ts(t3v); g.u64(rcid); g.u16(rpn);
       send_frame(g.b, rx);
       run(6000);
     };
@@ -1298,11 +1307,50 @@ int main(int argc, char **argv) {
     resp((uint16_t)(seq ^ 0x0100), PEER_CID, t2, t4);
     rfu((uint16_t)(seq ^ 0x0100), PEER_CID, t3 + 2000, t4 + 1250);
     unmoved("high-byte-stale Resp + Follow_Up pair");
+    // (iii-b2) the other half of the same identity, and the direction
+    // FPGA-gPTP #30 found unpinned: a Pdelay_Resp addressed to a
+    // NEIGHBOUR's requesting clockIdentity arms nothing. NEAR_CID shares
+    // OUR_CID's low 32 bits, so a compare narrowed to that half admits
+    // it; every genuine response in this suite carries our identity, so
+    // nothing else here drives this direction
+    resp(seq, PEER_CID, t2, t4, OUR_PN, NEAR_CID);
+    rfu(seq, PEER_CID, t3 + 2000, t4 + 1280);
+    unmoved("Resp at a neighbour's requesting clockIdentity");
+    // (iii-c) Figure 11-8 qualifies the response on the WHOLE
+    // requestingPortIdentity, clockIdentity AND portNumber. A response
+    // right in every other respect -- the outstanding sequenceId, our
+    // clockIdentity, the usual responder -- but addressed to another
+    // port of this clock arms nothing, so the perfect Follow_Up behind
+    // it pairs with nothing (FPGA-gPTP #36). The Follow_Up carries OUR
+    // portNumber deliberately: with the arm on both messages, a pair
+    // carrying the stranger's on both frames is refused by EITHER of
+    // them and could not fail for the reason it names
+    resp(seq, PEER_CID, t2, t4, FOREIGN_PN);
+    rfu(seq, PEER_CID, t3 + 2000, t4 + 1260);
+    unmoved("Resp at a foreign requesting portNumber");
     // (iv) the legitimate Resp arms the pairing; a Follow_Up with the
     // right sequenceId and our identity from ANOTHER source is not it
     resp(seq, PEER_CID, t2, t4);
     rfu(seq, STRANGER, t3 + 2000, t4 + 1300);
     unmoved("Follow_Up from another responder");
+    // (iv-b) the engine's own hardening, its portNumber half: the
+    // pairing is still armed from (iv)'s Resp and this Follow_Up carries
+    // the armed sequenceId from the armed responder, so the requesting
+    // portNumber is the only thing wrong with it. The compare lives in
+    // the PDPOST leg rather than beside its clockIdentity half; see the
+    // microcode comment there for the ROM-layout reason
+    rfu(seq, PEER_CID, t3 + 2000, t4 + 1320, FOREIGN_PN);
+    unmoved("Follow_Up at a foreign requesting portNumber");
+    // (iv-c) the same hardening, its clockIdentity half, and the
+    // direction FPGA-gPTP #30 measured as unpinned on THIS path: the
+    // pairing is still armed from (iv)'s Resp and this Follow_Up carries
+    // the armed sequenceId, the armed responder and OUR portNumber, so
+    // the requesting clockIdentity is the only thing wrong with it.
+    // NEAR_CID shares OUR_CID's low 32 bits, so a compare narrowed to
+    // that half admits it, and (v) behind it is the retained valid
+    // Follow_Up control that keeps this probe from passing vacuously
+    rfu(seq, PEER_CID, t3 + 2000, t4 + 1340, OUR_PN, NEAR_CID);
+    unmoved("Follow_Up at a neighbour's requesting clockIdentity");
     // (v) the paired Follow_Up still computes
     rfu(seq, PEER_CID, t3, t4 + 1400);
     model_exchange(t1, t2, t3, t4);
