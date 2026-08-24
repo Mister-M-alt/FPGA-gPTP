@@ -2445,8 +2445,10 @@ int main(int argc, char **argv) {
     const size_t mark = txf.size();
     const uint16_t evdrop0 = dut->dbg_ev_drop_o;
     dut->tx_ready_i = 0;
-    send_frame(q1.b, phc() + 1000);
-    send_frame(q2.b, phc() + 2000);
+    const uint64_t Q1_RX = phc() + 1000;
+    send_frame(q1.b, Q1_RX);
+    const uint64_t Q2_RX = phc() + 2000;
+    send_frame(q2.b, Q2_RX);
     // Two accepted chasers consume both ping-pong banks while request 2 is
     // held behind response 1's claim. Its event-queue snapshot, not either
     // live bank, must still feed the second response and Follow_Up.
@@ -2496,6 +2498,10 @@ int main(int argc, char **argv) {
     }
     expect("backpressure: response 1 sent", resp1 >= 0 ? 1 : 0, 1);
     if (resp1 >= 0) {
+      expect("backpressure: response 1 requestReceiptTimestamp",
+             fld48(txf[resp1], 48) * 1000000000ull +
+                 fld32(txf[resp1], 54),
+             Q1_RX);
       expect("backpressure: response 1 requester", fld64(txf[resp1], 58), C1);
       expect("backpressure: response 1 port", fld16(txf[resp1], 66), P1);
     }
@@ -2533,6 +2539,10 @@ int main(int argc, char **argv) {
       expect("backpressure: Follow_Up 1 port", fld16(txf[fu1], 66), P1);
     }
     if (resp2 >= 0) {
+      expect("backpressure: response 2 requestReceiptTimestamp",
+             fld48(txf[resp2], 48) * 1000000000ull +
+                 fld32(txf[resp2], 54),
+             Q2_RX);
       expect("backpressure: response 2 requester", fld64(txf[resp2], 58), C2);
       expect("backpressure: response 2 port", fld16(txf[resp2], 66), P2);
       txts_idx((size_t)resp2, TS2);

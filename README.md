@@ -98,8 +98,8 @@ behaviour: #31 (the engine holds one egress timestamp and samples it at
 dispatch, so a second stamp arriving first destroys it), #30 (the
 requestingPortIdentity gate omits Figure 11-8's portNumber term), and #35 (a
 mid-frame `rx_err_i` is ignored). The issue tracker remains the authority.
-Verification here is ucpu 768 / parser 179 / engine 406 checks in the shipping,
-high-request and high-Sync images, eighty-four planted engine mutations red,
+Verification here is ucpu 768 / parser 179 / engine 408 checks in the shipping,
+high-request and high-Sync images, eighty-five planted engine mutations red,
 and lint clean. The ROM is 941 of 1,024 words: one word bounds the Sync
 sequence counter before its type-qualified claim. The timer program remains
 191 of 192 words in the shipping image and 192 of 192 in each seeded image.

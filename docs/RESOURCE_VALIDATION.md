@@ -781,13 +781,16 @@ The Arty first-light design also completed synthesis, placement, routing and
 bitstream generation unmodified: 4,087 LUT, 3,541 registers, 1.5 BRAM tiles,
 4 DSP48E1 and worst setup slack +0.401 ns.
 
-Verification at this measurement: ucpu 768 / parser 179 / engine 406 checks in
+Verification at this measurement: ucpu 768 / parser 179 / engine 408 checks in
 the shipping, high-request and high-Sync images; full lint and the Arty
-two-frame tag bench clean. Seven new planted mutations are red: Sync unbounded
-(360 PASS / 28 FAIL of 388 reached), request 2 admitted past a live response
-owner (397 / 3 of 400), queued request snapshot bypassed after two accepted
-Signaling chasers (399 / 2 of 401), stale timer claim exposed after reset (400 /
-8 of 408), stale response validity retained (377 / 16 of 393), warm slot-2
-bootstrap removed (403 / 3 of 406), and serializer advancement with ready low
-(384 / 9 of 393). Each production form was restored before the OOC and routed
-builds.
+two-frame tag bench clean. Eight new planted mutations are red. The first seven
+recorded results predate the two permanent response-timestamp assertions: Sync
+unbounded (360 PASS / 28 FAIL of 388 reached), request 2 admitted past a live
+response owner (397 / 3 of 400), the whole queued-request snapshot bypassed
+after two accepted Signaling chasers (399 / 2 of 401), stale timer claim exposed
+after reset (400 / 8 of 408), stale response validity retained (377 / 16 of
+393), warm slot-2 bootstrap removed (403 / 3 of 406), and serializer advancement
+with ready low (384 / 9 of 393). On the current 408-check workload, bypassing
+only the queued request's saved ingress timestamp gives 407 / 1 and names the
+corrupted `requestReceiptTimestamp`. Each production form was restored before
+the OOC and routed builds.
