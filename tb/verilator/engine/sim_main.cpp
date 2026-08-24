@@ -2447,6 +2447,13 @@ int main(int argc, char **argv) {
     dut->tx_ready_i = 0;
     send_frame(q1.b, phc() + 1000);
     send_frame(q2.b, phc() + 2000);
+    // Two accepted chasers consume both ping-pong banks while request 2 is
+    // held behind response 1's claim. Its event-queue snapshot, not either
+    // live bank, must still feed the second response and Follow_Up.
+    Frame chase1 = ptp(0xC, 0xD00D, 0, 0x0000, 0);
+    Frame chase2 = ptp(0xC, 0xBEEF, 0, 0x0000, 0);
+    send_frame(chase1.b, phc() + 3000);
+    send_frame(chase2.b, phc() + 4000);
     for (int k = 0; k < 20000 && !(dut->tx_valid_o && dut->tx_sof_o); k++)
       tick();
     expect("backpressure: first byte presented",

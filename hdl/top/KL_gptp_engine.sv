@@ -137,12 +137,22 @@ module KL_gptp_engine
   // -------------------------------------------------- engine state RAMs
   //! the message bank ping-pongs: bank_sel_r flips as each accepted
   //! frame's event is pushed, so the frame a handler's event names
-  //! survives ONE in-flight successor; a third frame within two
-  //! handler latencies reuses the first bank (the announce handler's
-  //! seq guard covers the worst consequence of that depth)
+  //! survives ONE in-flight successor. A third frame within two handler
+  //! latencies reuses the first bank. The announce handler has its own
+  //! sequence guard; accepted Pdelay_Req events snapshot every handler input
+  //! into the event-queue slot below, because a
+  //! live response claim can deliberately hold one behind arbitrary
+  //! accepted traffic.
   (* ram_style = "distributed" *) logic [63:0] bank_r    [0:63];
   (* ram_style = "distributed" *) logic [63:0] scratch_r [0:63];
   logic bank_sel_r;
+
+  //! Hold the just-parsed source identity and port without adding read ports
+  //! to bank_r. An event pushes two cycles after its frame's EOF, whereas a
+  //! zero-gap successor cannot reach these header fields in fewer than 42
+  //! byte clocks, so they still belong to the event being enqueued.
+  logic [63:0] frame_cid_r;
+  logic [15:0] frame_pn_r;
 
   //! Scratch survives a warm reset, but an egress claim cannot: the frame
   //! and timestamp pipelines reset, so a pre-reset return may never arrive.
@@ -162,9 +172,15 @@ module KL_gptp_engine
 
   always_ff @(posedge clk_i) begin : bank_write
     if (!rst_n) begin
-      bank_sel_r <= 1'b0;
+      bank_sel_r  <= 1'b0;
+      frame_cid_r <= '0;
+      frame_pn_r  <= '0;
     end else begin
-      if (bank_we_w) bank_r[{bank_sel_r, bank_addr_w}] <= bank_wdata_w;
+      if (bank_we_w) begin
+        bank_r[{bank_sel_r, bank_addr_w}] <= bank_wdata_w;
+        if (bank_addr_w == 5'd2) frame_cid_r <= bank_wdata_w;
+        if (bank_addr_w == 5'd3) frame_pn_r  <= bank_wdata_w[15:0];
+      end
       if (pev_valid_w && !evq_full_w) bank_sel_r <= !bank_sel_r;
     end
   end
@@ -185,13 +201,18 @@ module KL_gptp_engine
   //! so no flip follows) and would poison the predecessor's stamp. No
   //! event-carrying frame is ever that short, and a >= 3-byte frame's
   //! eof always postdates the flip window.
+  //! The last qualified EOF remains current through the event push: the
+  //! shortest successor that can replace it takes three byte clocks, while
+  //! the predecessor's event enters the queue after two.
   logic [63:0] rxts_stage_r;
+  logic [63:0] rxts_commit_r;
   logic [63:0] rxts_bank_r [0:1];
   logic [63:0] txts_r;
   logic [1:0]  rxts_len_r;
   always_ff @(posedge clk_i) begin : ts_latch
     if (!rst_n) begin
       rxts_stage_r   <= '0;
+      rxts_commit_r  <= '0;
       rxts_bank_r[0] <= '0;
       rxts_bank_r[1] <= '0;
       txts_r         <= '0;
@@ -202,8 +223,10 @@ module KL_gptp_engine
         else if (rxts_len_r != 2'd3) rxts_len_r <= rxts_len_r + 2'd1;
       end
       if (rx_valid_i && rx_sof_i) rxts_stage_r <= rx_ts_i;
-      if (rx_valid_i && rx_eof_i && !rx_sof_i && (rxts_len_r >= 2'd2))
+      if (rx_valid_i && rx_eof_i && !rx_sof_i && (rxts_len_r >= 2'd2)) begin
         rxts_bank_r[bank_sel_r] <= rxts_stage_r;
+        rxts_commit_r           <= rxts_stage_r;
+      end
       if (txts_valid_i)           txts_r <= txts_ns_i;
     end
   end
@@ -238,6 +261,11 @@ module KL_gptp_engine
   //! channel below: a queued second Pdelay_Req must not sit ahead of the
   //! stamp that releases the first response's claim/context (#40).
   logic [39:0] evq_r [0:3];
+  //! A queued Pdelay_Req can wait longer than the two-bank lifetime while
+  //! an earlier response owns S_TXQ_RESP. Preserve the request's complete
+  //! handler input beside its event until dispatch. This array shares the
+  //! event queue's write/read pointers; non-Pdelay slots are don't-care.
+  (* ram_style = "distributed" *) logic [143:0] evq_pd_ctx_r [0:3];
   logic [1:0]  evq_wp_r, evq_rp_r;
   logic [2:0]  evq_lvl_r;
   logic [15:0] ev_drop_r;
@@ -284,6 +312,10 @@ module KL_gptp_engine
     end else begin
       if (push_w) begin
         evq_r[evq_wp_r] <= push_data_w;
+        if (pev_valid_w && (pev_code_w == EV_RX_PDREQ_C)) begin
+          evq_pd_ctx_r[evq_wp_r] <= {frame_cid_r, frame_pn_r,
+                                      rxts_commit_r};
+        end
         evq_wp_r        <= evq_wp_r + 2'd1;
       end
       if (pop_w) evq_rp_r <= evq_rp_r + 2'd1;
@@ -362,6 +394,9 @@ module KL_gptp_engine
   logic [UPC_W_C-1:0] disp_upc_r;
   logic [63:0] disp_ev_r, disp_ts0_r, disp_ts1_r;
   logic        disp_bank_r;
+  logic        disp_pdreq_r;
+  logic [63:0] disp_pd_cid_r;
+  logic [15:0] disp_pd_pn_r;
 
   always_ff @(posedge clk_i) begin : dispatch
     if (!rst_n) begin
@@ -371,23 +406,32 @@ module KL_gptp_engine
       disp_ts0_r   <= '0;
       disp_ts1_r   <= '0;
       disp_bank_r  <= 1'b0;
+      disp_pdreq_r <= 1'b0;
+      disp_pd_cid_r <= '0;
+      disp_pd_pn_r <= '0;
     end else begin
       if (txts_pop_w || pop_w) disp_valid_r <= 1'b1;
       else if (!disp_ready_w)  disp_valid_r <= 1'b0;   // accepted
       if (txts_pop_w) begin
         disp_upc_r  <= UPC_W_C'(448);
         disp_bank_r <= 1'b0;
+        disp_pdreq_r <= 1'b0;
         disp_ev_r   <= {24'd0, txts_ev_w};
         disp_ts0_r  <= txts_r;
         disp_ts1_r  <= phc_ns_i;
       end else if (pop_w) begin
-        disp_upc_r  <= entry_w;
-        disp_bank_r <= ev_head_w[0];
-        disp_ev_r  <= {24'd0, ev_head_w};
-        disp_ts0_r <= (ev_head_w[39:32] == EV_TX_TS_C) ? txts_r
-                    : (ev_head_w[39:32] == EV_TMR_C)
-                        ? {32'd0, ms_now_w}
-                        : rxts_bank_r[ev_head_w[0]];
+        disp_upc_r   <= entry_w;
+        disp_bank_r  <= ev_head_w[0];
+        disp_pdreq_r <= (ev_head_w[39:32] == EV_RX_PDREQ_C);
+        disp_pd_cid_r <= evq_pd_ctx_r[evq_rp_r][143:80];
+        disp_pd_pn_r  <= evq_pd_ctx_r[evq_rp_r][79:64];
+        disp_ev_r    <= {24'd0, ev_head_w};
+        disp_ts0_r   <= (ev_head_w[39:32] == EV_TX_TS_C) ? txts_r
+                      : (ev_head_w[39:32] == EV_TMR_C)
+                          ? {32'd0, ms_now_w}
+                          : (ev_head_w[39:32] == EV_RX_PDREQ_C)
+                              ? evq_pd_ctx_r[evq_rp_r][63:0]
+                              : rxts_bank_r[ev_head_w[0]];
         disp_ts1_r <= phc_ns_i;
       end
     end
@@ -472,7 +516,19 @@ module KL_gptp_engine
   logic [63:0] st_rd_mux_w;
   always_comb begin : st_read_mux
     unique case (st_addr_w[19:16])
-      4'd0: st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
+      4'd0: begin
+        if (disp_pdreq_r) begin
+          unique case (st_addr_w[4:0])
+            5'd0: st_rd_mux_w = {8'd0, 4'd0, 4'h2,
+                                  disp_ev_r[31:16], 32'd0};
+            5'd2: st_rd_mux_w = disp_pd_cid_r;
+            5'd3: st_rd_mux_w = {48'd0, disp_pd_pn_r};
+            default: st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
+          endcase
+        end else begin
+          st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
+        end
+      end
       4'd1: st_rd_mux_w = st_addr_w[0] ? txts_r
                                        : rxts_bank_r[disp_bank_r];
       4'd2: begin

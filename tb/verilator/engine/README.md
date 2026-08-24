@@ -63,7 +63,7 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 | 31 | warm reset withholds the boundary return of an outstanding Pdelay_Req, Pdelay_Resp and master Sync in turn. The two reset-surviving scratch claims read empty after reset, a fresh response pair completes, and the hardware bootstrap re-arms both request and Announce-receipt timers so master Sync cadence returns without a bitstream reload (#41) |
-| 32 | `tx_ready_i` is low at the first byte, in the body, for one cycle and for many cycles; capture advances only on valid/ready. Two different peer requests enter before response 1's boundary stamp, response 2 waits, and each response gets the Follow_Up carrying its own requester identity, port and exact stamp with zero event drops (#40, #33) |
+| 32 | `tx_ready_i` is low at the first byte, in the body, for one cycle and for many cycles; capture advances only on valid/ready. Two different peer requests enter before response 1's boundary stamp, response 2 waits while two accepted Signaling frames reuse both ping-pong banks, and each response still gets the Follow_Up carrying its own requester identity, port and exact stamp with zero event drops (#40, #33) |
 
 The same 406-check workload runs against three generated images: the shipping
 image, `S_MYSEQ` seeded to `0x200000`, and `S_SSEQ` seeded to `0x10000`. The
@@ -71,13 +71,13 @@ last image reaches Sync 65,536 immediately; without the 16-bit bound, its
 first type-0 return cannot match the aliased type-1 claim and the cadence
 stops (#39).
 
-All eighty-three planted mutations turn the run red. The list below
-enumerates eighty-two of them, and the shortfall is inherited rather
+All eighty-four planted mutations turn the run red. The list below
+enumerates eighty-three of them, and the shortfall is inherited rather
 than new: the headline moved from thirty-one to thirty-six and then to
 forty on rounds that each named three new mutations, so it has run ahead
 of the prose since before the field campaign. The arithmetic has been
 exact since forty-one, every round since names its own, and this round's
-six mutations are named explicitly below. The list: (the own-source rule removed, its
+seven mutations are named explicitly below. The list: (the own-source rule removed, its
 identity compare narrowed to 32 bits, the stepsRemoved bound off by one
 in either direction, its compare narrowed to a byte, a dead path-trace
 compare, the hop compare narrowed to 32 bits, the hop read from the next
@@ -113,7 +113,7 @@ parent update, a non-zero Sync reserved body, a reverted consumption gate, a
 removed dispatch seq guard, a dropped become-side best reset, a
 swapped vector/identity compare order, a 30-interval cease threshold,
 duplicates counted as a storm, a dead resume countdown, a removed
-mid-cease completion gate, and eleven RTL mutations: the read bank
+mid-cease completion gate, and twelve RTL mutations: the read bank
 tied to the write bank, the ingress stamp reverted to a single
 register, the runt length qualification removed, the parser's
 domainNumber drop arm removed, its compare narrowed to the low nibble,
@@ -123,12 +123,14 @@ header-and-timestamp shape, the information TLV header arms removed,
 the Follow_Up TLV block applied to Sync as well, the Pdelay_Req
 minimum reverted to the 34-octet header, and the unlisted messageType
 arm removed, so a frame no handler claims dispatches into the timer
-program).
+program, and the queued Pdelay request snapshot bypassed so two accepted
+Signaling chasers erase its handler input).
 
-The six new negative controls fail independently on the restored workload.
+The seven new negative controls fail independently on the restored workload.
 Removing the Sync bound gives 360 PASS / 28 FAIL of 388 checks reached in the
 high-Sync image. Letting request 2 pass a live response owner gives 397 / 3 of
-400. Exposing the stale timer claim after reset gives 400 / 8 of 408; retaining
+400. Bypassing request 2's event snapshot after the two accepted chasers gives
+399 / 2 of 401. Exposing the stale timer claim after reset gives 400 / 8 of 408; retaining
 the stale response-owner validity gives 377 / 16 of 393; omitting the warm
 slot-2 bootstrap gives 403 / 3 of 406. Advancing the serializer while ready is
 low gives 384 / 9 of 393. The differing reached totals are expected: a missing

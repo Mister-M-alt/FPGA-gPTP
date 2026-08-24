@@ -80,8 +80,11 @@ dropped frame finalizes is no longer lost.
 This round also closes the three lifetime failures exposed when the parent
 put those complete tags under production backpressure. A later peer request
 waits at the event-queue head while the first response owns its claim and
-requester context; the returning timestamp has a priority dispatch path, so
-it releases that owner before the later request can overwrite it (#40).
+requester context. Each accepted Pdelay_Req snapshots the source identity,
+port and ingress stamp its handler consumes beside that event, so two valid
+Signaling chasers can reuse both live message banks without erasing the held
+request. The returning timestamp has a priority dispatch path, so it releases
+the first owner before the later request runs (#40).
 The serializer now has directed start, middle, one-cycle and long ready-low
 coverage (#33). Resettable validity beside the two reset-surviving scratch
 claim words makes an orphaned request, response or Sync invisible after warm
@@ -96,7 +99,7 @@ dispatch, so a second stamp arriving first destroys it), #30 (the
 requestingPortIdentity gate omits Figure 11-8's portNumber term), and #35 (a
 mid-frame `rx_err_i` is ignored). The issue tracker remains the authority.
 Verification here is ucpu 768 / parser 179 / engine 406 checks in the shipping,
-high-request and high-Sync images, eighty-three planted engine mutations red,
+high-request and high-Sync images, eighty-four planted engine mutations red,
 and lint clean. The ROM is 941 of 1,024 words: one word bounds the Sync
 sequence counter before its type-qualified claim. The timer program remains
 191 of 192 words in the shipping image and 192 of 192 in each seeded image.
