@@ -89,6 +89,12 @@
 //         ratio window
 // 27      the Milan 4.2.6.2.5 cease rule: storm, silence, resume,
 //         re-earn -- and same-identity duplicates are not a storm
+// 31      reset after a Pdelay_Req, Pdelay_Resp or Sync SEND but before its
+//         boundary return invalidates the volatile owner; request, response
+//         and master Sync cadence each recover autonomously (#41)
+// 32      start, middle, one-cycle and long TX backpressure preserve bytes;
+//         two peer requests wait behind one response claim and each gets
+//         its own response Follow_Up after its own boundary stamp (#40/#33)
 //
 // All frames and expectations built independently from 802.1AS-2011 +
 // Milan v1.2 4.2.6. The pdelay model mirrors the SPEC formula in exact
@@ -240,6 +246,10 @@ static void tick() {
     auto_pend = -1;
   }
   dut->clk_i = 0; dut->eval();
+  const bool tx_fire = dut->tx_valid_o && dut->tx_ready_i;
+  const uint8_t tx_data = dut->tx_data_o;
+  const bool tx_sof = dut->tx_sof_o;
+  const bool tx_eof = dut->tx_eof_o;
   dut->clk_i = 1; dut->eval();
   if (dut->phc_addend_we_o) {
     phc_adj = (int32_t)dut->phc_addend_o;
@@ -252,10 +262,10 @@ static void tick() {
   }
   phc_acc += (unsigned __int128)(uint64_t)((500ll << 24) + phc_adj);
   dut->phc_ns_i = phc();
-  if (dut->tx_valid_o) {
-    if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
-    if (in_tx) cur.push_back(dut->tx_data_o);
-    if (dut->tx_eof_o && in_tx) {
+  if (tx_fire) {
+    if (tx_sof) { cur.clear(); in_tx = true; }
+    if (in_tx) cur.push_back(tx_data);
+    if (tx_eof && in_tx) {
       txf.push_back(cur);
       txns.push_back(0);
       if (auto_txts) auto_pend = (int)txf.size() - 1;
@@ -645,17 +655,41 @@ int main(int argc, char **argv) {
   uint16_t p3_seq = 0;
   {
     const long leads[] = {10, 2000, 200000};
+    const uint64_t response_ts[] = {810000ull, 830000ull, P3_TS};
     size_t mark = txf.size();
     drops_1c = dut->dbg_rx_drop_o;
     int n = 0;
     for (long lead : leads) {
       run((uint64_t)lead);
       p3_seq = (uint16_t)(0x9900 + n);
+      size_t response_mark = txf.size();
       Frame q = ptp(0x2, p3_seq, 0, 0x0000, 20, PEER_CID);
       q.u64(0); q.u16(0); q.ts(0);
       q.b.resize(68);
       send_frame(q.b, 900000 + 1000 * n);
       run(4000);
+      bool seen = false;
+      for (size_t i = response_mark; i < txf.size(); i++)
+        if (type_of(txf[i]) == 0x3 && seq_of(txf[i]) == p3_seq) {
+          p3_idx = i;
+          seen = true;
+        }
+      expect("peer request across our window: response sent",
+             seen ? 1 : 0, 1);
+      // One response context is intentionally live at a time. Retire the
+      // first two before presenting the next request; the third remains
+      // outstanding for the response-before-request-stamp ordering below.
+      if (seen && n < 2) {
+        size_t fu_mark = txf.size();
+        txts_idx(p3_idx, response_ts[n]);
+        run(8000);
+        bool fu_seen = false;
+        for (size_t i = fu_mark; i < txf.size(); i++)
+          if (type_of(txf[i]) == 0xA && seq_of(txf[i]) == p3_seq)
+            fu_seen = true;
+        expect("peer request across our window: Follow_Up sent",
+               fu_seen ? 1 : 0, 1);
+      }
       n++;
     }
     int resps = 0;
@@ -664,11 +698,9 @@ int main(int argc, char **argv) {
         resps++;
         p3_idx = i;
       }
-    // named for what it pins: three requests drew three Pdelay_Resps.
-    // It is NOT three completed exchanges, since one response claim cell
-    // means only the last can be stamped; the two before it are
-    // incomplete against 802.1AS-2011 11.2.16, which needs a peer sending
-    // faster than one request per outstanding interval to reach
+    // Three requests still draw three Pdelay_Resps, but a later request is
+    // not allowed to overwrite live response context: the first two claims
+    // are retired above and the last remains pending for the ordering probe.
     expect("peer requests across our window: three Pdelay_Resps", resps, 3);
     expect("peer requests across our window: none was a parser drop",
            dut->dbg_rx_drop_o, drops_1c);
@@ -2270,6 +2302,267 @@ int main(int argc, char **argv) {
     model_exchange(t1, t2, t3, t4);
     expect("runt cannot poison the stamp",
            dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
+    pd_mode = PD_NORMAL;
+  }
+
+  // ---- 31: reset cannot strand a pre-reset egress claim -----------------
+  // Scratch deliberately survives warm reset for the Milan cease countdown,
+  // but the frame/event pipelines do not. A request whose boundary return is
+  // lost across reset must not leave S_TXQ_TMR suppressing every later Req
+  // and Sync. The resettable validity beside the LUTRAM claim makes the old
+  // word read as empty until a post-reset transmitter writes a new one.
+  {
+    pd_mode = PD_SKIP;
+    while (auto_pend >= 0) tick();
+    auto_txts = true;
+    tx_seen = txf.size();
+    size_t pre_reset_idx = 0;
+    std::vector<uint8_t> pre_reset_req =
+        wait_tx(0x2, 4000000, &pre_reset_idx);
+    auto_txts = false;
+    auto_pend = -1;
+    expect("reset claim: request sent", pre_reset_req.empty() ? 0 : 1, 1);
+    if (!pre_reset_req.empty())
+      expect("reset claim: stamp withheld", txns[pre_reset_idx], 0);
+
+    dut->rst_n = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->rst_n = 1;
+    dut->tx_ready_i = 1;
+    auto_txts = true;
+    tx_seen = txf.size();
+    std::vector<uint8_t> post_reset_req = wait_tx(0x2, 4000000);
+    expect("reset claim: cadence restarts", post_reset_req.empty() ? 0 : 1, 1);
+    while (auto_pend >= 0) tick();
+
+    // The responder claim/context is the other reset-surviving scratch word.
+    // Lose one response's return across reset, then require a fresh request
+    // to produce a complete response pair instead of waiting behind the
+    // orphaned pre-reset owner.
+    const uint16_t RQ1 = 0x31A1, RQ2 = 0x31A2;
+    auto_txts = false;
+    Frame reset_q1 = ptp(0x2, RQ1, 0, 0x0000, 20, NEAR_CID);
+    reset_q1.u64(0); reset_q1.u16(0); reset_q1.ts(0);
+    reset_q1.b.resize(68);
+    size_t reset_resp_mark = txf.size();
+    send_frame(reset_q1.b, phc() + 1000);
+    int pre_reset_resp = -1;
+    for (int k = 0; k < 200000 && pre_reset_resp < 0; k++) {
+      tick();
+      for (size_t i = reset_resp_mark; i < txf.size(); i++)
+        if (type_of(txf[i]) == 0x3 && seq_of(txf[i]) == RQ1)
+          pre_reset_resp = (int)i;
+    }
+    expect("reset response claim: response sent",
+           pre_reset_resp >= 0 ? 1 : 0, 1);
+    if (pre_reset_resp >= 0)
+      expect("reset response claim: stamp withheld", txns[pre_reset_resp], 0);
+
+    dut->rst_n = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->rst_n = 1;
+    dut->tx_ready_i = 1;
+    auto_txts = true;
+    Frame reset_q2 = ptp(0x2, RQ2, 0, 0x0000, 20, NEAR_CID);
+    reset_q2.u64(0); reset_q2.u16(0); reset_q2.ts(0);
+    reset_q2.b.resize(68);
+    reset_resp_mark = txf.size();
+    send_frame(reset_q2.b, phc() + 2000);
+    int post_reset_resp = -1, post_reset_fu = -1;
+    for (int k = 0; k < 300000 && post_reset_fu < 0; k++) {
+      tick();
+      for (size_t i = reset_resp_mark; i < txf.size(); i++) {
+        if (type_of(txf[i]) == 0x3 && seq_of(txf[i]) == RQ2)
+          post_reset_resp = (int)i;
+        if (type_of(txf[i]) == 0xA && seq_of(txf[i]) == RQ2)
+          post_reset_fu = (int)i;
+      }
+    }
+    expect("reset response claim: fresh response sent",
+           post_reset_resp >= 0 ? 1 : 0, 1);
+    expect("reset response claim: fresh Follow_Up sent",
+           post_reset_fu >= 0 ? 1 : 0, 1);
+    while (auto_pend >= 0) tick();
+
+    // Exercise the other producer of S_TXQ_TMR independently. Re-earn
+    // asCapable and mastership, then lose a Sync's boundary return across
+    // reset. A later request proves that the shared cadence claim recovered.
+    pd_seen = txf.size();
+    pd_mode = PD_NORMAL;
+    expect("reset Sync claim: capable setup",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    expect("reset Sync claim: master setup",
+           wait_flags(FL_AMGM, FL_AMGM, 12000000ull), 1);
+    while (auto_pend >= 0) tick();
+    auto_txts = true;
+    size_t pre_reset_sync_idx = 0;
+    std::vector<uint8_t> pre_reset_sync =
+        wait_tx(0x0, 1000000, &pre_reset_sync_idx);
+    auto_txts = false;
+    auto_pend = -1;
+    expect("reset Sync claim: Sync sent", pre_reset_sync.empty() ? 0 : 1, 1);
+    if (!pre_reset_sync.empty())
+      expect("reset Sync claim: stamp withheld", txns[pre_reset_sync_idx], 0);
+
+    dut->rst_n = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->rst_n = 1;
+    dut->tx_ready_i = 1;
+    auto_txts = true;
+    pd_mode = PD_SKIP;
+    tx_seen = txf.size();
+    std::vector<uint8_t> post_sync_reset_req = wait_tx(0x2, 4000000);
+    expect("reset Sync claim: cadence restarts",
+           post_sync_reset_req.empty() ? 0 : 1, 1);
+    while (auto_pend >= 0) tick();
+  }
+
+  // ---- 32: two response claims survive downstream backpressure ----------
+  // The parent can commit complete frames into its TX FIFO while the lane is
+  // stopped. Request 2 therefore reaches the donor before response 1's real
+  // boundary stamp. Hold it at the event-queue head; the stamp has a direct
+  // priority dispatch path, clears claim/context 1, builds Resp_FU 1, and
+  // only then may request 2 overwrite the scratch context. This also drives
+  // tx_ready low at a frame's first byte, in its body, for one cycle and for
+  // many cycles; only valid/ready handshakes enter the captured frame.
+  {
+    pd_mode = PD_SKIP;
+    while (auto_pend >= 0) tick();
+    auto_txts = false;
+    for (int k = 0; k < 20000 && (dut->dbg_busy_o || dut->tx_valid_o); k++)
+      tick();
+
+    const uint16_t Q1 = 0x1111, Q2 = 0x2222;
+    const uint64_t C1 = PEER_CID, C2 = NEAR_CID;
+    const uint16_t P1 = 1, P2 = 2;
+    const uint64_t TS1 = 8100111ull, TS2 = 8200222ull;
+    Frame q1 = ptp(0x2, Q1, 0, 0x0000, 20, C1);
+    q1.u64(0); q1.u16(0); q1.ts(0); q1.b.resize(68);
+    Frame q2 = ptp(0x2, Q2, 0, 0x0000, 20, C2);
+    q2.b[42] = (uint8_t)(P2 >> 8); q2.b[43] = (uint8_t)P2;
+    q2.u64(0); q2.u16(0); q2.ts(0); q2.b.resize(68);
+
+    const size_t mark = txf.size();
+    const uint16_t evdrop0 = dut->dbg_ev_drop_o;
+    dut->tx_ready_i = 0;
+    const uint64_t Q1_RX = phc() + 1000;
+    send_frame(q1.b, Q1_RX);
+    const uint64_t Q2_RX = phc() + 2000;
+    send_frame(q2.b, Q2_RX);
+    // Two accepted chasers consume both ping-pong banks while request 2 is
+    // held behind response 1's claim. Its event-queue snapshot, not either
+    // live bank, must still feed the second response and Follow_Up.
+    Frame chase1 = ptp(0xC, 0xD00D, 0, 0x0000, 0);
+    Frame chase2 = ptp(0xC, 0xBEEF, 0, 0x0000, 0);
+    send_frame(chase1.b, phc() + 3000);
+    send_frame(chase2.b, phc() + 4000);
+    for (int k = 0; k < 20000 && !(dut->tx_valid_o && dut->tx_sof_o); k++)
+      tick();
+    expect("backpressure: first byte presented",
+           (dut->tx_valid_o && dut->tx_sof_o) ? 1 : 0, 1);
+    uint8_t start_data = dut->tx_data_o;
+    size_t start_frames = txf.size();
+    run(32);
+    expect("backpressure: start valid holds", dut->tx_valid_o, 1);
+    expect("backpressure: start sof holds", dut->tx_sof_o, 1);
+    expect("backpressure: start byte holds", dut->tx_data_o, start_data);
+    expect("backpressure: start accepts none", txf.size(), start_frames);
+
+    dut->tx_ready_i = 1;
+    for (int k = 0; k < 20000 && !(in_tx && cur.size() >= 12); k++) tick();
+    expect("backpressure: body advances", (in_tx && cur.size() >= 12) ? 1 : 0,
+           1);
+    dut->tx_ready_i = 0;
+    uint8_t mid_data = dut->tx_data_o;
+    uint8_t mid_sof = dut->tx_sof_o;
+    uint8_t mid_eof = dut->tx_eof_o;
+    size_t mid_size = cur.size();
+    run(32);
+    expect("backpressure: mid valid holds", dut->tx_valid_o, 1);
+    expect("backpressure: mid byte holds", dut->tx_data_o, mid_data);
+    expect("backpressure: mid sof holds", dut->tx_sof_o, mid_sof);
+    expect("backpressure: mid eof holds", dut->tx_eof_o, mid_eof);
+    expect("backpressure: mid accepts none", cur.size(), mid_size);
+    dut->tx_ready_i = 1;
+
+    auto find_frame = [&](uint8_t mt, uint16_t seq) -> int {
+      for (size_t i = mark; i < txf.size(); i++)
+        if (type_of(txf[i]) == mt && seq_of(txf[i]) == seq) return (int)i;
+      return -1;
+    };
+
+    int resp1 = -1;
+    for (int k = 0; k < 200000 && resp1 < 0; k++) {
+      tick();
+      resp1 = find_frame(0x3, Q1);
+    }
+    expect("backpressure: response 1 sent", resp1 >= 0 ? 1 : 0, 1);
+    if (resp1 >= 0) {
+      expect("backpressure: response 1 requestReceiptTimestamp",
+             fld48(txf[resp1], 48) * 1000000000ull +
+                 fld32(txf[resp1], 54),
+             Q1_RX);
+      expect("backpressure: response 1 requester", fld64(txf[resp1], 58), C1);
+      expect("backpressure: response 1 port", fld16(txf[resp1], 66), P1);
+    }
+    run(2000);
+    expect("backpressure: response 2 waits", find_frame(0x3, Q2) < 0 ? 1 : 0,
+           1);
+
+    if (resp1 >= 0) txts_idx((size_t)resp1, TS1);
+    for (int k = 0; k < 20000 && !dut->tx_valid_o; k++) tick();
+    expect("backpressure: post-stamp frame starts", dut->tx_valid_o, 1);
+    if (dut->tx_valid_o) {
+      uint8_t one_data = dut->tx_data_o;
+      uint8_t one_sof = dut->tx_sof_o;
+      uint8_t one_eof = dut->tx_eof_o;
+      dut->tx_ready_i = 0;
+      tick();
+      expect("backpressure: one-cycle byte holds", dut->tx_data_o, one_data);
+      expect("backpressure: one-cycle sof holds", dut->tx_sof_o, one_sof);
+      expect("backpressure: one-cycle eof holds", dut->tx_eof_o, one_eof);
+      dut->tx_ready_i = 1;
+    }
+
+    int fu1 = -1, resp2 = -1;
+    for (int k = 0; k < 300000 && (fu1 < 0 || resp2 < 0); k++) {
+      tick();
+      fu1 = find_frame(0xA, Q1);
+      resp2 = find_frame(0x3, Q2);
+    }
+    expect("backpressure: Follow_Up 1 sent", fu1 >= 0 ? 1 : 0, 1);
+    expect("backpressure: response 2 sent", resp2 >= 0 ? 1 : 0, 1);
+    if (fu1 >= 0) {
+      expect("backpressure: Follow_Up 1 timestamp",
+             fld48(txf[fu1], 48) * 1000000000ull + fld32(txf[fu1], 54), TS1);
+      expect("backpressure: Follow_Up 1 requester", fld64(txf[fu1], 58), C1);
+      expect("backpressure: Follow_Up 1 port", fld16(txf[fu1], 66), P1);
+    }
+    if (resp2 >= 0) {
+      expect("backpressure: response 2 requestReceiptTimestamp",
+             fld48(txf[resp2], 48) * 1000000000ull +
+                 fld32(txf[resp2], 54),
+             Q2_RX);
+      expect("backpressure: response 2 requester", fld64(txf[resp2], 58), C2);
+      expect("backpressure: response 2 port", fld16(txf[resp2], 66), P2);
+      txts_idx((size_t)resp2, TS2);
+    }
+
+    int fu2 = -1;
+    for (int k = 0; k < 200000 && fu2 < 0; k++) {
+      tick();
+      fu2 = find_frame(0xA, Q2);
+    }
+    expect("backpressure: Follow_Up 2 sent", fu2 >= 0 ? 1 : 0, 1);
+    if (fu2 >= 0) {
+      expect("backpressure: Follow_Up 2 timestamp",
+             fld48(txf[fu2], 48) * 1000000000ull + fld32(txf[fu2], 54), TS2);
+      expect("backpressure: Follow_Up 2 requester", fld64(txf[fu2], 58), C2);
+      expect("backpressure: Follow_Up 2 port", fld16(txf[fu2], 66), P2);
+    }
+    expect("backpressure: event queue keeps both", dut->dbg_ev_drop_o, evdrop0);
+    dut->tx_ready_i = 1;
+    auto_txts = true;
     pd_mode = PD_NORMAL;
   }
 

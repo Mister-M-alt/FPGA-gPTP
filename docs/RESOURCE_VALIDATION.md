@@ -711,3 +711,86 @@ type-specific collision oracles, and removing the type bits from event and
 claims to restore sequence-only credit fails six of the 343 checks reached,
 including both response-first collisions and the missing/corrupt Follow_Up
 outcomes.
+
+## Backpressured ownership and warm-reset recovery: +165 LUT, +228 FF
+
+The parent integration review then supplied two lifetime probes that the
+complete tag alone did not settle. First, its downstream FIFO can accept a
+second peer Pdelay_Req before the first Pdelay_Resp reaches the true MAC
+boundary. Both requests reached the donor and both responses were serialized,
+but the single response claim/context was overwritten, so only request 2 got
+its mandatory Pdelay_Resp_Follow_Up (#40). Second, scratch survives warm reset
+while the event, timestamp, serializer and timer pipelines reset. An outstanding
+claim could therefore survive without a possible return; independently, the
+reset timer lost its Announce-receipt watch, so a formerly capable port could
+not regain master Sync cadence (#41).
+
+The ownership repair keeps one live response owner rather than adding another
+response slot. A later Pdelay_Req waits at the four-entry event-queue head while
+the response claim is valid. Its handler cannot keep relying on the two-bank
+message store while it waits: two accepted chasers reuse both banks. Each
+accepted request therefore snapshots exactly the context its handler consumes
+beside its event: source clockIdentity (64 bits), source portNumber (16) and
+ingress timestamp (64); sequenceId is already in the event descriptor. Parser
+write staging supplies identity and port without adding parallel read ports to
+the message bank, and the qualified EOF commits the matching timestamp. This is
+a 4 x 144-bit context memory, not another frame buffer.
+
+The one-entry egress timestamp holder dispatches through a priority side path,
+so the first response stamp bypasses the held request, consumes its claim and
+builds its Follow_Up before request 2 runs. Two accepted Signaling frames then
+reuse both ping-pong banks while request 2 waits; its snapshot still produces
+the response and Follow_Up with its own sequence, requester, port and ingress
+stamp. This proves accepted request lifetime through every event-queue slot; it
+does not widen the one-entry timestamp-return boundary, which remains #31.
+Resettable validity beside the timer and response claim scratch words makes
+their old contents read empty after reset without clearing the Milan cease
+countdown. The hardware bootstrap now arms both slot 0 (Pdelay cadence) and
+slot 2 (Announce receipt); cold µcode harmlessly re-arms slot 2, while warm
+µcode can skip initialization and still recover mastership.
+
+The same engine round closes #33 as a measured coverage item. `tx_ready_i` is
+deasserted at the first byte, in the body, for one cycle and for long spans;
+the harness captures bytes only on valid/ready handshakes. Two different
+requester identities enter under that backpressure, response 2 waits, and both
+response Follow_Ups carry their own requester, port and exact egress stamp even
+after the two chasers. The serializer already honoured ready, so this part
+changes no production RTL.
+
+The Sync wrap repair (#39) adds one ROM instruction, taking the shipping image
+from 940 to 941 real words of 1,024. Its timer program remains 191 of 192 words;
+the request-seeded and Sync-seeded regression images each remain exactly 192 of
+192. Same instrument, Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100 MHz,
+2026-08-24, with exact merged base `979903ac` re-measured in a separate
+worktree immediately beside this candidate:
+
+| | `979903ac` (`main`) | ownership/reset repair | delta |
+|---|---|---|---|
+| Slice LUTs | 3,171 (2,837 logic + 334 LUTRAM) | **3,336** (2,914 + 422) | **+165** |
+| Registers | 2,407 | **2,635** | **+228** |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +2.445 ns | **+2.445 ns, met** | 0 |
+
+Vivado moves logic across the flattened engine/µCPU/parser boundaries in this
+round, so the top-level delta is the cost statement; individual hierarchy rows
+are not additive attribution. The 144-bit dispatch snapshot and its parser-side
+staging account for the state; keeping bank_r single-read avoids the much larger
+RAM replication a direct three-word snapshot caused in a discarded synthesis.
+The Arty first-light design also completed synthesis, placement, routing and
+bitstream generation unmodified: 4,087 LUT, 3,541 registers, 1.5 BRAM tiles,
+4 DSP48E1 and worst setup slack +0.401 ns.
+
+Verification at this measurement: ucpu 768 / parser 179 / engine 408 checks in
+the shipping, high-request and high-Sync images; full lint and the Arty
+two-frame tag bench clean. Eight new planted mutations are red. The first seven
+recorded results predate the two permanent response-timestamp assertions: Sync
+unbounded (360 PASS / 28 FAIL of 388 reached), request 2 admitted past a live
+response owner (397 / 3 of 400), the whole queued-request snapshot bypassed
+after two accepted Signaling chasers (399 / 2 of 401), stale timer claim exposed
+after reset (400 / 8 of 408), stale response validity retained (377 / 16 of
+393), warm slot-2 bootstrap removed (403 / 3 of 406), and serializer advancement
+with ready low (384 / 9 of 393). On the current 408-check workload, bypassing
+only the queued request's saved ingress timestamp gives 407 / 1 and names the
+corrupted `requestReceiptTimestamp`. Each production form was restored before
+the OOC and routed builds.
