@@ -1,5 +1,6 @@
 obj_dir/
 seedrun/
+syncseedrun/
 *.log
 *.jou
 *.rpt

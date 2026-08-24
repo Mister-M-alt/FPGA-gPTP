@@ -77,26 +77,39 @@ leave no claim cannot clear another transmitter's claim. A refusal is
 also counted once per refused frame, so a one-byte runt in the cycle a
 dropped frame finalizes is no longer lost.
 
-The donor issues open at this commit are review findings on pre-existing
+This round also closes the three lifetime failures exposed when the parent
+put those complete tags under production backpressure. A later peer request
+waits at the event-queue head while the first response owns its claim and
+requester context; the returning timestamp has a priority dispatch path, so
+it releases that owner before the later request can overwrite it (#40).
+The serializer now has directed start, middle, one-cycle and long ready-low
+coverage (#33). Resettable validity beside the two reset-surviving scratch
+claim words makes an orphaned request, response or Sync invisible after warm
+reset, while the Milan cease countdown still persists; the hardware bootstrap
+re-arms both Pdelay cadence and the Announce receipt watch so master Sync
+cadence can recover autonomously (#41). Finally, the free-running Sync counter
+is bounded to its 16-bit wire field before it forms a claim (#39).
+
+The donor issues still open at this commit are review findings on pre-existing
 behaviour: #31 (the engine holds one egress timestamp and samples it at
 dispatch, so a second stamp arriving first destroys it), #30 (the
-requestingPortIdentity gate omits Figure 11-8's portNumber term), #33
-(the bench pins `tx_ready_i` high), and #35 (a mid-frame `rx_err_i` is
-ignored). The issue tracker remains the authority. Verification here is
-ucpu 768 / parser 179 / engine 358 checks, seventy-seven planted engine
-mutations red, and lint clean. The ROM is 940 of 1,024 words—one fewer
-than `main` because the complete tag is packed directly into the event
-descriptor—and the timer program remains 191 of 192 words in the
-shipping image and 192 of 192 in the seeded one. See
-`docs/RESOURCE_VALIDATION.md` for the measurement record.
+requestingPortIdentity gate omits Figure 11-8's portNumber term), and #35 (a
+mid-frame `rx_err_i` is ignored). The issue tracker remains the authority.
+Verification here is ucpu 768 / parser 179 / engine 406 checks in the shipping,
+high-request and high-Sync images, eighty-three planted engine mutations red,
+and lint clean. The ROM is 941 of 1,024 words: one word bounds the Sync
+sequence counter before its type-qualified claim. The timer program remains
+191 of 192 words in the shipping image and 192 of 192 in each seeded image.
+See `docs/RESOURCE_VALIDATION.md` for the measurement record.
 
 **Parent status:** the option-gated splice is landed under parent #114,
 and `dev` currently pins donor `c33fb1af`, which contains the completed
 #6 through #12 field campaign. Parent PR #216 already exports the
-boundary messageType beside sequenceId. Reopened parent #214 owns the
-remaining mechanical step after this donor change lands: advance the
-submodule pin, wire `txts_type_i` into the engine, and prove both
-collisions end to end in `gptp_shadow`. Parent #116 owns the default-on
+boundary messageType beside sequenceId. Draft parent PR #244, for reopened
+#214, owns the remaining integration after this donor change lands: advance
+its reviewed `979903ac` baseline pin, wire `txts_type_i` into the engine, and
+prove the cross-type and same-type ownership cases end to end in
+`gptp_shadow`. Parent #116 owns the default-on
 publication/rootfs transition; #117 still owns physical two-board and
 silicon acceptance. The parent's page of record is
 `docs/design/GPTP_PLANE.md`.

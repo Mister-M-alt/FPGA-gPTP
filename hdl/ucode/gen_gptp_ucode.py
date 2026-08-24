@@ -4,6 +4,14 @@
 """gPTP µcode ROM image generator -- v8, the announce qualification and the
 Pdelay_Resp_Follow_Up pairing rounds.
 
+FPGA-gPTP #39, found while the parent integrated complete egress-stamp tags:
+the Sync counter remained wider than its 16-bit wire field. At Sync 65,536,
+its bit 16 occupied the claim's new messageType nibble, so the type-0 return
+could not clear the type-1 claim and every later Sync cadence was suppressed.
+The Sync leg now bounds the counter before it builds the frame/claim and before
+write-back. A separate regression image seeds S_SSEQ at 0x10000; the existing
+high-bit S_MYSEQ image remains independent so both counter paths are proved.
+
 FPGA-gPTP #7, found by the parent's field campaign: the announce handler
 fed BTCA every well-formed Announce, so a better vector that 802.1AS-2011
 10.3.10.2.1 (qualifyAnnounce) disqualifies still moved the grandmaster.
@@ -962,7 +970,7 @@ def prog_tx_ts(base):
     return p
 
 
-def prog_tmr(base, mac, seq_seed=0):
+def prog_tmr(base, mac, seq_seed=0, sync_seq_seed=0):
     cid = ((mac >> 24) << 40) | (0xFFFE << 24) | (mac & 0xFFFFFF)
     hdr8 = (0x0180C200000E << 16) | ((mac >> 32) & 0xFFFF)
     salo = mac & 0xFFFFFFFF
@@ -1005,13 +1013,14 @@ def prog_tmr(base, mac, seq_seed=0):
     p.emit("WRST", ra=RC, imm=RG_SCR | S_ANNBODY, fmt=FMT_Q)
     e_const(p, RC, 0xC2000001)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_FUORG, fmt=FMT_Q)
-    for s in ((S_MYSEQ,) if not seq_seed else ()) + (
+    for s in (((S_MYSEQ,) if not seq_seed else ()) +
+              ((S_SSEQ,) if not sync_seq_seed else ()) + (
               S_SYNCTS, S_PDELAY, S_T2, S_SSEQFLY,
               S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NR4, S_NRR, S_INTG,
               S_T1, S_T4, S_TXQ_TMR, S_TXQ_RESP,
-              S_SSEQ, S_ASEQ,
+              S_ASEQ,
               S_RSP1, S_IVMULTI, S_CEASE,
-              S_RSPSEQ):
+              S_RSPSEQ)):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
     # S_CEASECNT and S_MULTI are deliberately NOT in that list, which is
     # where the words for the mask below and for the seeded regression
@@ -1020,12 +1029,15 @@ def prog_tmr(base, mac, seq_seed=0):
     # straight-line block. See the invariant beside their definitions:
     # note that this list is NOT what makes it safe, since after a warm
     # reset this leg does not run at all
-    if seq_seed:
-        # REGRESSION IMAGE ONLY: start the request counter above 16 bits so
-        # the claim tag carries bits the flags live in. The shipping image
-        # never takes this branch
-        p.emit("MOVE", rd=RT, ra=0, imm=seq_seed)
-        p.emit("WRST", ra=RT, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
+    seed = seq_seed or sync_seq_seed
+    if seed:
+        # REGRESSION IMAGES ONLY: start exactly one sequence counter above
+        # 16 bits so its claim tag carries bits owned by messageType/flags.
+        # One shared seed arm keeps the already-full seeded timer program at
+        # 192 words. The shipping image never takes this branch.
+        p.emit("MOVE", rd=RT, ra=0, imm=seed)
+        seed_cell = S_MYSEQ if seq_seed else S_SSEQ
+        p.emit("WRST", ra=RT, imm=RG_SCR | seed_cell, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_INIT, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
@@ -1444,6 +1456,11 @@ def prog_leg_synctx(base):
     p.emit("END")                                    # skip this beat
     p.label("build")
     p.emit("RDST", rd=RA, imm=RG_SCR | S_SSEQ, fmt=FMT_Q)
+    # S_SSEQ is free-running but both the frame sequenceId and its claim are
+    # 16 bits. Bound it before type/flags are or'd into the claim and before
+    # write-back; otherwise bit 16 becomes messageType 1 at Sync 65,536 and
+    # no type-0 timestamp can clear the claim (#39).
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=0xFFFF)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_SSEQFLY, fmt=FMT_Q)
     e_hdr(p, 0x0, 0x0208, RA, 0xFD, 44)
     # 802.1AS-2011 Table 11-8: a two-step Sync carries ten reserved
@@ -1507,12 +1524,14 @@ LEG_FNS = [
 ]
 
 
-def build(mac, seq_seed=0):
+def build(mac, seq_seed=0, sync_seq_seed=0):
+    assert not (seq_seed and sync_seq_seed), "seed one counter per image"
     fixed = [
         (16, prog_rx_sync), (64, prog_rx_followup), (128, prog_rx_announce),
         (192, prog_rx_pdreq), (256, prog_rx_pdresp), (320, prog_rx_pdrfu),
         (384, prog_rx_signal), (448, prog_tx_ts),
-        (512, lambda b: prog_tmr(b, mac, seq_seed)), (704, prog_tb_battery),
+        (512, lambda b: prog_tmr(b, mac, seq_seed, sync_seq_seed)),
+        (704, prog_tb_battery),
     ]
 
     # pass 1: measure (word counts are independent of branch targets)
@@ -1569,6 +1588,9 @@ def main():
     ap.add_argument("--seq-seed", type=lambda s: int(s, 0), default=0,
                     help="seed S_MYSEQ at init; a REGRESSION IMAGE only, "
                          "for proving a claim tag above 16 bits is bounded")
+    ap.add_argument("--sync-seq-seed", type=lambda s: int(s, 0), default=0,
+                    help="seed S_SSEQ at init; a REGRESSION IMAGE only, "
+                         "for proving a Sync claim above 16 bits is bounded")
     ap.add_argument("--mac", type=lambda s: int(s, 0), default=0x02A1B2C3D4E5)
     ap.add_argument("--p1", type=int, default=248,
                     help="our announced priority1 (lower wins BTCA)")
@@ -1583,7 +1605,7 @@ def main():
     global P1_C
     P1_C = args.p1
     set_servo_gains(args.clk_hz)
-    rom, used = build(args.mac, args.seq_seed)
+    rom, used = build(args.mac, args.seq_seed, args.sync_seq_seed)
     with open(args.out, "w", encoding="ascii") as f:
         for word in rom:
             f.write(f"{word:012X}\n")

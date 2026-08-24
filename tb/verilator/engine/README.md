@@ -62,14 +62,22 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 28 | a warm reset during a cease still resumes: the countdown lives in reset-surviving scratch and the boot re-arms the cadence |
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
+| 31 | warm reset withholds the boundary return of an outstanding Pdelay_Req, Pdelay_Resp and master Sync in turn. The two reset-surviving scratch claims read empty after reset, a fresh response pair completes, and the hardware bootstrap re-arms both request and Announce-receipt timers so master Sync cadence returns without a bitstream reload (#41) |
+| 32 | `tx_ready_i` is low at the first byte, in the body, for one cycle and for many cycles; capture advances only on valid/ready. Two different peer requests enter before response 1's boundary stamp, response 2 waits, and each response gets the Follow_Up carrying its own requester identity, port and exact stamp with zero event drops (#40, #33) |
 
-All seventy-seven planted mutations turn the run red. The list below
-enumerates seventy-six of them, and the shortfall is inherited rather
+The same 406-check workload runs against three generated images: the shipping
+image, `S_MYSEQ` seeded to `0x200000`, and `S_SSEQ` seeded to `0x10000`. The
+last image reaches Sync 65,536 immediately; without the 16-bit bound, its
+first type-0 return cannot match the aliased type-1 claim and the cadence
+stops (#39).
+
+All eighty-three planted mutations turn the run red. The list below
+enumerates eighty-two of them, and the shortfall is inherited rather
 than new: the headline moved from thirty-one to thirty-six and then to
 forty on rounds that each named three new mutations, so it has run ahead
 of the prose since before the field campaign. The arithmetic has been
 exact since forty-one, every round since names its own, and this round's
-two are the last two named below. The list: (the own-source rule removed, its
+six mutations are named explicitly below. The list: (the own-source rule removed, its
 identity compare narrowed to 32 bits, the stepsRemoved bound off by one
 in either direction, its compare narrowed to a byte, a dead path-trace
 compare, the hop compare narrowed to 32 bits, the hop read from the next
@@ -90,7 +98,11 @@ it, the response leaving no claim at all, the stamp compare narrowed to
 the low 8 bits, the claim tag left unbounded so the request counter's
 bit 21 reads as the Sync flag, the returned messageType forced to zero,
 the type bits removed from both event and claims to restore
-sequenceId-only credit, the shared TX control value,
+sequenceId-only credit, the Sync claim tag left unbounded so counter bit
+16 reads as messageType 1, a second Pdelay request dispatched while the
+first response claim is live, the timer claim's reset-valid read override
+disabled, the responder claim validity held through reset, the warm-reset
+Announce-watch bootstrap removed, `tx_ready_i` ignored, the shared TX control value,
 ladder trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side
@@ -112,6 +124,33 @@ the Follow_Up TLV block applied to Sync as well, the Pdelay_Req
 minimum reverted to the 34-octet header, and the unlisted messageType
 arm removed, so a frame no handler claims dispatches into the timer
 program).
+
+The six new negative controls fail independently on the restored workload.
+Removing the Sync bound gives 360 PASS / 28 FAIL of 388 checks reached in the
+high-Sync image. Letting request 2 pass a live response owner gives 397 / 3 of
+400. Exposing the stale timer claim after reset gives 400 / 8 of 408; retaining
+the stale response-owner validity gives 377 / 16 of 393; omitting the warm
+slot-2 bootstrap gives 403 / 3 of 406. Advancing the serializer while ready is
+low gives 384 / 9 of 393. The differing reached totals are expected: a missing
+cadence or response removes later frame-dependent assertions; every mutation
+returns non-zero and names its first violated invariant.
+
+## Engine input-drive ledger
+
+| input | engine-bench drive | why |
+|---|---|---|
+| `clk_i` | live | toggled every modeled cycle |
+| `rst_n` | live | cold reset plus warm reset during cease and with outstanding request, response and Sync ownership |
+| `rx_valid_i`, `rx_data_i`, `rx_sof_i`, `rx_eof_i` | live | byte-level frames, zero-gap successors, truncations and runts |
+| `rx_err_i` | constant 0 here, by design | the parent supplies only FCS-clean frames and also ties it low; the parser suite drives the error arm directly (#35 records the remaining mid-frame behavior) |
+| `rx_ts_i` | live | independently selected ingress timestamp per injected frame |
+| `tx_ready_i` | live | phase 32 drives first-beat, body, one-cycle and long stalls; capture advances only on a valid/ready handshake (#33) |
+| `txts_valid_i`, `txts_ns_i`, `txts_seq_i`, `txts_type_i` | live | automatic and deliberately reordered/withheld returns carry the selected frame's exact stamp and complete header tag; #31 bounds the remaining one-entry behavior |
+| `phc_ns_i` | live, intentionally unread by shipping µcode | the PHC model advances and is steered every tick; #38 records the lack of a behavioral consumer rather than hiding it behind a constant |
+
+There are no other engine inputs. Constant `rx_err_i` is therefore an explicit
+parent-interface contract with direct lower-level coverage, not an accidental
+blind spot; every other functional input changes in this workload.
 
 ```sh
 make        # regenerates gptp_ucode.hex from hdl/ucode/, builds, runs
