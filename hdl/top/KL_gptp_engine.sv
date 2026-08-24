@@ -71,10 +71,11 @@ module KL_gptp_engine
     output logic        tx_eof_o,
     input  wire         tx_ready_i,
 
-    //! egress timestamp return for the frame last sent
+    //! egress timestamp return, identified by the stamped PTP header
     input  wire         txts_valid_i,
     input  wire  [63:0] txts_ns_i,
     input  wire  [15:0] txts_seq_i,
+    input  wire   [3:0] txts_type_i,
 
     //! PHC face (the parent timestamp_counter's knobs)
     input  wire  [63:0] phc_ns_i,
@@ -223,13 +224,15 @@ module KL_gptp_engine
 
   // ------------------------------------------------------- event queue
   //! 4 deep, {code, seq, aux}; parser wins a same-cycle push, a TX
-  //! timestamp return pends, the timer waits on its own ready
+  //! timestamp return pends with its messageType, the timer waits on
+  //! its own ready
   logic [39:0] evq_r [0:3];
   logic [1:0]  evq_wp_r, evq_rp_r;
   logic [2:0]  evq_lvl_r;
   logic [15:0] ev_drop_r;
   logic        txts_pend_r;
   logic [15:0] txts_pend_seq_r;
+  logic  [3:0] txts_pend_type_r;
 
   logic evq_full_w, evq_empty_w;
   assign evq_full_w  = (evq_lvl_r == 3'd4);
@@ -246,7 +249,11 @@ module KL_gptp_engine
       push_data_w = {pev_code_w, pev_seq_w, 15'd0, bank_sel_r};
     end else if (txts_pend_r) begin
       push_w      = !evq_full_w;
-      push_data_w = {EV_TX_TS_C, txts_pend_seq_r, 16'd0};
+      //! TX events repack the complete claim tag into aux[19:0]:
+      //! {messageType, sequenceId}. The handler can then compare it in
+      //! one masked read instead of spending scarce ROM words shifting.
+      push_data_w = {EV_TX_TS_C, 12'd0, txts_pend_type_r,
+                     txts_pend_seq_r};
     end else if (tev_valid_w) begin
       push_w      = !evq_full_w;
       push_data_w = {EV_TMR_C, 16'd0, 13'd0, tev_slot_w};
@@ -264,6 +271,7 @@ module KL_gptp_engine
       ev_drop_r       <= '0;
       txts_pend_r     <= 1'b0;
       txts_pend_seq_r <= '0;
+      txts_pend_type_r <= '0;
     end else begin
       if (push_w) begin
         evq_r[evq_wp_r] <= push_data_w;
@@ -278,6 +286,7 @@ module KL_gptp_engine
       if (txts_valid_i) begin
         txts_pend_r     <= 1'b1;
         txts_pend_seq_r <= txts_seq_i;
+        txts_pend_type_r <= txts_type_i;
       end else if (!pev_valid_w && txts_pend_r && !evq_full_w) begin
         txts_pend_r <= 1'b0;
       end

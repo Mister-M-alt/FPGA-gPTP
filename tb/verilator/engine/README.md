@@ -19,9 +19,10 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 |---|---|
 | 1, 3, 6, 7 | Table 11-7 `controlField`: Sync = 0, Follow_Up = 2, Announce and every Pdelay message = 5 |
 | 1, 2 | asCapable is NOT set after one good exchange (4.2.6.2.4) |
-| 1a | a Pdelay_Req sourced from OUR OWN clockIdentity draws no Pdelay_Resp and no frame at all, moves no counter and no flag, and cannot steal the egress timestamp the boot request is waiting for: phase 2's published delay is the oracle, 600 ns if it was ignored and 500,600 ns if it was answered (IEEE 1588-2008 9.5.2.2; Figure 11-9 carries no such condition, #26). This row is about one trigger, not about the window: the window itself is #28, still open |
+| 1a | a Pdelay_Req sourced from OUR OWN clockIdentity draws no Pdelay_Resp and no frame at all, moves no counter and no flag, and cannot steal the egress timestamp the boot request is waiting for: phase 2's published delay is the oracle, 600 ns if it was ignored and 500,600 ns if it was answered (IEEE 1588-2008 9.5.2.2; Figure 11-9 carries no such condition, #26) |
 | 1b | a Follow_Up for the boot request (sequence 0) ahead of any Resp, sourced from the zero identity a never-armed pairing holds, is ignored: "armed with sequence 0" is not "nothing armed" (11.2.15.3) |
-| 1c | peer Pdelay_Reqs arriving 10, 2,000 and 200,000 cycles into our own request's outstanding interval, while the boot request still waits for its egress timestamp so this runs before 1b, each draw a Pdelay_Resp and none of them takes the egress timestamp our request is waiting for: a stamp is credited to a CLAIM its sequenceId names, which is narrower than the frame that earned it, so the last response's stamp, returned BEFORE our request's, builds that response's own Resp_FU with its own timestamp while phase 2's published delay stays 600 ns. Three Pdelay_Resps is not three completed exchanges: one response claim cell means only the last can be stamped. A fourth request differs from our tag only in the HIGH byte of the sequenceId, which a compare narrowed to the low 8 bits fails, and a fifth reuses OUR tag outright, the residual: both claims hold the same value, so the two stamps are credited in the order the claims are tested rather than to the frames that earned them, and the phase pins that each claim still takes exactly one (#28, which this does not close) |
+| 1c | peer Pdelay_Reqs arriving 10, 2,000 and 200,000 cycles into our own request's outstanding interval each draw a Pdelay_Resp and none takes the egress timestamp our request is waiting for. A fourth request differs only in the high byte of sequenceId. A fifth reuses our sequenceId zero exactly: its response stamp arrives first and still builds its own Resp_FU; that unclaimed type-A frame's later stamp cannot consume our type-2 request claim; the true request stamp then preserves phase 2's 600 ns delay. The full `{messageType, sequenceId}` identity, not event order or sequence alone, is the oracle (#28) |
+| 7 | while grandmaster, a Sync claim and a peer Pdelay_Resp claim carry the same sequenceId. The response stamp arrives first and builds the mandatory Resp_FU with its own timestamp, not a Sync Follow_Up; the unclaimed Resp_FU stamp is ignored; the Sync stamp still builds its own Follow_Up with its own preciseOriginTimestamp (802.1AS-2011 11.2.14.2.3 and 11.2.16, #28) |
 | 2b | a Pdelay_Resp and its Follow_Up sourced from OUR OWN clockIdentity, answering the outstanding request with our requestingPortIdentity and a delay under the threshold, are ignored: the published delay and asCapable both hold, and the exchange that would have been the second never happened (IEEE 1588-2008 9.5.2.2, 802.1AS-2011 Figure 11-8, #23) |
 | 3a | a requester whose clockIdentity differs from ours in only its low half, and one differing in only its high half, are both neighbours and are both answered with their own sequence, their own requestingPortIdentity and their Resp_FU: the refusal above is 64 bits wide, and a compare narrowed to either half refuses one of them (#26) |
 | 3b | a foreign-domain Pdelay_Req (domain 0x10) draws no Pdelay_Resp and counts one drop; a domain-0 request right after it is answered with its own sequence and its Resp_FU |
@@ -62,13 +63,13 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 
-All seventy-five planted mutations turn the run red. The list below
-enumerates seventy-four of them, and the shortfall is inherited rather
+All seventy-seven planted mutations turn the run red. The list below
+enumerates seventy-six of them, and the shortfall is inherited rather
 than new: the headline moved from thirty-one to thirty-six and then to
 forty on rounds that each named three new mutations, so it has run ahead
 of the prose since before the field campaign. The arithmetic has been
 exact since forty-one, every round since names its own, and this round's
-three are the last three named below. The list: (the own-source rule removed, its
+two are the last two named below. The list: (the own-source rule removed, its
 identity compare narrowed to 32 bits, the stepsRemoved bound off by one
 in either direction, its compare narrowed to a byte, a dead path-trace
 compare, the hop compare narrowed to 32 bits, the hop read from the next
@@ -87,7 +88,9 @@ claim written into the timer transmitter's cell so the two share one
 again, the stamp's sequenceId ignored so the first claim present takes
 it, the response leaving no claim at all, the stamp compare narrowed to
 the low 8 bits, the claim tag left unbounded so the request counter's
-bit 21 reads as the Sync flag, the shared TX control value,
+bit 21 reads as the Sync flag, the returned messageType forced to zero,
+the type bits removed from both event and claims to restore
+sequenceId-only credit, the shared TX control value,
 ladder trigger, both pdelay
 thresholds, all three timeout values, a dead ratio divide, a deleted
 staleness guard, the fall-at-three lost count, a dropped adopt-side

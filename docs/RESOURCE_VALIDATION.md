@@ -663,3 +663,51 @@ on one edge at all, because the end-of-frame arm needs `run_r`, which
 the eof that set `fin_r` already cleared, and the only way to raise it
 again in that cycle is a sof in the eof cycle, which on a one-byte face
 is a runt, and the runt arm clears `run_r` without entering the eof arm.
+
+## Complete egress-stamp tags close #28
+
+FPGA-gPTP #28 remained after the sequence-matched round above because a
+16-bit sequenceId is not a frame identity. Two identical endpoints start
+their Pdelay counters together, while a peer Pdelay_Req makes our response
+echo that peer's counter; a response and our own request can therefore have
+the same sequenceId for long intervals. Sync has the same collision against
+a peer response. Announce and both Follow_Up kinds are stamped too, despite
+deliberately leaving no claim, so sequence-only credit could also let one of
+those returns clear an unrelated claim.
+
+The parent stamper now exports the messageType nibble beside sequenceId. This
+round adds `txts_type_i`, holds the complete pair while the event queue is
+busy, and packs `{messageType, sequenceId}` into event `aux[19:0]`. Each
+transmitter claim carries the same pair. The TX handler masks and compares all
+20 tag bits plus the pending flag before consuming a timestamp. A same-sequence
+Pdelay_Resp stamp therefore builds its own Resp_Follow_Up before the outstanding
+Pdelay_Req stamp is returned, and a same-sequence response cannot build a Sync
+Follow_Up. A subsequent stamp for the unclaimed Follow_Up is ignored in both
+cases. The independent one-entry timestamp buffering defect remains #31.
+
+Packing the tag in the event descriptor also removes the handler's two shift
+instructions, so the ROM falls from 941 to 940 real words of 1,024. The timer
+program remains at 191 of its 192 words in the shipping image and 192 of 192 in
+the seeded image. Same instrument, Vivado 2026.1 OOC on
+`xc7a100tfgg484-2` at 100 MHz, 2026-08-24, with exact base `10b6f353`
+re-measured in a separate worktree:
+
+| | `10b6f353` (`main`) | complete stamp tag | delta |
+|---|---|---|---|
+| Slice LUTs | 3,117 (2,791 logic + 326 LUTRAM) | **3,171** (2,837 + 334) | **+54** |
+| `u_ucpu` LUTs | 1,997 | 2,030 | +33 |
+| `u_parser` LUTs | 544 | 557 | +13 |
+| Registers | 2,390 | 2,407 | +17 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+2.445 ns, met** | +0.547 ns |
+
+The hierarchy figures include Vivado's cross-boundary optimization; the
+top-level delta is the stable cost statement. Verification at this measurement:
+ucpu 768 / parser 179 / engine 358 checks in both the normal and seeded engine
+images, full repository `make` and lint clean. The two new planted mutations
+both turn the run red: forcing the returned messageType to zero breaks the
+type-specific collision oracles, and removing the type bits from event and
+claims to restore sequence-only credit fails six of the 343 checks reached,
+including both response-first collisions and the missing/corrupt Follow_Up
+outcomes.

@@ -8,7 +8,10 @@
 //  1a     a Pdelay_Req sourced from OUR OWN clockIdentity, arriving
 //         while the boot request waits for its egress timestamp, draws
 //         no frame and cannot steal that timestamp (1588-2008 9.5.2.2,
-//         #26; the theft itself is #28)
+//         #26)
+//  1c     equal-sequence Pdelay_Req/Pdelay_Resp claims are separated by
+//         messageType; a stamped unclaimed Resp_FU cannot consume either
+//         claim, and the true request stamp still produces 600 ns (#28)
 //  3a     a requester differing from us in only one half of its
 //         clockIdentity is a neighbour and is still answered, so a
 //         compare narrowed to either half goes red (#26)
@@ -27,7 +30,10 @@
 //         draws no frame at all and counts one drop each, and the flags
 //         do not move (Table 11-3's NOTE: not used in this standard, #22)
 //  5..9   grandmaster life: timeout become (asCapable-gated), Announce/
-//         Sync/Follow_Up byte-exact, BTCA both directions, adoption
+//         Sync/Follow_Up byte-exact, BTCA both directions, adoption;
+//         phase 7 holds an equal-sequence Sync and Pdelay_Resp, returns
+//         the response stamp first, stamps its unclaimed Resp_FU, then
+//         proves the Sync still receives its own timestamp (#28)
 //  7b     802.1AS-2011 11.2.15.3: a Pdelay_Resp_Follow_Up pairs with one
 //         Pdelay_Resp for the outstanding request only -- before any
 //         Resp, with a stale sequenceId, behind a stale Resp (0xEEEE,
@@ -198,6 +204,10 @@ static VKL_gptp_engine *dut;
 static uint16_t seq_of(const std::vector<uint8_t> &f) {
   return f.size() > 45 ? (uint16_t)((f[44] << 8) | f[45]) : 0;
 }
+//! the messageType nibble the parent boundary stamper returns beside it
+static uint8_t type_of(const std::vector<uint8_t> &f) {
+  return f.size() > 14 ? (uint8_t)(f[14] & 0xF) : 0;
+}
 
 static uint64_t cyc = 0;
 
@@ -225,6 +235,7 @@ static void tick() {
     dut->txts_valid_i = 1;
     dut->txts_ns_i = ns;
     dut->txts_seq_i = seq_of(txf[auto_pend]);
+    dut->txts_type_i = type_of(txf[auto_pend]);
     txns[auto_pend] = ns;
     auto_pend = -1;
   }
@@ -270,12 +281,12 @@ static void send_frame(const std::vector<uint8_t> &bytes, uint64_t rx_ts) {
   dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
 }
 
-//! stamp one CHOSEN transmitted frame, reporting its own sequenceId the
-//! way KL_gptp_txstamp does. Until #28 the bench reported 0 for every
-//! frame, so nothing here exercised the tag the hardware delivers
+//! stamp one CHOSEN transmitted frame, reporting its own header identity
+//! the way KL_gptp_txstamp does
 static void txts_idx(size_t idx, uint64_t ns) {
   dut->txts_valid_i = 1; dut->txts_ns_i = ns;
   dut->txts_seq_i = idx < txf.size() ? seq_of(txf[idx]) : 0;
+  dut->txts_type_i = idx < txf.size() ? type_of(txf[idx]) : 0;
   tick();
   dut->txts_valid_i = 0;
 }
@@ -564,6 +575,7 @@ int main(int argc, char **argv) {
   dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
   dut->tx_ready_i = 1;
   dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
+  dut->txts_type_i = 0;
   dut->phc_ns_i = 0;
   for (int i = 0; i < 8; i++) tick();
   dut->rst_n = 1;
@@ -708,59 +720,56 @@ int main(int argc, char **argv) {
              fld48(u, 48) * 1000000000ull + fld32(u, 54), P5_TS);
     }
   }
+  size_t p4_rfu_idx = 0;
+  bool p4_rfu_seen = false;
   {
-    // the documented residual, exercised rather than described: the two
-    // 16-bit sequence counters are independent, so a peer request can
-    // carry the sequenceId our own outstanding request is using. Our
-    // boot request is sequence 0, so this one is too, and both claims
-    // then hold the same tag. The stamps are credited in the order
-    // prog_tx_ts tests the claims, timer first, not to the frames that
-    // earned them: two stamps arrive and each claim takes one, so
-    // nothing is lost and nothing is doubled, but if the response
-    // crossed the MAC boundary first then the two values are swapped.
-    // msgType beside the sequenceId would close it (parent #214)
+    // Both ends start their independent request counters at zero, so the
+    // peer's request and our outstanding request have the SAME sequenceId.
+    // Return the response's stamp first: sequenceId-only credit gives it
+    // to our request, while {messageType, sequenceId} must build this
+    // response's own Follow_Up and leave our request claim intact (#28).
     size_t mark = txf.size();
     Frame q = ptp(0x2, 0, 0, 0x0000, 20, PEER_CID);
     q.u64(0); q.u16(0); q.ts(0);
     q.b.resize(68);
     send_frame(q.b, 906000);
     run(4000);
+    bool p4_seen = false;
     for (size_t i = mark; i < txf.size(); i++)
-      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) p4_idx = i;
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) {
+        p4_idx = i;
+        p4_seen = true;
+      }
     expect("equal sequences: the request is still answered",
-           p4_idx > mark - 1 ? 1 : 0, 1);
-    expect("equal sequences: its response carries our own sequence",
-           fld16(txf[p4_idx], 44), 0);
-  }
-  // our request's own stamp: its sequenceId is 0, which the response
-  // above also claims, so the timer claim is tested first and takes it.
-  // Phase 2's published delay is the oracle, 600 ns if it reached S_T1
-  // and 500,600 ns if a response took it
-  txts_idx(our_req_idx, T1);
-  {
-    // the equal-sequence response's stamp, arriving with the timer claim
-    // now cleared: its claim is the only one left holding sequence 0, so
-    // it takes this one and builds its Resp_FU.
-    //
-    // The gap is load-bearing and is not this round's defect: the engine
-    // keeps ONE egress timestamp and samples it at dispatch, so two
-    // stamps closer together than the dispatch latency lose the first
-    // value whatever the claims say (#31). Without the run() below, our
-    // request's t1 takes this stamp's value and phase 2 publishes 65,600
-    // instead of 600, which is #31 reproducing itself inside this test
-    run(2000);
-    size_t mark = txf.size();
-    txts_idx(p4_idx, P4_TS);
+           p4_seen ? 1 : 0, 1);
+    if (p4_seen)
+      expect("equal sequences: its response carries our own sequence",
+             fld16(txf[p4_idx], 44), 0);
+    if (p4_seen) txts_idx(p4_idx, P4_TS);
     run(8000);
     std::vector<uint8_t> u;
     for (size_t i = mark; i < txf.size(); i++)
-      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0xA) u = txf[i];
-    expect("equal sequences: the second stamp builds the Resp_FU",
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0xA) {
+        u = txf[i];
+        p4_rfu_idx = i;
+        p4_rfu_seen = true;
+      }
+    expect("equal sequences: response-first stamp builds the Resp_FU",
            u.empty() ? 0 : 1, 1);
-    if (!u.empty())
-      expect("equal sequences: it carries the second stamp",
+    if (!u.empty()) {
+      expect("equal sequences: Resp_FU carries the response stamp",
              fld48(u, 48) * 1000000000ull + fld32(u, 54), P4_TS);
+    }
   }
+  // A Resp_FU itself leaves no claim, but the boundary still stamps it.
+  // Its sequence is also zero. That unclaimed type must not consume the
+  // still-outstanding request claim. Phase 2's 600 ns result below is the
+  // end-to-end oracle: sequence-only credit moves it far from 600 ns.
+  if (p4_rfu_seen) {
+    txts_idx(p4_rfu_idx, T1 + 110000);
+    run(2000);                         // separate this from open #31
+  }
+  txts_idx(our_req_idx, T1);
   run(2000);
   tx_seen = txf.size();          // this phase's frames are accounted for
 
@@ -1065,16 +1074,77 @@ int main(int argc, char **argv) {
     expect("sync reserved body zero", reserved, 0);
     sseq = fld16(sy, 44);
   }
-  run_svc(20000);                                // let its FU emerge
-  std::vector<uint8_t> fu = wait_tx(0x8, 800000);
+  // wait_tx returns on the frame's EOF, one tick before the automatic
+  // boundary-stamp helper would return its stamp. Hold this Sync claim,
+  // then make a peer request with the SAME sequenceId. The response's
+  // stamp arrives first and must build a Resp_FU, not a Sync Follow_Up.
+  expect("sync collision: stamp is pending", auto_pend, (int)sidx);
+  auto_txts = false;
+  auto_pend = -1;
+  size_t collision_mark = txf.size();
+  Frame same = ptp(0x2, sseq, 0, 0x0000, 20, PEER_CID);
+  same.u64(0); same.u16(0); same.ts(0);
+  same.b.resize(68);
+  send_frame(same.b, phc() + 1000);
+  run(8000);
+  size_t collision_resp_idx = 0;
+  bool collision_resp_seen = false;
+  for (size_t i = collision_mark; i < txf.size(); i++)
+    if (type_of(txf[i]) == 0x3) {
+      collision_resp_idx = i;
+      collision_resp_seen = true;
+    }
+  expect("sync collision: equal-sequence request answered",
+         collision_resp_seen ? 1 : 0, 1);
+
+  const uint64_t RESP_COLLISION_TS = 7110000ull;
+  size_t response_stamp_mark = txf.size();
+  if (collision_resp_seen)
+    txts_idx(collision_resp_idx, RESP_COLLISION_TS);
+  run(8000);
+  size_t collision_rfu_idx = 0;
+  bool collision_rfu_seen = false;
+  int premature_sync_fu = 0;
+  for (size_t i = response_stamp_mark; i < txf.size(); i++) {
+    if (type_of(txf[i]) == 0xA) {
+      collision_rfu_idx = i;
+      collision_rfu_seen = true;
+      expect("sync collision: Resp_FU carries response stamp",
+             fld48(txf[i], 48) * 1000000000ull + fld32(txf[i], 54),
+             RESP_COLLISION_TS);
+    }
+    if (type_of(txf[i]) == 0x8) premature_sync_fu++;
+  }
+  expect("sync collision: response stamp builds Resp_FU",
+         collision_rfu_seen ? 1 : 0, 1);
+  expect("sync collision: response stamp does not build Sync FU",
+         premature_sync_fu, 0);
+
+  // The emitted Resp_FU is stamped too, but leaves no claim. Its type-A
+  // stamp shares the sequenceId and must not consume the pending Sync.
+  if (collision_rfu_seen) {
+    txts_idx(collision_rfu_idx, RESP_COLLISION_TS + 1000);
+    run(2000);                                // avoid open buffering #31
+  }
+  const uint64_t SYNC_COLLISION_TS = 7220000ull;
+  size_t sync_stamp_mark = txf.size();
+  if (!sy.empty()) txts_idx(sidx, SYNC_COLLISION_TS);
+  run(8000);
+  std::vector<uint8_t> fu;
+  for (size_t i = sync_stamp_mark; i < txf.size(); i++)
+    if (type_of(txf[i]) == 0x8) fu = txf[i];
+  expect("sync collision: own stamp still builds Sync FU",
+         fu.empty() ? 0 : 1, 1);
   if (!fu.empty()) {
     check_common("syncfu", fu, 0x8, 0x0008, 76, 0xFD);
     expect("syncfu seq", fld16(fu, 44), sseq);
     expect("syncfu origin", fld48(fu, 48) * 1000000000ull + fld32(fu, 54),
-           txns[sidx]);
+           SYNC_COLLISION_TS);
     expect("syncfu tlv", fld32(fu, 58), 0x0003001C);
     expect("syncfu org", fld48(fu, 62), 0x0080C2000001ull);
   }
+  auto_txts = true;
+  pd_seen = txf.size();
 
   // ---- 7b: a Pdelay_Resp_Follow_Up pairs with one Pdelay_Resp only ------
   // 802.1AS-2011 11.2.15.3 (Figure 11-8): a Pdelay_Resp is taken only

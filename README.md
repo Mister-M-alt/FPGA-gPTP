@@ -68,59 +68,37 @@ handlers now pair per 802.1AS-2011 11.2.15.3, a Pdelay_Resp taken only
 for the outstanding request's sequenceId and never again once its
 exchange has completed, a Follow_Up only behind that Pdelay_Resp and
 from its sender (+32 ROM words, zero LUT). Nothing of #6 through #12
-remains open, nor do #23 and #26, and #27 closes here. An egress
-timestamp goes to a claim named by the sequenceId the stamp carries
-rather than to whichever transmission a single shared cell last named,
-which closes the case that was a certainty, a peer request landing
-anywhere in our outstanding interval, but not #28 itself: sixteen bits
-of sequenceId is not an identity, and three legs send while leaving no
-claim. And a refusal is now counted once per refused frame rather than
-once per clock edge, so a one-byte runt in the cycle a dropped frame
-finalizes is no longer lost. The donor issues open at this commit are
-all review findings on pre-existing behaviour: #28 (the remainder above,
-closable once the parent exports msgType beside the sequenceId), #31
-(the engine holds ONE egress timestamp and samples it at dispatch, so a
-second stamp arriving first destroys it), #30 (the
-requestingPortIdentity gate is unpinned and omits Figure 11-8's
-portNumber term) and #33 (the bench pins `tx_ready_i` high, so the TX
-backpressure path is unobserved); the issue tracker is the authority,
-not this paragraph. Measured at this commit (`main` e74485a plus the
-counted-refusal arm): ucpu 768 / parser 179 / engine 352 checks,
-seventy-five planted mutations red in the engine suite, lint clean; the
-ROM is 941 of 1,024 words, and the timer program is at 191 of its 192
-in the shipping image and 192 of 192 in the seeded one; the engine
-synthesizes OOC at 3,117 LUT / 2,390 FF / WNS +1.898 ns
-(`docs/RESOURCE_VALIDATION.md`).
+remains open, nor do #23, #26, #27 or #28. Every returning egress
+timestamp now carries `{messageType, sequenceId}` from the parent's MAC
+boundary and is credited only to the claim carrying that exact pair.
+Equal counters at two identical endpoints no longer alias Pdelay and
+Sync frames, and stamped Announce/Follow_Up frames that deliberately
+leave no claim cannot clear another transmitter's claim. A refusal is
+also counted once per refused frame, so a one-byte runt in the cycle a
+dropped frame finalizes is no longer lost.
 
-**Parent status:** the splice is landed (parent #114, 2026-08-19,
-option-gated) and the pin advances by pin-bearing commits on the
-parent's `dev`, at `5c330fc8` (the #16 merge): the pin trails the donor
-by design, and the parent tickets below move it forward. The parent's
-`tb/verilator/tsn_fuzz` field campaign (`make ptp`, `fuzz_ptp.py`) grades
-the whole slice in both directions -- every spec-constrained field of all
-six of the plane's own TX message types (Pdelay_Req, Pdelay_Resp,
-Pdelay_Resp_Follow_Up, Announce, Sync and Follow_Up) against the tsn-gen
-8021as models, and the parser's drop and ignore arms under per-field
-illegal probes -- and found #6 through #10. Each donor fix retires its
-own allowance at the repin, one parent ticket per donor issue, by one of
-two mechanisms. A tracked gap marker covers #6, #9, #10, #7 and #8: the
-ones still standing on `dev` `4ec73a15` are
-`gaps={"origin_timestamp": 10}` (`fuzz_ptp.py:489`, #137 for #10), the
-issue-8 arm (`:675`, #141 for #8) and the issue-7 arms (`:747`, plus
-`:719` reached from its two issue-7 `reject_probe` call sites `:736`
-and `:739`, #136 for #7), while #138 (#6) is done at the `dd0f56e3` pin
-and #139 (#9) at the `5c330fc8` pin (PR #208, dev `4ec73a15`), both
-markers already gone. For #11 and #12 there is no allowance to delete:
-what moves is the campaign's truncation oracle, which cuts at this
-parser's donor minima (`:573-582`, in frame bytes: Sync 58, Follow_Up
-58, Announce 78, Pdelay_Req 48), so #140 (#11) carries the Follow_Up cut
-to the legal 90 bytes and #142 (#12) the Pdelay_Req cut to 68. #137,
-#140, #142, #136 and #141 are pending. Parent PR #135
-(default on at VERSION
-0x0002_0055) was closed unmerged: the default flip, the CSR compatibility
-transition and the rootfs service retirement stay with parent issue #116,
-reference-plane latency characterization and the two-board wire campaign
-with parent issue #117. The parent's page of record is its
+The donor issues open at this commit are review findings on pre-existing
+behaviour: #31 (the engine holds one egress timestamp and samples it at
+dispatch, so a second stamp arriving first destroys it), #30 (the
+requestingPortIdentity gate omits Figure 11-8's portNumber term), #33
+(the bench pins `tx_ready_i` high), and #35 (a mid-frame `rx_err_i` is
+ignored). The issue tracker remains the authority. Verification here is
+ucpu 768 / parser 179 / engine 358 checks, seventy-seven planted engine
+mutations red, and lint clean. The ROM is 940 of 1,024 words—one fewer
+than `main` because the complete tag is packed directly into the event
+descriptor—and the timer program remains 191 of 192 words in the
+shipping image and 192 of 192 in the seeded one. See
+`docs/RESOURCE_VALIDATION.md` for the measurement record.
+
+**Parent status:** the option-gated splice is landed under parent #114,
+and `dev` currently pins donor `c33fb1af`, which contains the completed
+#6 through #12 field campaign. Parent PR #216 already exports the
+boundary messageType beside sequenceId. Reopened parent #214 owns the
+remaining mechanical step after this donor change lands: advance the
+submodule pin, wire `txts_type_i` into the engine, and prove both
+collisions end to end in `gptp_shadow`. Parent #116 owns the default-on
+publication/rootfs transition; #117 still owns physical two-board and
+silicon acceptance. The parent's page of record is
 `docs/design/GPTP_PLANE.md`.
 
 ## Why a µCPU with an ALU
@@ -182,7 +160,10 @@ other build is bit-identical.
   joins the control TX after the min-IFG gasket through its own staggered
   merge (`adp_tx_arbiter`, diagnostics lane 4); `KL_gptp_txstamp` watches
   the true MAC boundary, armed by the lane's sof, and returns {timestamp,
-  sequenceId} on `txts_*` for the engine's pending exchange.
+  messageType, sequenceId} on `txts_*`. The engine packs that complete
+  tag into its event and credits only the exact transmitter claim; an
+  unclaimed Announce or Follow_Up stamp cannot consume another frame's
+  timestamp.
 - PHC: `phc_ns_i` is the live `timestamp_counter` value; the engine's
   adjfine pulse is latched to a level in the shadow and its adjtime passes
   through, both onto the counter's knobs in place of the CSR face's

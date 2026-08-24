@@ -19,8 +19,10 @@
 //
 //                Timestamp points: PHC latched in sys on the synchronized
 //                RX-SFD and TX-SFD toggles; the TX done toggle returns
-//                the egress stamp to the engine (single TX outstanding by
-//                construction — dispatch is gated on the serializer).
+//                the egress stamp and its header tag to the engine. The
+//                MII serializer has one wire frame outstanding; a later
+//                FIFO-queued frame cannot replace the held tag before the
+//                current frame's done handshake crosses back to sys.
 //---------------------------------------------------------------------------//
 `default_nettype none
 
@@ -154,6 +156,8 @@ module bench_arty_top (
   logic [6:0] txf_lvl_w;
   logic       txrd_w;
   logic       tx_sfd_tgl_w, tx_done_tgl_w;
+  logic [15:0] tx_frame_seq_w;
+  logic [3:0]  tx_frame_type_w;
   logic [15:0] txf_cnt_w;
 
   bench_afifo #(.W_P(10), .AW_P(6)) u_txfifo (
@@ -182,23 +186,58 @@ module bench_arty_top (
       .f_rd_o        (txrd_w),
       .sfd_toggle_o  (tx_sfd_tgl_w),
       .done_toggle_o (tx_done_tgl_w),
+      .frame_seq_o   (tx_frame_seq_w),
+      .frame_type_o  (tx_frame_type_w),
       .tx_cnt_o      (txf_cnt_w)
   );
 
-  // TX SFD stamp + done pulse -> egress timestamp return
-  logic txsfd_q1_r, txsfd_q2_r, txsfd_q3_r;
-  logic txdone_q1_r, txdone_q2_r, txdone_q3_r;
+  // TX SFD stamp + bundled tag/done handshake -> egress timestamp return.
+  // The MII-side tag is stable from byte 45 until the next frame's SFD;
+  // synchronize it continuously and sample stage 2 only after the done
+  // toggle has crossed one additional stage.
+  (* ASYNC_REG = "TRUE" *) logic txsfd_q1_r, txsfd_q2_r;
+  (* ASYNC_REG = "TRUE" *) logic txdone_q1_r, txdone_q2_r;
+  (* ASYNC_REG = "TRUE" *) logic [15:0] txseq_q1_r, txseq_q2_r;
+  (* ASYNC_REG = "TRUE" *) logic  [3:0] txtype_q1_r, txtype_q2_r;
+  logic txsfd_q3_r, txdone_q3_r;
   logic [63:0] txts_r;
   logic        txts_v_r;
+  logic [15:0] txts_seq_r;
+  logic  [3:0] txts_type_r;
   always_ff @(posedge clk100_i) begin : txts
-    txsfd_q1_r  <= tx_sfd_tgl_w;
-    txsfd_q2_r  <= txsfd_q1_r;
-    txsfd_q3_r  <= txsfd_q2_r;
-    txdone_q1_r <= tx_done_tgl_w;
-    txdone_q2_r <= txdone_q1_r;
-    txdone_q3_r <= txdone_q2_r;
-    if (txsfd_q2_r != txsfd_q3_r) txts_r <= phc_ns_w;
-    txts_v_r <= (txdone_q2_r != txdone_q3_r);
+    if (!rst_n) begin
+      txsfd_q1_r  <= 1'b0;
+      txsfd_q2_r  <= 1'b0;
+      txsfd_q3_r  <= 1'b0;
+      txdone_q1_r <= 1'b0;
+      txdone_q2_r <= 1'b0;
+      txdone_q3_r <= 1'b0;
+      txseq_q1_r  <= '0;
+      txseq_q2_r  <= '0;
+      txtype_q1_r <= '0;
+      txtype_q2_r <= '0;
+      txts_r      <= '0;
+      txts_v_r    <= 1'b0;
+      txts_seq_r  <= '0;
+      txts_type_r <= '0;
+    end else begin
+      txsfd_q1_r  <= tx_sfd_tgl_w;
+      txsfd_q2_r  <= txsfd_q1_r;
+      txsfd_q3_r  <= txsfd_q2_r;
+      txdone_q1_r <= tx_done_tgl_w;
+      txdone_q2_r <= txdone_q1_r;
+      txdone_q3_r <= txdone_q2_r;
+      txseq_q1_r  <= tx_frame_seq_w;
+      txseq_q2_r  <= txseq_q1_r;
+      txtype_q1_r <= tx_frame_type_w;
+      txtype_q2_r <= txtype_q1_r;
+      if (txsfd_q2_r != txsfd_q3_r) txts_r <= phc_ns_w;
+      txts_v_r <= (txdone_q2_r != txdone_q3_r);
+      if (txdone_q2_r != txdone_q3_r) begin
+        txts_seq_r  <= txseq_q2_r;
+        txts_type_r <= txtype_q2_r;
+      end
+    end
   end
 
   // ------------------------------------------------------------ engine
@@ -225,7 +264,8 @@ module bench_arty_top (
       .tx_ready_i         (txe_rdy_w),
       .txts_valid_i       (txts_v_r),
       .txts_ns_i          (txts_r),
-      .txts_seq_i         (16'd0),
+      .txts_seq_i         (txts_seq_r),
+      .txts_type_i        (txts_type_r),
       .phc_ns_i           (phc_ns_w),
       .phc_addend_we_o    (phc_add_we_w),
       .phc_addend_o       (phc_add_w),
