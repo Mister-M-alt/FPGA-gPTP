@@ -23,23 +23,18 @@ The three rules now run ahead of every write the handler makes:
     same rule.
   * (b) stepsRemoved >= 255: not qualified (9.3.2.5 d): rogue frames are
     extinguished; the mandatory backup to the path trace).
-  * (c) a path trace TLV whose pathSequence contains thisClock: the
-    loop-prevention rule. The parser lands the TLV's true hop count in
-    bank word 12 and the first eight hops in words 16..23; the walk is
-    gated by that count (a shorter trace leaves the previous frame's
-    hops standing in the upper words of the same bank) and capped at
-    the eight the bank holds. Hops beyond the cap are invisible to the
-    walk -- a loop through more than eight hops is caught by (b) only
-    once stepsRemoved reaches 255, the 1588 backstop.
+  * (c) a present path trace TLV whose pathSequence contains thisClock: the
+    loop-prevention rule. The streaming parser checks every declared hop,
+    including those beyond the eight retained public slots, and reports the
+    result beside the true count in bank word 12. A fixed Announce without
+    PathTrace reports count and loop as zero; a present TLV must have the
+    announced grandmaster at its head and N == stepsRemoved+1. The µcode
+    therefore consumes one coherent qualification bit rather than walking a
+    truncated storage window.
 
-The indexed read of (c) is the first consumer of OP_DESC_ADDR: the
-µCPU's state-port base register is loaded from the S_PTIDX cell and
-restored from the always-zero S_ZERO cell before any other state access,
-because the base offsets EVERY read and write until it is cleared and
-nothing clears it at dispatch. (d)'s pathTrace copy for a SlavePort is
-moot on a single-port end station: a slave port transmits no Announce
-(the ANNTX leg is gated on the master role), so the global array has no
-reader here.
+(d)'s pathTrace copy for a SlavePort is moot on a single-port end station: a
+slave port transmits no Announce (the ANNTX leg is gated on the master role),
+so the global array has no reader here.
 
 FPGA-gPTP #8, found by the parent's field campaign: the
 Pdelay_Resp_Follow_Up handler qualified requestingPortIdentity and
@@ -135,11 +130,10 @@ tiebreak is the clockIdentity alone; the 16-bit portNumber (bank w3)
 never joins a compare -- honest for single-port end stations, revisit
 with any multi-port work.
 
-Still deliberately out (the scratch-widen round that follows): the
+At this v4 point still deliberately out (retired by later rounds): the
 multiple-responder cease rule of Milan 4.2.6.2.5, which needs more
-per-interval state than the 32-word scratch has left, and the second
-message bank in the engine that retires the torn-read window the
-announce seq guard narrows.
+per-interval state than the 32-word scratch has left, and a complete
+Announce epoch owner beyond the live parser bank.
 
 --- v5, the servo round ---
 
@@ -276,13 +270,6 @@ S_CEASECNT = 36                          # cadence beats to resume
 # clear one and not the other. ADDING A SECOND WRITER to either gate
 # breaks this: give the guarded cell an init write again, or write it in
 # the new writer's own block.
-S_PTIDX, S_ZERO = 37, 38                 # path-trace walk: the DESC_ADDR
-                                         # pointer cell (written before
-                                         # each read) and the base-restore
-                                         # cell, which nothing ever writes:
-                                         # LUTRAM powers on at zero and the
-                                         # init leg does not need to spend
-                                         # a word on either
 S_TXQ_RESP = 41                          # the second egress-timestamp
                                          # claim. Each claim holds the
                                          # {messageType, sequenceId} its
@@ -311,8 +298,6 @@ S_RSPSEQ, S_RSPSRC = 39, 40              # the armed Pdelay_Resp: its
 
 # ---- 802.1AS-2011 10.3.10.2.1 qualifyAnnounce -----------------------------
 STEPS_MAX_C = 255               # stepsRemoved >= this: not qualified (b)
-PT_CAP_C = 8                    # hops the message bank holds (w16..w23):
-                                # mirrors KL_gptp_rx_parser's cap
 
 # ---- 802.1AS-2011 11.2.15.3 Pdelay_Resp / Resp_Follow_Up pairing ------------
 TXT_TYPE_SHIFT_C = 16           # claim bits [19:16] carry messageType
@@ -704,35 +689,15 @@ def prog_rx_announce(base):
     p.emit("BRS", cnd=BRS_LT, label="steps_ok")
     p.emit("BR", label="out")
     p.label("steps_ok")
-    # (c) the path trace TLV carries thisClock: the loop-prevention rule.
-    #     Bank word 12 is the TLV's true hop count, words 16.. the hops the
-    #     bank holds: the walk is gated by the count (a shorter trace
-    #     leaves the previous frame's hops standing above it) and capped
-    #     at the bank's eight. Each hop is an indexed read through
-    #     OP_DESC_ADDR: the base register loads from the S_PTIDX cell and
-    #     is restored from S_ZERO BEFORE any other state access -- the
-    #     base offsets every RDST/WRST until then and dispatch never
-    #     clears it
-    p.emit("RDST", rd=RV, imm=RG_BANK | 12, fmt=FMT_Q)     # hop count
-    p.emit("CMP", ra=RV, rb=0, fmt=FMT_D, imm=PT_CAP_C + 1)
-    p.emit("BRS", cnd=BRS_LT, label="pt_n")
-    p.emit("MOVE", rd=RV, ra=0, imm=PT_CAP_C)              # capped walk
-    p.label("pt_n")
-    p.emit("RDST", rd=RW, imm=RG_SCR | S_CID, fmt=FMT_Q)
-    p.emit("MOVE", rd=RU, ra=0, imm=0)                     # hop index
-    p.label("pt_loop")
-    p.emit("CMP", ra=RU, rb=RV, fmt=FMT_D)
-    p.emit("BRS", cnd=BRS_LT, label="pt_hop")
-    p.emit("BR", label="qualified")
-    p.label("pt_hop")
-    p.emit("WRST", ra=RU, imm=RG_SCR | S_PTIDX, fmt=FMT_Q)
-    p.emit("DADDR", ra=0, imm=RG_SCR | S_PTIDX)            # base = index
-    p.emit("RDST", rd=RT, imm=RG_BANK | 16, fmt=FMT_Q)     # hop[index]
-    p.emit("DADDR", ra=0, imm=RG_SCR | S_ZERO)             # base = 0
-    p.emit("CMP", ra=RT, rb=RW, fmt=FMT_Q)
-    p.emit("BRS", cnd=BRS_Z, label="out")                  # our hop: loop
-    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_ADD, imm=1)
-    p.emit("BR", label="pt_loop")
+    # (c) for a present TLV, the parser has already checked its framing, head
+    #     and count, and compared EVERY hop (not merely stored w16..w23) with
+    #     thisClock. For an absent TLV both count and loop are zero. Word 12
+    #     bit 8 is the complete loop verdict in either case.
+    p.emit("RDST", rd=RV, imm=RG_BANK | 12, fmt=FMT_Q)
+    p.emit("ALU", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=8)
+    p.emit("CMP", ra=RV, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="qualified")
+    p.emit("BR", label="out")
     p.label("qualified")
     # ---- (d) qualified: the vector, published raw first (bench) -------
     p.emit("RDST", rd=RA, imm=RG_BANK | 8, fmt=FMT_Q)   # their {utc,p1,cq,p2}
@@ -741,22 +706,10 @@ def prog_rx_announce(base):
     p.emit("RDST", rd=RB, imm=RG_BANK | 9, fmt=FMT_Q)   # their gm identity
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_ADD, imm=1)  # steps+1
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_AND, imm=0xFFFF)
-    # the snapshot closes by proving the bank still belongs to THIS
-    # event: a delayed dispatch behind a busy handler would otherwise
-    # read the NEXT frame and hand its source a parent-update take
-    # (the wrongful-takeover race). The event word carries the seq;
-    # a mismatch drops the announce -- the 1 Hz cadence resends. The
-    # ~6-tick torn window between the bank's src and seq writes stands
-    # until the second message bank lands in the engine.
-    p.emit("RDST", rd=RT, imm=RG_BANK | 0, fmt=FMT_Q)
-    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
-    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=0xFFFF)
-    p.emit("ALU", rd=RU, ra=REV, rb=0, cnd=ALU_SHR, imm=16)
-    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=0xFFFF)
-    p.emit("CMP", ra=RT, rb=RU, fmt=FMT_W)
-    p.emit("BRS", cnd=BRS_Z, label="mine")
-    p.emit("BR", label="out")
-    p.label("mine")
+    # Source, vector, GM, steps, count and every retained hop are frozen in
+    # the single Announce context from event enqueue through handler END.
+    # Chasing Announces are explicitly dropped/counted while it is owned, so
+    # neither parser-bank reuse nor an ABA sequence collision can splice it.
     p.emit("BR", label=LB["BTCA"])
     p.label("out")
     p.emit("END")
@@ -1190,6 +1143,15 @@ def prog_btca(base):
     p.emit("WRST", ra=RU, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
     p.emit("WRST", ra=RB, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
     p.emit("WRST", ra=RD_, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
+    # Stage this taken Announce's frozen PathTrace into the raw publish bank.
+    # Address 7 atomically copies the count/tail-only publication snapshot and
+    # clears inactive tail words. Handler reads independently use the compact
+    # serial ann_ctx_r port; spending fourteen ROM words to copy the same path
+    # through that port would overflow this deliberately full µcode image.
+    # `they_win` is also reachable from a later worse Announce, so that later
+    # frame never executes this `take` block and cannot replace the selected
+    # path. The wrapper samples the raw bank only at the final COMMIT.
+    p.emit("WRST", ra=0, imm=RG_PUB | 7, fmt=FMT_Q)
     p.label("ours")
     # the contest: {mypv, our cid, steps 0} vs the (updated) best
     p.emit("RDST", rd=RA, imm=RG_SCR | S_MYPV, fmt=FMT_Q)
@@ -1204,6 +1166,10 @@ def prog_btca(base):
     p.emit("CMP", ra=RU, rb=0, fmt=FMT_W, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="we_win")     # stored steps 0 = us
     p.label("they_win")
+    # A zero write resolves the path-stage guard without changing the raw
+    # selected path; a worse current Announce may reach here without `take`,
+    # in which case the prior best path remains in command.
+    p.emit("WRST", ra=0, imm=RG_PUB | 6, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)       # parent
     p.emit("RDST", rd=RT, imm=RG_PUB | 0, fmt=FMT_Q)
@@ -1261,6 +1227,9 @@ def prog_become(base):
     p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
+    # A nonzero write is the self-master form of the same publication
+    # transaction: one GM entry and an erased tail.
+    p.emit("WRST", ra=RT, imm=RG_PUB | 6, fmt=FMT_Q)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now
     p.emit("MOVE", rd=RT, ra=0, imm=2)
     p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)  # announce now

@@ -277,6 +277,8 @@ module bench_arty_top (
       .pub_pdelay_ns_o    (pub_pd_w),
       .pub_offset_o       (pub_off_w),
       .pub_annq_o         (pub_annq_w),
+      .pub_path_count_o   (),
+      .pub_path_o         (),
       .pub_commit_o       (),
       .eff_nvm_stb_o      (),
       .eff_nvm_mark_o     (),

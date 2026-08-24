@@ -5,7 +5,22 @@ Builds Announce (with a 2-hop path trace TLV), Sync, Follow_Up (with the
 information TLV) and Pdelay_Resp frames byte-by-byte in C++ — an
 independent re-implementation of the 802.1AS-2011 wire layout — and
 checks every message-bank word the parser writes, plus the end-of-frame
-event and its sequenceId. Also proves the drop arms: wrong EtherType,
+event and its sequenceId. Announce coverage binds Table 10-7, 10.5.1 and
+10.5.3.3. A fixed 64-octet Announce without PathTrace dispatches with word 12
+count/loop zero as 10.3.10.2.1(d) and 10.3.13.2.1(f) require. The bounded
+generic TLV walker follows IEEE 1588-2008 5.3.8/14.1: it accepts one or two
+complete unknown TLVs (including a zero-length value and a structurally valid
+type-3 organization extension with an unknown OUI/subtype), skips unknown TLVs
+before and after a valid PathTrace, and accepts a maximum 1,500-octet declared
+message. It refuses a trailing 1/2/3-byte partial header, an odd value length,
+16-bit-wrap bait, a value crossing messageLength, physical truncation, a
+malformed TLV after a valid PathTrace, and duplicate identical, conflicting or
+self-containing PathTrace TLVs. A single PathTrace must have a complete
+nonzero 8N-byte value, N equal to stepsRemoved + 1, and pathSequence[0] equal
+to grandmasterIdentity. TLV-shaped physical padding remains an accepted
+count-zero message and cannot supply identities. A nine-hop control proves the
+full count and loop bit include the ninth identity while only the first eight
+identities occupy bank words 16..23. Also proves the drop arms: wrong EtherType,
 transportSpecific ≠ 1, PTP version ≠ 2, a foreign domainNumber
 (802.1AS-2011 8.1 and IEEE 1588-2008 9.5.1: a Sync in domain 5, a
 better-priority Announce in domain 1, a Pdelay_Resp in domain 255, and
@@ -26,8 +41,8 @@ TLV arm with no event, no word-11 write and one drop; the complete
 Follow_Up still dispatches with its word 11 after the arms, and one
 with a second TLV appended after the information TLV (messageLength 88)
 is accepted, 11.4.1 having a receiver skip a TLV it does not parse;
-the messageLength bound for every other type the per-type table names
-(Sync 44, Announce 64, Pdelay_Resp, Pdelay_Resp_Follow_Up and
+the messageLength bound for every remaining type the per-type table names
+(Sync 44, Pdelay_Resp, Pdelay_Resp_Follow_Up and
 Pdelay_Req 54, Signaling 34): a physically complete frame declaring
 one octet fewer
 is refused at the messageLength byte with no event, no bank write and
@@ -59,8 +74,14 @@ while a good frame arriving in the cycle a dropped one finalizes still
 dispatches with its event and a clean bank word, that a good frame whose
 own finalize cycle IS a successor's sof still dispatches, both of them,
 each with its own word 0, and that sof and eof raised with rx_valid_i
-LOW is not a frame at all. 179 checks,
-mutation-proven: the domain arm removed fails 21, the compare narrowed
+LOW is not a frame at all. 268 checks. Four current safe mutations are
+independently red: stopping after the first nonzero TLV value reaches 255 PASS
+/ 13 FAIL; changing the exact-fit containment comparison from `>` to `>=`
+reaches 234 / 34; and removing singular-PathTrace rejection reaches 259 / 9.
+The fourth mutation removes the engine's inactive-tail clearing and is recorded
+in the engine bench. Every production form was restored before the exact-head
+bar. The predecessor's 179-check mutation record remains reproducible: the
+domain arm removed fails 21, the compare narrowed
 to its low nibble fails 7 (the zero-low-nibble values 0x10 and 0x80
 catch it), the end-of-frame gate without its bad_r term, a drop that
 still dispatches, fails 59 (the #15 round's 5: retiring the per-type

@@ -74,16 +74,16 @@
 //         (one re-base carrying the surviving integrator)
 // 16..17  Sync/Follow_Up pairing by sequenceId AND source (11.4.4)
 // 18,18b  BTCA tie-breaks: steps then source switch the parent with no
-//         sync-ok flicker; a delayed dispatch reads the frame its event
-//         names (the second bank), so a worse announce rejects cleanly
+//         sync-ok flicker; a delayed dispatch reads the complete frozen epoch
+//         its event names, so a worse announce rejects cleanly
 // 19..21  parent degradation yields mastership immediately (10.3.5);
 //         the Sync body stays zero while its Follow_Up carries the live
 //         egress stamp; an asCapable fall stops consumption and steering
 // 21b,21c become resets the best record (no ghost GM after a quiet
 //         ride to mastership); the priority vector outranks the
 //         identity in the compare order
-// 21d     the delayed-dispatch shape with a BETTER announce adopts:
-//         the torn-read window is retired by the second bank
+// 21d     the delayed-dispatch shape with a BETTER announce adopts from its
+//         frozen context
 // 22..26  the pdelay verdict tail: the Milan floor, the threshold,
 //         two-exchange recovery, the fourth lost response, the stale
 //         ratio window
@@ -216,6 +216,13 @@ static uint8_t type_of(const std::vector<uint8_t> &f) {
 }
 
 static uint64_t cyc = 0;
+static uint64_t commits_seen = 0;
+struct PubSnap {
+  uint64_t gm, parent;
+  uint8_t count;
+  uint64_t tail[7];
+};
+static std::vector<PubSnap> commit_snaps;
 
 // ---- TX backpressure ------------------------------------------------------
 static std::vector<std::vector<uint8_t>> txf;
@@ -251,6 +258,17 @@ static void tick() {
   const bool tx_sof = dut->tx_sof_o;
   const bool tx_eof = dut->tx_eof_o;
   dut->clk_i = 1; dut->eval();
+  if (dut->pub_commit_o) {
+    commits_seen++;
+    PubSnap s{};
+    s.gm = dut->pub_gm_id_o;
+    s.parent = dut->pub_parent_id_o;
+    s.count = dut->pub_path_count_o;
+    for (unsigned k = 0; k < 7; k++)
+      s.tail[k] = (uint64_t)dut->pub_path_o[2 * k]
+                | ((uint64_t)dut->pub_path_o[2 * k + 1] << 32);
+    commit_snaps.push_back(s);
+  }
   if (dut->phc_addend_we_o) {
     phc_adj = (int32_t)dut->phc_addend_o;
     adj_seen.push_back(dut->phc_addend_o);
@@ -504,12 +522,22 @@ static void sync_pair(uint16_t seq, uint64_t local_rx, uint64_t origin,
 // an announce carrying {p1, gmid, steps} from `src`
 static void announce(uint16_t seq, uint8_t p1, uint64_t gmid,
                      uint16_t steps, uint64_t src) {
-  Frame a = ptp(0xB, seq, 0, 0x0008, 30, src);
+  // 802.1AS-2011 10.5.3.3.4: N=stepsRemoved+1. These BTCA helpers use a
+  // canonical path headed by GM and ending at the announcing source.
+  std::vector<uint64_t> path;
+  path.push_back(gmid);
+  for (uint16_t i = 1; i < steps; i++)
+    path.push_back(0x00A000FFFE000000ull + i);
+  if (steps != 0) path.push_back(src);
+  const uint16_t tlv = (uint16_t)(4 + 8 * path.size());
+  Frame a = ptp(0xB, seq, 0, 0x0008, (uint16_t)(30 + tlv), src);
   for (int i = 0; i < 10; i++) a.u8(0);
   a.u16(0xFFC4); a.u8(0);
   a.u8(p1); a.u32(OUR_CQ); a.u8(248);
   a.u64(gmid);
   a.u16(steps); a.u8(0xA0);
+  a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
+  for (uint64_t hop : path) a.u64(hop);
   send_frame(a.b, 5000000);
   run(6000);
 }
@@ -548,6 +576,13 @@ static uint32_t fld32(const std::vector<uint8_t> &f, size_t o) {
 }
 static uint16_t fld16(const std::vector<uint8_t> &f, size_t o) {
   return (uint16_t)((f[o] << 8) | f[o + 1]);
+}
+
+//! Verilator exposes the 7x64 flattened publication as little-endian
+//! 32-bit words. Keep this oracle outside the RTL's indexing expression.
+static uint64_t pub_path_tail(unsigned slot) {
+  return (uint64_t)dut->pub_path_o[2 * slot]
+       | ((uint64_t)dut->pub_path_o[2 * slot + 1] << 32);
 }
 
 static void check_common(const char *tag, const std::vector<uint8_t> &f,
@@ -589,6 +624,24 @@ int main(int argc, char **argv) {
   dut->phc_ns_i = 0;
   for (int i = 0; i < 8; i++) tick();
   dut->rst_n = 1;
+
+  // Before the ROM init leg has written S_CID, no complete all-hop loop
+  // comparison is possible. A first-event over-cap Announce with our identity
+  // only beyond the retained public window must therefore be refused, not
+  // queued in hope that the mirror appears before dispatch.
+  {
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    const size_t c0 = commit_snaps.size();
+    std::vector<uint64_t> path = {0x00C001FFFE000001ull};
+    for (unsigned i = 1; i < 8; i++)
+      path.push_back(0x00C0010000000000ull + i);
+    path.push_back(OUR_CID);
+    send_announce(0xC001, 1, path[0], 8, PEER_CID, path, 1000);
+    expect("pre-init deep Announce: no commit", commit_snaps.size(), c0);
+    expect("pre-init deep Announce: parser refusal", dut->dbg_rx_drop_o,
+           (uint16_t)(d0 + 1));
+    expect("pre-init deep Announce: GM stays empty", dut->pub_gm_id_o, 0);
+  }
 
   // ---- 1: our Pdelay_Req; asCapable must start low ----------------------
   std::vector<uint8_t> req = wait_tx(0x2, 3200000);
@@ -1075,9 +1128,15 @@ int main(int argc, char **argv) {
   // ---- 5: announce receipt timeout -> become master ---------------------
   expect("became master",
          wait_flags(FL_AMGM, FL_AMGM, 12000000ull), 1);
+  run(200);  // raw words move before COMMIT; grade the complete transaction
   expect("master flags", dut->pub_flags_o & 7,
          FL_PRESENT | FL_AMGM | FL_ASCAP);
   expect("gm is us", dut->pub_gm_id_o, OUR_CID);
+  expect("self path has one entry", dut->pub_path_count_o, 1);
+  for (unsigned k = 0; k < 7; k++) {
+    char n[64]; snprintf(n, sizeof(n), "self path tail %u is zero", k);
+    expect(n, pub_path_tail(k), 0);
+  }
 
   // ---- 6: our Announce ---------------------------------------------------
   tx_seen = txf.size();
@@ -1291,12 +1350,13 @@ int main(int argc, char **argv) {
 
   // ---- 8: worse announce -> stay master ---------------------------------
   {
-    Frame f = ptp(0xB, 9, 0, 0x0008, 30);
+    Frame f = ptp(0xB, 9, 0, 0x0008, 42);
     for (int i = 0; i < 10; i++) f.u8(0);
     f.u16(0xFFC4); f.u8(0);
     f.u8(250); f.u32(OUR_CQ); f.u8(248);
     f.u64(0xAABBCCFFFE010203ull);
     f.u16(0); f.u8(0xA0);
+    f.u16(0x0008); f.u16(8); f.u64(0xAABBCCFFFE010203ull);
     send_frame(f.b, 5000000);
     run_svc(6000);
   }
@@ -1369,7 +1429,7 @@ int main(int argc, char **argv) {
       expect(n, dut->pub_flags_o, flags0);
       snprintf(n, 96, "%s: raw vector never published", tag);
       expect(n, dut->pub_annq_o, annq0);
-      snprintf(n, 96, "%s: not a parser drop", tag);
+      snprintf(n, 96, "%s: parser-drop policy", tag);
       expect(n, dut->dbg_rx_drop_o, drops0);
     };
     // an adopt-control: a priority1-1 announce that MUST be adopted, then
@@ -1379,6 +1439,7 @@ int main(int argc, char **argv) {
                              uint16_t steps, uint64_t src,
                              const std::vector<uint64_t> &path, uint64_t rx) {
       char n[96];
+      const uint16_t drops0 = dut->dbg_rx_drop_o;
       send_announce(seq, 1, gm, steps, src, path, rx);
       snprintf(n, 96, "%s: adopted", tag);
       expect(n, dut->pub_gm_id_o, gm);
@@ -1386,26 +1447,41 @@ int main(int argc, char **argv) {
       expect(n, dut->pub_parent_id_o, src);
       snprintf(n, 96, "%s: no longer master", tag);
       expect(n, dut->pub_flags_o & FL_AMGM, 0);
+      const unsigned served = path.size() > 8 ? 8 : path.size();
+      snprintf(n, 96, "%s: raw path count", tag);
+      expect(n, dut->pub_path_count_o, served);
+      for (unsigned k = 0; k < 7; k++) {
+        const uint64_t want = (k + 1 < served) ? path[k + 1] : 0;
+        snprintf(n, 96, "%s: raw path tail %u", tag, k + 1);
+        expect(n, pub_path_tail(k), want);
+      }
+      snprintf(n, 96, "%s: parser accepts", tag);
+      expect(n, dut->dbg_rx_drop_o, drops0);
       send_announce((uint16_t)(seq + 1), 250, gm, steps, src, path,
                     rx + 100000);
       snprintf(n, 96, "%s: degraded parent yields", tag);
       expect(n, dut->pub_flags_o & 3, FL_PRESENT | FL_AMGM);
       snprintf(n, 96, "%s: gm is us again", tag);
       expect(n, dut->pub_gm_id_o, OUR_CID);
+      snprintf(n, 96, "%s: degraded frame parser accepts", tag);
+      expect(n, dut->dbg_rx_drop_o, drops0);
     };
     // 8c: (a) sent by this time-aware system: our own clockIdentity as
     // the source, a foreign MAC (a reflected or forged frame)
     refuse_probe("own-source announce", 12, 0x0000000000002222ull, 0,
-                 OUR_CID, {}, 5600000);
+                 OUR_CID, {0x0000000000002222ull}, 5600000);
     // 8d: (b) stepsRemoved 255 (IEEE 1588-2008 9.3.2.5 d)
     refuse_probe("stepsRemoved-255 announce", 13, 0x0000000000002222ull, 255,
                  PEER2, {}, 5700000);
-    // 8g: (c) beyond the cap: twelve hops, ours the fourth; the count
-    // reports twelve, the bank holds eight, the walk must still see it
+    // 8g: (c) the FIRST nonzero incoming PathTrace after reset, beyond the
+    // cap: twelve hops, ours the fourth. The parser publishes deferred count
+    // word 12 on the event edge; an enqueue snapshot without write-through
+    // sees reset-stale zero and wrongly admits this frame. The true count
+    // reports twelve, the bank holds eight, and the walk must still see us.
     {
       std::vector<uint64_t> path;
       for (int i = 0; i < 12; i++) path.push_back(0x6000 + i);
-      path[3] = OUR_CID;
+      path[9] = OUR_CID;
       refuse_probe("deep-trace loop announce", 16, 0x0000000000006000ull, 11,
                    PEER2, path, 5800000);
     }
@@ -1422,7 +1498,7 @@ int main(int argc, char **argv) {
     // (the bridge's source identity, so (a) does not fire; pathSequence[0]
     // is us, the bridge behind it). A walk reading the next bank word
     // would miss it
-    refuse_probe("first-hop loop announce", 19, 0x0000000000007777ull, 1,
+    refuse_probe("first-hop loop announce", 19, OUR_CID, 1,
                  PEER2, {OUR_CID, 0x0000000000007777ull}, 6000000);
     // 8j: (c) a single-hop trace that is us, the grandmaster field ours too
     refuse_probe("single-hop loop announce", 20, OUR_CID, 0, PEER2,
@@ -1435,12 +1511,15 @@ int main(int argc, char **argv) {
     // 8m: (b) above 255: 0x0100, which a byte-wide compare would admit
     refuse_probe("stepsRemoved-0x0100 announce", 21, 0x0000000000002222ull,
                  0x0100, PEER2, {}, 6300000);
-    // 8h: the boundary control ADOPTS: stepsRemoved 254, a one-hop path
-    // trace without us, landing in the bank whose word 17 still holds
-    // our identity from 8e: a walk not gated by the hop count, or one
-    // hop past it, would refuse it
+    // 8h: the largest PathTrace that fits the declared untagged Ethernet
+    // payload (messageLength 1500) remains valid. Publication clamps to
+    // eight, but qualification has examined all 179 identities.
     const uint64_t GMQ = 0x00D1D1FFFE000004ull, SRCQ = 0x00D1D1FFFE000005ull;
-    adopt_control("boundary-clean announce", 17, GMQ, 254, SRCQ, {GMQ},
+    std::vector<uint64_t> max_path = {GMQ};
+    for (unsigned i = 1; i < 178; i++)
+      max_path.push_back(0x00D1000000000000ull + i);
+    max_path.push_back(SRCQ);
+    adopt_control("boundary-clean announce", 17, GMQ, 178, SRCQ, max_path,
                   6400000);
     // 8m: (b) the field's maximum
     refuse_probe("stepsRemoved-0xFFFF announce", 22, 0x0000000000002222ull,
@@ -1450,10 +1529,19 @@ int main(int argc, char **argv) {
     // ours in ONE 32-bit half only (8k: the source in the high half, the
     // hop in the low half; 8l: the other way round): a compare narrowed
     // to either half would refuse a legitimate master
-    adopt_control("half-identity control A", 23, 0x00D2D2FFFE000006ull, 0,
-                  OUR_CID ^ (1ull << 40), {OUR_CID ^ 1ull}, 6700000);
-    adopt_control("half-identity control B", 25, 0x00D3D3FFFE000007ull, 0,
-                  OUR_CID ^ 1ull, {OUR_CID ^ (1ull << 40)}, 6900000);
+    adopt_control("half-identity control A", 23, 0x00D2D2FFFE000006ull, 1,
+                  OUR_CID ^ (1ull << 40),
+                  {0x00D2D2FFFE000006ull, OUR_CID ^ 1ull}, 6700000);
+    adopt_control("half-identity control B", 25, 0x00D3D3FFFE000007ull, 1,
+                  OUR_CID ^ 1ull,
+                  {0x00D3D3FFFE000007ull, OUR_CID ^ (1ull << 40)}, 6900000);
+    // A competing fixed Announce without PathTrace is otherwise qualified.
+    // The selected donor ABI must publish the separately exported GM with an
+    // honest raw path count zero and zero every tail; it must not fabricate
+    // `[GM]` or retain the preceding two-hop control.
+    adopt_control("TLV-less competition control", 27,
+                  0x00D4D4FFFE000008ull, 0,
+                  0x00D4D4FFFE000009ull, {}, 7100000);
   }
 
   // ---- 9: better announce -> adopt, sync stops --------------------------
@@ -1466,19 +1554,413 @@ int main(int argc, char **argv) {
     run(2000);
   }
   const uint64_t GMID = 0x00AACCFFFE010203ull;
-  {
-    Frame f = ptp(0xB, 10, 0, 0x0008, 30);
-    for (int i = 0; i < 10; i++) f.u8(0);
-    f.u16(0xFFC4); f.u8(0);
-    f.u8(100); f.u32(OUR_CQ); f.u8(248);
-    f.u64(GMID);
-    f.u16(0); f.u8(0xA0);
-    send_frame(f.b, 6000000);
-    run_svc(6000);
-  }
+  const uint64_t PATH_A1 = 0x001122FFFE000011ull;
+  const uint64_t PATH_A2 = 0x001122FFFE000022ull;
+  const std::vector<uint64_t> PATH_A = {GMID, PATH_A1, PATH_A2, PEER_CID};
+  send_announce(10, 100, GMID, 3, PEER_CID, PATH_A, 6000000);
   expect("adopted", dut->pub_flags_o & 3, FL_PRESENT);
   expect("adopt keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
   expect("gm is theirs", dut->pub_gm_id_o, GMID);
+  expect("adopt publishes complete path count", dut->pub_path_count_o, 4);
+  expect("adopt publishes path tail 1", pub_path_tail(0), PATH_A1);
+  expect("adopt publishes path tail 2", pub_path_tail(1), PATH_A2);
+  expect("adopt publishes path tail 3", pub_path_tail(2), PEER_CID);
+  for (unsigned k = 3; k < 7; k++) {
+    char n[64]; snprintf(n, sizeof(n), "adopt clears inactive tail %u", k);
+    expect(n, pub_path_tail(k), 0);
+  }
+
+  // `they_win` is reachable even when this current Announce loses to the
+  // already-selected best. Its path B must not replace path A merely because
+  // the handler re-commits the retained best GM/parent publication.
+  const uint64_t WORSE_GM = 0x00BBCCFFFE000099ull;
+  const uint64_t WORSE_SRC = 0x00BBCCFFFE000088ull;
+  const uint64_t PATH_B1 = 0x00BBCCFFFE000077ull;
+  const uint64_t commits_before_worse = commits_seen;
+  send_announce(11, 200, WORSE_GM, 1, WORSE_SRC,
+                {WORSE_GM, PATH_B1}, 6100000);
+  expect("worse announce retains selected GM", dut->pub_gm_id_o, GMID);
+  expect("worse announce retains selected parent", dut->pub_parent_id_o,
+         PEER_CID);
+  expect("worse announce reaches a commit", commits_seen,
+         commits_before_worse + 1);
+  expect("worse announce retains path A count", dut->pub_path_count_o, 4);
+  expect("worse announce retains path A tail 1", pub_path_tail(0), PATH_A1);
+  expect("worse announce retains path A tail 2", pub_path_tail(1), PATH_A2);
+  expect("worse announce retains path A tail 3", pub_path_tail(2), PEER_CID);
+
+  // The same losing contest with no PathTrace reports raw count zero for the
+  // current frame, but never executes BTCA `take`. The common `they_win`
+  // COMMIT must therefore republish the complete already-selected nonzero
+  // tuple, not stage zero or clear any tail from the unrelated candidate.
+  const uint64_t commits_before_worse_tlvless = commits_seen;
+  const uint16_t drops_before_worse_tlvless = dut->dbg_rx_drop_o;
+  send_announce(0xA090, 200, WORSE_GM, 0, WORSE_SRC, {}, 6150000);
+  expect("worse TLV-less announce reaches one retained-state commit",
+         commits_seen, commits_before_worse_tlvless + 1);
+  expect("worse TLV-less announce retains selected GM",
+         dut->pub_gm_id_o, GMID);
+  expect("worse TLV-less announce retains selected parent",
+         dut->pub_parent_id_o, PEER_CID);
+  expect("worse TLV-less announce retains path A count",
+         dut->pub_path_count_o, 4);
+  expect("worse TLV-less announce retains path A tail 1",
+         pub_path_tail(0), PATH_A1);
+  expect("worse TLV-less announce retains path A tail 2",
+         pub_path_tail(1), PATH_A2);
+  expect("worse TLV-less announce retains path A tail 3",
+         pub_path_tail(2), PEER_CID);
+  for (unsigned k = 3; k < 7; k++) {
+    char n[88]; snprintf(n, sizeof n,
+                         "worse TLV-less announce retains zero tail %u", k + 1);
+    expect(n, pub_path_tail(k), 0);
+  }
+  expect("worse TLV-less announce parser accepts", dut->dbg_rx_drop_o,
+         drops_before_worse_tlvless);
+
+  // The parser retains only eight identities but reports the true deeper
+  // count. The public contract is explicitly bounded: preserve the first
+  // eight entries, expose count eight, and never leak the unretained suffix.
+  std::vector<uint64_t> PATH_DEEP = {GMID};
+  for (unsigned k = 1; k < 11; k++)
+    PATH_DEEP.push_back(0x00D000FFFE000000ull + k);
+  PATH_DEEP.push_back(PEER_CID);
+  send_announce(12, 100, GMID, 11, PEER_CID, PATH_DEEP, 6200000);
+  expect("deep parent path clamps to eight", dut->pub_path_count_o, 8);
+  for (unsigned k = 0; k < 7; k++) {
+    char n[72]; snprintf(n, sizeof(n), "deep path retains tail %u", k + 1);
+    expect(n, pub_path_tail(k), PATH_DEEP[k + 1]);
+  }
+
+  // A current-parent refresh is an unconditional BTCA take. Its shorter path
+  // becomes the new selected snapshot and clears every inactive deep slot.
+  const uint64_t PATH_C1 = 0x00CCD0FFFE000033ull;
+  const std::vector<uint64_t> PATH_C = {GMID, PATH_C1, PEER_CID};
+  send_announce(13, 100, GMID, 2, PEER_CID, PATH_C, 6300000);
+  expect("parent refresh publishes path C count", dut->pub_path_count_o, 3);
+  expect("parent refresh publishes path C tail 1", pub_path_tail(0), PATH_C1);
+  expect("parent refresh publishes path C tail 2", pub_path_tail(1), PEER_CID);
+  for (unsigned k = 2; k < 7; k++) {
+    char n[72]; snprintf(n, sizeof(n), "parent refresh clears old tail %u", k);
+    expect(n, pub_path_tail(k), 0);
+  }
+
+  // The selected-state boundary is the declared PTP message, not whatever
+  // bytes happen to follow physically. A fixed Announce without PathTrace is
+  // valid and replaces the current parent's selected raw path with count zero
+  // and zero tails. A declared suffix must instead contain one complete,
+  // identity-aligned PathTrace with N=stepsRemoved+1. Every malformed shape
+  // below targets the current parent, so accepting it would unconditionally
+  // run BTCA `take`; no-commit plus a counted parser refusal are the oracles.
+  auto ann_wire = [&](uint16_t seq, uint16_t steps,
+                      const std::vector<uint64_t> &path) {
+    const uint16_t suffix = path.empty() ? 0 :
+                            (uint16_t)(4 + 8 * path.size());
+    Frame a = ptp(0xB, seq, 0, 0x0008, (uint16_t)(30 + suffix), PEER_CID);
+    for (int i = 0; i < 10; i++) a.u8(0);
+    a.u16(0xFFC4); a.u8(0);
+    a.u8(100); a.u32(OUR_CQ); a.u8(248);
+    a.u64(GMID); a.u16(steps); a.u8(0xA0);
+    if (!path.empty()) {
+      a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
+      for (uint64_t hop : path) a.u64(hop);
+    }
+    return a;
+  };
+  auto seal_ann_wire = [](Frame &a) {
+    const uint16_t n = (uint16_t)(a.b.size() - 14);
+    a.b[16] = (uint8_t)(n >> 8); a.b[17] = (uint8_t)n;
+  };
+  auto append_ann_tlv = [&](Frame &a, uint16_t type,
+                            const std::vector<uint8_t> &value) {
+    a.u16(type); a.u16((uint16_t)value.size());
+    for (uint8_t b : value) a.u8(b);
+    seal_ann_wire(a);
+  };
+  auto append_ann_path = [&](Frame &a,
+                             const std::vector<uint64_t> &path) {
+    a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
+    for (uint64_t hop : path) a.u64(hop);
+    seal_ann_wire(a);
+  };
+  auto malformed_ann = [&](const char *tag, Frame a, uint64_t rx) {
+    const size_t c0 = commit_snaps.size();
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    const uint64_t gm0 = dut->pub_gm_id_o;
+    const uint64_t parent0 = dut->pub_parent_id_o;
+    const uint8_t count0 = dut->pub_path_count_o;
+    const uint64_t tail0 = pub_path_tail(0);
+    send_frame(a.b, rx); run_svc(6000);
+    char n[96];
+    snprintf(n, sizeof n, "%s: no commit", tag);
+    expect(n, commit_snaps.size(), c0);
+    snprintf(n, sizeof n, "%s: one parser drop", tag);
+    expect(n, dut->dbg_rx_drop_o, (uint16_t)(d0 + 1));
+    snprintf(n, sizeof n, "%s: GM unchanged", tag);
+    expect(n, dut->pub_gm_id_o, gm0);
+    snprintf(n, sizeof n, "%s: parent unchanged", tag);
+    expect(n, dut->pub_parent_id_o, parent0);
+    snprintf(n, sizeof n, "%s: count unchanged", tag);
+    expect(n, dut->pub_path_count_o, count0);
+    snprintf(n, sizeof n, "%s: tail unchanged", tag);
+    expect(n, pub_path_tail(0), tail0);
+  };
+  // A complete unknown TLV is ignored, but the walker must continue to a
+  // later PathTrace. Both shapes target the current parent and therefore bind
+  // the selected raw publication, not merely parser event generation.
+  {
+    const size_t c0 = commit_snaps.size();
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    Frame a = ann_wire(0xA0E0, 0, {});
+    append_ann_tlv(a, 0x1234, {0xAA, 0x55});
+    send_frame(a.b, 6330000); run_svc(6000);
+    expect("unknown-only current parent: one commit",
+           commit_snaps.size(), c0 + 1);
+    expect("unknown-only current parent: raw count zero",
+           dut->pub_path_count_o, 0);
+    for (unsigned k = 0; k < 7; k++) {
+      char n[80]; snprintf(n, sizeof n,
+                           "unknown-only current parent: tail %u zero", k + 1);
+      expect(n, pub_path_tail(k), 0);
+    }
+    expect("unknown-only current parent: parser accepts",
+           dut->dbg_rx_drop_o, d0);
+  }
+  const uint64_t PATH_U1 = 0x00CCDDFFFE000044ull;
+  {
+    const size_t c0 = commit_snaps.size();
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    Frame a = ann_wire(0xA0E1, 2, {});
+    append_ann_tlv(a, 0x1234, {0x11, 0x22});
+    append_ann_path(a, {GMID, PATH_U1, PEER_CID});
+    send_frame(a.b, 6335000); run_svc(6000);
+    expect("unknown before path current parent: one commit",
+           commit_snaps.size(), c0 + 1);
+    expect("unknown before path current parent: count",
+           dut->pub_path_count_o, 3);
+    expect("unknown before path current parent: tail 1",
+           pub_path_tail(0), PATH_U1);
+    expect("unknown before path current parent: tail 2",
+           pub_path_tail(1), PEER_CID);
+    expect("unknown before path current parent: parser accepts",
+           dut->dbg_rx_drop_o, d0);
+  }
+  // Refill every retained slot immediately before the raw-empty transition.
+  // This makes count-zero canonicalization prove all seven tail writes rather
+  // than only the first two left active by the preceding short path.
+  const std::vector<uint64_t> PATH_FULL = {
+      GMID, 0x00F800FFFE000001ull, 0x00F800FFFE000002ull,
+      0x00F800FFFE000003ull, 0x00F800FFFE000004ull,
+      0x00F800FFFE000005ull, 0x00F800FFFE000006ull, PEER_CID};
+  send_announce(0xA0E2, 100, GMID, 7, PEER_CID, PATH_FULL, 6340000);
+  expect("full path before raw empty: count eight", dut->pub_path_count_o, 8);
+  for (unsigned k = 0; k < 7; k++) {
+    char n[80]; snprintf(n, sizeof n,
+                         "full path before raw empty: tail %u", k + 1);
+    expect(n, pub_path_tail(k), PATH_FULL[k + 1]);
+  }
+  {
+    const size_t c0 = commit_snaps.size();
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    send_frame(ann_wire(0xA100, 0, {}).b, 6350000); run_svc(6000);
+    expect("TLV-less current parent: one commit", commit_snaps.size(), c0 + 1);
+    expect("TLV-less current parent: GM retained", dut->pub_gm_id_o, GMID);
+    expect("TLV-less current parent: parent retained", dut->pub_parent_id_o,
+           PEER_CID);
+    expect("TLV-less current parent: raw count zero",
+           dut->pub_path_count_o, 0);
+    for (unsigned k = 0; k < 7; k++) {
+      char n[80]; snprintf(n, sizeof n,
+                           "TLV-less current parent: tail %u zero", k + 1);
+      expect(n, pub_path_tail(k), 0);
+    }
+    expect("TLV-less current parent: parser accepts",
+           dut->dbg_rx_drop_o, d0);
+  }
+  {
+    const size_t c0 = commit_snaps.size();
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    Frame a = ann_wire(0xA101, 1, {});              // messageLength stays 64
+    a.u16(0x0008); a.u16(16); a.u64(GMID); a.u64(OUR_CID);
+    send_frame(a.b, 6360000); run_svc(6000);
+    expect("out-of-message fake PathTrace: one commit",
+           commit_snaps.size(), c0 + 1);
+    expect("out-of-message fake PathTrace: raw count zero",
+           dut->pub_path_count_o, 0);
+    for (unsigned k = 0; k < 7; k++) {
+      char n[80]; snprintf(n, sizeof n,
+                           "out-of-message fake PathTrace: tail %u zero", k + 1);
+      expect(n, pub_path_tail(k), 0);
+    }
+    expect("out-of-message fake PathTrace: parser accepts",
+           dut->dbg_rx_drop_o, d0);
+  }
+  {
+    Frame a = ann_wire(0xA106, 0, {});
+    a.b[16] = 0; a.b[17] = 68;                     // header only, value absent
+    a.u16(0x1234); a.u16(4);
+    malformed_ann("unknown TLV crosses declaration", a, 6365000);
+  }
+  {
+    Frame a = ann_wire(0xA107, 0, {});
+    append_ann_tlv(a, 0x1234, {0xEE});              // generic length must be even
+    malformed_ann("odd-length unknown TLV", a, 6367000);
+  }
+  {
+    Frame a = ann_wire(0xA108, 0, {});
+    append_ann_path(a, {GMID});
+    a.u16(0x1234);                                  // incomplete next header
+    seal_ann_wire(a);
+    malformed_ann("partial TLV after valid PathTrace", a, 6369000);
+  }
+  {
+    Frame a = ann_wire(0xA109, 0, {});
+    append_ann_path(a, {GMID});
+    append_ann_path(a, {GMID});
+    malformed_ann("duplicate PathTrace", a, 6370000);
+  }
+  {
+    Frame a = ann_wire(0xA102, 1, {GMID, PEER_CID});
+    a.b[16] = 0; a.b[17] = 76;                      // second hop is padding
+    malformed_ann("PathTrace crosses messageLength", a, 6370000);
+  }
+  {
+    Frame a = ann_wire(0xA103, 1, {GMID, PEER_CID});
+    a.b.resize(a.b.size() - 8);                     // declared 2, received 1
+    malformed_ann("physically truncated PathTrace", a, 6380000);
+  }
+  {
+    Frame a = ann_wire(0xA104, 0, {GMID});
+    a.b[81] = 9;                                    // lengthField 9
+    a.b[16] = 0; a.b[17] = 77;
+    a.u8(0xEE);
+    malformed_ann("non-identity-aligned PathTrace", a, 6390000);
+  }
+  malformed_ann("PathTrace count differs from stepsRemoved",
+                ann_wire(0xA105, 2, {GMID, PEER_CID}), 6395000);
+
+  // A nonempty PathTrace must name the announced GM at pathSequence[0].
+  // Replacing a forged first hop with the separate GM output would create a
+  // synthetic sequence that no peer sent, so reject the complete Announce.
+  const uint64_t commits_before_bad_head = commits_seen;
+  send_announce(14, 100, GMID, 2, PEER_CID,
+                {0x00BAD0FFFE000001ull, PATH_C1, PEER_CID}, 6400000);
+  expect("mismatched path head produces no commit", commits_seen,
+         commits_before_bad_head);
+  expect("mismatched path head retains count", dut->pub_path_count_o, 0);
+  expect("mismatched path head retains zero tail", pub_path_tail(0), 0);
+
+  // Force three same-sequence Announces behind a stalled Pdelay response.
+  // The first owns the one frozen Announce context until its handler ends;
+  // the two chasers must be explicitly dropped/counted instead of reusing
+  // either parser bank and tearing A. Once A releases the context, a fresh C
+  // must be accepted normally.
+  auto enqueue_announce = [&](uint16_t seq, uint8_t p1, uint64_t gm,
+                              uint16_t steps, uint64_t src,
+                              const std::vector<uint64_t> &path,
+                              uint64_t rx_ts) {
+    uint16_t tlv = path.empty() ? 0 : (uint16_t)(4 + 8 * path.size());
+    Frame a = ptp(0xB, seq, 0, 0x0008, (uint16_t)(30 + tlv), src);
+    for (int i = 0; i < 10; i++) a.u8(0);
+    a.u16(0xFFC4); a.u8(0);
+    a.u8(p1); a.u32(OUR_CQ); a.u8(248);
+    a.u64(gm); a.u16(steps); a.u8(0xA0);
+    if (!path.empty()) {
+      a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
+      for (uint64_t hop : path) a.u64(hop);
+    }
+    send_frame(a.b, rx_ts);
+    //! Literal EOF/SOF adjacency: the next helper call asserts SOF on the
+    //! first byte clock after this EOF. The parser's deferred w12/event then
+    //! overlaps that successor and must retain the owner's count epoch.
+    run(0);
+  };
+  const uint64_t Q_A1 = 0x00E100FFFE000011ull;
+  const uint64_t Q_A2 = 0x00E100FFFE000022ull;
+  const uint64_t Q_C1 = 0x00E300FFFE000033ull;
+  const std::vector<uint64_t> Q_PATH_A = {GMID, Q_A1, Q_A2, PEER_CID};
+  const std::vector<uint64_t> Q_PATH_C = {GMID, Q_C1, PEER_CID};
+  const uint16_t queued_drop_base = dut->dbg_ev_drop_o;
+  dut->tx_ready_i = 0;
+  {
+    Frame q = ptp(0x2, 0x6A6A, 0, 0x0000, 20, PEER_CID);
+    q.u64(0); q.u16(0); q.ts(0); q.b.resize(68);
+    send_frame(q.b, phc() + 100);
+    run(2000);  // response serializer is now non-idle and holds dispatch
+  }
+  enqueue_announce(0x7A7A, 100, GMID, 3, PEER_CID, Q_PATH_A, phc() + 200);
+  enqueue_announce(0x7A7A, 200, WORSE_GM, 1, WORSE_SRC,
+                   {WORSE_GM, PATH_B1}, phc() + 300);
+  enqueue_announce(0x7A7A, 100, GMID, 2, PEER_CID, Q_PATH_C, phc() + 400);
+  const size_t queued_commit_base = commit_snaps.size();
+  dut->tx_ready_i = 1;
+  run(30000);
+  expect("only frozen A commits under announce overload", commit_snaps.size(),
+         queued_commit_base + 1);
+  expect("two announce chasers counted as drops", dut->dbg_ev_drop_o,
+         uint16_t(queued_drop_base + 2));
+  if (commit_snaps.size() >= queued_commit_base + 1) {
+    const PubSnap &qa = commit_snaps[queued_commit_base + 0];
+    expect("frozen queued A GM coherent", qa.gm, GMID);
+    expect("frozen queued A parent coherent", qa.parent, PEER_CID);
+    expect("frozen queued A count coherent", qa.count, 4);
+    expect("frozen queued A tail 1 coherent", qa.tail[0], Q_A1);
+    expect("frozen queued A tail 2 coherent", qa.tail[1], Q_A2);
+  }
+  const size_t released_commit_base = commit_snaps.size();
+  send_announce(0x7A7A, 100, GMID, 2, PEER_CID, Q_PATH_C, phc() + 500);
+  expect("post-release C commits", commit_snaps.size(),
+         released_commit_base + 1);
+  expect("post-release C GM coherent", dut->pub_gm_id_o, GMID);
+  expect("post-release C parent coherent", dut->pub_parent_id_o, PEER_CID);
+  expect("post-release C count coherent", dut->pub_path_count_o, 3);
+  expect("post-release C tail coherent", pub_path_tail(0), Q_C1);
+  expect("post-release C clears inactive A tail", pub_path_tail(2), 0);
+  // Repeat the literal EOF/SOF-adjacent stalled-dispatch overload with a
+  // fixed no-PathTrace owner A and present-PathTrace chasers. The deferred
+  // zero count must belong to A, hold the frozen context until its handler
+  // ends, clear every tail on COMMIT, and make both chaser drops observable.
+  {
+    const uint16_t evd0 = dut->dbg_ev_drop_o;
+    const uint16_t rxd0 = dut->dbg_rx_drop_o;
+    dut->tx_ready_i = 0;
+    Frame q = ptp(0x2, 0x6B6B, 0, 0x0000, 20, PEER_CID);
+    q.u64(0); q.u16(0); q.ts(0); q.b.resize(68);
+    send_frame(q.b, phc() + 600);
+    run(2000);
+    enqueue_announce(0x7B7B, 100, GMID, 0, PEER_CID, {}, phc() + 700);
+    enqueue_announce(0x7B7B, 200, WORSE_GM, 1, WORSE_SRC,
+                     {WORSE_GM, PATH_B1}, phc() + 800);
+    enqueue_announce(0x7B7B, 100, GMID, 2, PEER_CID,
+                     Q_PATH_C, phc() + 900);
+    const size_t c0 = commit_snaps.size();
+    dut->tx_ready_i = 1;
+    run(30000);
+    expect("raw-empty overload: only frozen A commits",
+           commit_snaps.size(), c0 + 1);
+    expect("raw-empty overload: two present chasers dropped",
+           dut->dbg_ev_drop_o, (uint16_t)(evd0 + 2));
+    expect("raw-empty overload: parser accepts every frame",
+           dut->dbg_rx_drop_o, rxd0);
+    if (commit_snaps.size() >= c0 + 1) {
+      const PubSnap &qa = commit_snaps[c0];
+      expect("raw-empty overload: frozen A GM", qa.gm, GMID);
+      expect("raw-empty overload: frozen A parent", qa.parent, PEER_CID);
+      expect("raw-empty overload: frozen A count zero", qa.count, 0);
+      for (unsigned k = 0; k < 7; k++) {
+        char n[80]; snprintf(n, sizeof n,
+                             "raw-empty overload: frozen A tail %u zero", k + 1);
+        expect(n, qa.tail[k], 0);
+      }
+    }
+    const size_t c1 = commit_snaps.size();
+    send_announce(0x7B7B, 100, GMID, 2, PEER_CID,
+                  Q_PATH_C, phc() + 1000);
+    expect("raw-empty overload: post-release path commits",
+           commit_snaps.size(), c1 + 1);
+    expect("raw-empty overload: post-release count", dut->pub_path_count_o, 3);
+    expect("raw-empty overload: post-release tail", pub_path_tail(0), Q_C1);
+  }
   {
     run_svc(20000);                              // drain anything in flight
     size_t before = txf.size();
@@ -1758,12 +2240,13 @@ int main(int argc, char **argv) {
     uint16_t sq = 0x0200;
     for (int k = 0; k < 24; k++) {
       if ((k % 8) == 0) {                        // keep the GM elected
-        Frame a = ptp(0xB, (uint16_t)(20 + k), 0, 0x0008, 30);
+        Frame a = ptp(0xB, (uint16_t)(20 + k), 0, 0x0008, 42);
         for (int i = 0; i < 10; i++) a.u8(0);
         a.u16(0xFFC4); a.u8(0);
         a.u8(100); a.u32(OUR_CQ); a.u8(248);
         a.u64(GMID);
         a.u16(0); a.u8(0xA0);
+        a.u16(0x0008); a.u16(8); a.u64(GMID);
         send_frame(a.b, phc() + 150);
         run(4000);
       }
@@ -1866,25 +2349,26 @@ int main(int argc, char **argv) {
     expect("shorter path wins", dut->pub_parent_id_o, SRC5);
   }
 
-  // ---- 18b: a delayed dispatch must not act on a torn bank --------------
+  // ---- 18b: a delayed dispatch must not act on a torn epoch -------------
   // a pdelay-req occupies the uCPU; a worse announce and then a Sync
   // from the CURRENT PARENT arrive zero-gap. Sync frames never write
-  // the announce bank words, so the delayed announce dispatch reads
-  // the announce's worse vector with the SYNC's source: without the
-  // closing seq guard that torn read is a parent-update take of a
-  // worse vector, our vector wins, and the plane wrongfully seizes
-  // mastership (the review's R8 failure mode, made deterministic)
+  // the announce bank words. A delayed handler that reads the live bank can
+  // combine the announce's worse vector with the Sync's current-parent
+  // source, turn it into an unconditional parent-update take, and wrongfully
+  // seize mastership. The frozen Announce context makes that R8 failure
+  // mode deterministic and impossible without relying on sequenceId.
   {
     Frame q = ptp(0x2, 0x7777, 0, 0x0000, 20);
     q.u64(0); q.u16(0); q.ts(0);
     q.b.resize(68);
     send_frame(q.b, phc() + 150);
-    Frame a = ptp(0xB, 60, 0, 0x0008, 30, 0x00A0A0FFFE000011ull);
+    Frame a = ptp(0xB, 60, 0, 0x0008, 42, 0x00A0A0FFFE000011ull);
     for (int i = 0; i < 10; i++) a.u8(0);
     a.u16(0xFFC4); a.u8(0);
     a.u8(200); a.u32(OUR_CQ); a.u8(248);
     a.u64(0x00A0A0FFFE0000AAull);
     a.u16(0); a.u8(0xA0);
+    a.u16(0x0008); a.u16(8); a.u64(0x00A0A0FFFE0000AAull);
     Frame sy = ptp(0x0, 0x7778, 0, 0x0208, 10, 0x00F1F1FFFE000009ull);
     sy.ts(0);
     send_frame(a.b, phc() + 300);
@@ -1958,7 +2442,13 @@ int main(int argc, char **argv) {
   {
     expect("quiet ride to mastership",
            wait_flags(FL_AMGM, FL_AMGM, 8000000ull), 1);
+    run(200);  // reach the PathTrace write and COMMIT after the flags write
     expect("gm is us after the quiet", dut->pub_gm_id_o, OUR_CID);
+    expect("own-GM transition publishes count one", dut->pub_path_count_o, 1);
+    for (unsigned k = 0; k < 7; k++) {
+      char n[72]; snprintf(n, sizeof(n), "own-GM transition clears tail %u", k);
+      expect(n, pub_path_tail(k), 0);
+    }
     announce(70, 150, NEWGM, 0, NEWSRC);
     expect("newcomer adopted, no ghost", dut->pub_gm_id_o, NEWGM);
     expect("newcomer is the parent", dut->pub_parent_id_o, NEWSRC);
@@ -1972,23 +2462,23 @@ int main(int argc, char **argv) {
     expect("vector outranks identity", dut->pub_gm_id_o, NEWGM);
   }
 
-  // ---- 21d: the second bank makes the torn case PROCESS -----------------
+  // ---- 21d: the queue epoch makes the delayed case PROCESS --------------
   // the same delayed-dispatch shape as 18b, but with a BETTER announce:
-  // each frame now owns the bank its event names, so the announce's
-  // words survive its successor and the plane ADOPTS instead of
-  // dropping -- the v6 seq guard stays as belt-and-braces
+  // the Announce's complete enqueue-time words survive its successor, so the
+  // plane ADOPTS instead of dropping or mixing a live-bank epoch
   const uint64_t GMC = 0x00CAFEFFFE000003ull;
   {
     Frame q = ptp(0x2, 0x7779, 0, 0x0000, 20);
     q.u64(0); q.u16(0); q.ts(0);
     q.b.resize(68);
     send_frame(q.b, phc() + 150);
-    Frame a = ptp(0xB, 72, 0, 0x0008, 30, 0x00CAFEFFFE000004ull);
+    Frame a = ptp(0xB, 72, 0, 0x0008, 42, 0x00CAFEFFFE000004ull);
     for (int i = 0; i < 10; i++) a.u8(0);
     a.u16(0xFFC4); a.u8(0);
     a.u8(80); a.u32(OUR_CQ); a.u8(248);
     a.u64(GMC);
     a.u16(0); a.u8(0xA0);
+    a.u16(0x0008); a.u16(8); a.u64(GMC);
     Frame sy = ptp(0x0, 0x777A, 0, 0x0208, 10, NEWSRC);
     sy.ts(0);
     send_frame(a.b, phc() + 300);
@@ -2238,6 +2728,50 @@ int main(int argc, char **argv) {
         if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) resumed = true;
     }
     expect("the cease survives reset and resumes", resumed, 1);
+    expect("warm-reset deep-loop setup is capable",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    const uint64_t WGM = 0x00C028FFFE000001ull;
+    const size_t empty_c0 = commit_snaps.size();
+    const uint16_t empty_d0 = dut->dbg_rx_drop_o;
+    send_announce(0xC027, 1, WGM, 0, PEER_CID, {}, phc() + 50);
+    bool empty_selected = false, empty_mixed = false;
+    for (size_t i = empty_c0; i < commit_snaps.size(); i++) {
+      bool tails_zero = true;
+      for (unsigned k = 0; k < 7; k++) tails_zero &= commit_snaps[i].tail[k] == 0;
+      if ((commit_snaps[i].gm == WGM) &&
+          (commit_snaps[i].parent == PEER_CID)) {
+        if ((commit_snaps[i].count == 0) && tails_zero)
+          empty_selected = true;
+        else
+          empty_mixed = true;
+      }
+    }
+    expect("post-warm-reset raw-empty selection commits", empty_selected, 1);
+    expect("post-warm-reset raw-empty epoch never mixes tails", empty_mixed, 0);
+    expect("post-warm-reset raw-empty GM", dut->pub_gm_id_o, WGM);
+    expect("post-warm-reset raw-empty count", dut->pub_path_count_o, 0);
+    for (unsigned k = 0; k < 7; k++) {
+      char n[80]; snprintf(n, sizeof n,
+                           "post-warm-reset raw-empty tail %u zero", k + 1);
+      expect(n, pub_path_tail(k), 0);
+    }
+    expect("post-warm-reset raw-empty parser accepts",
+           dut->dbg_rx_drop_o, empty_d0);
+    std::vector<uint64_t> path = {WGM};
+    for (unsigned i = 1; i < 8; i++)
+      path.push_back(0x00C0280000000000ull + i);
+    path.push_back(OUR_CID);                        // ninth, beyond ABI cap
+    const size_t c0 = commit_snaps.size();
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    const uint64_t gm0 = dut->pub_gm_id_o;
+    send_announce(0xC028, 1, WGM, 8, PEER_CID, path, phc() + 100);
+    bool selected = false;
+    for (size_t i = c0; i < commit_snaps.size(); i++)
+      if (commit_snaps[i].gm == WGM) selected = true;
+    expect("warm-reset ninth-hop self: never selected", selected, 0);
+    expect("warm-reset ninth-hop self: parser accepts", dut->dbg_rx_drop_o,
+           d0);
+    expect("warm-reset ninth-hop self: GM unchanged", dut->pub_gm_id_o, gm0);
   }
 
   // ---- 29: a chasing Follow_Up cannot steal the Resp's arrival ----------

@@ -60,9 +60,27 @@ request is refused ahead of the responder, and then the announce
 handler admitting every well-formed Announce (#7): 802.1AS-2011
 10.3.10.2.1 qualifyAnnounce now runs ahead of BTCA and of every write
 the handler makes (our own clockIdentity as the source, stepsRemoved 255
-and above, our identity anywhere in the path trace the bank holds), its
-count-gated hop walk the first consumer of OP_DESC_ADDR (+23 ROM words,
-zero LUT), and then one unsolicited Pdelay_Resp_Follow_Up poisoning
+and above, a pathSequence whose first identity is not the announced
+grandmaster, or our identity anywhere in the complete received path).
+An otherwise-valid fixed 64-octet Announce may omit PathTrace: the absent case
+distinguished by 10.3.10.2.1(d) and 10.3.13.2.1(f) publishes an honest raw
+count zero with zero tails. Per IEEE 1588-2008 5.3.8/14.1 and 802.1AS-2011
+10.5.1, a bounded generic walker skips each complete even-length unknown TLV,
+including a zero-length value, and attempts the next TLV. The complete suffix
+must end on a TLV boundary inside the declared messageLength; partial headers,
+odd or overflowing lengths, physical truncation and duplicate PathTrace TLVs
+are refused. A single PathTrace requires a physically complete 8N-byte value
+with N = stepsRemoved + 1. Physical Ethernet padding is ignored, and every
+wire identity is checked for a loop even beyond the eight retained entries.
+Source, vector, grandmaster, steps, full count, loop verdict and the first
+eight hops freeze in one serial-read Announce context from accepted enqueue
+through handler END.
+While that context is owned, chasing Announces are explicitly dropped and
+counted; the first Announce after release is accepted normally. A backlog or
+repeated 16-bit sequence therefore cannot splice parser-bank epochs. Its
+streaming loop verdict removes the old bounded indexed walk, and then one
+unsolicited
+Pdelay_Resp_Follow_Up poisoning
 neighborPropDelay and dropping asCapable (#8): both Pdelay receive
 handlers now pair per 802.1AS-2011 11.2.15.3, a Pdelay_Resp taken only
 for the outstanding request's sequenceId and never again once its
@@ -98,23 +116,20 @@ behaviour: #31 (the engine holds one egress timestamp and samples it at
 dispatch, so a second stamp arriving first destroys it), #30 (the
 requestingPortIdentity gate omits Figure 11-8's portNumber term), and #35 (a
 mid-frame `rx_err_i` is ignored). The issue tracker remains the authority.
-Verification here is ucpu 768 / parser 179 / engine 408 checks in the shipping,
-high-request and high-Sync images, eighty-five planted engine mutations red,
-and lint clean. The ROM is 941 of 1,024 words: one word bounds the Sync
-sequence counter before its type-qualified claim. The timer program remains
+Verification here is ucpu 768 / parser 268 / engine 656 checks in the shipping,
+high-request and high-Sync images, every planted mutation red, and lint clean.
+The ROM is 924 of 1,024 words: the parser's complete-path
+loop verdict retires the serial indexed qualification walk while the selected
+path stage remains atomic. The timer program remains
 191 of 192 words in the shipping image and 192 of 192 in each seeded image.
 See `docs/RESOURCE_VALIDATION.md` for the measurement record.
 
-**Parent status:** the option-gated splice is landed under parent #114,
-and `dev` currently pins donor `c33fb1af`, which contains the completed
-#6 through #12 field campaign. Parent PR #216 already exports the
-boundary messageType beside sequenceId. Draft parent PR #244, for reopened
-#214, owns the remaining integration after this donor change lands: advance
-its reviewed `979903ac` baseline pin, wire `txts_type_i` into the engine, and
-prove the cross-type and same-type ownership cases end to end in
-`gptp_shadow`. Parent #116 owns the default-on
-publication/rootfs transition; #117 still owns physical two-board and
-silicon acceptance. The parent's page of record is
+**Parent status:** parent `dev` at the #227 merge (`cb444a09`) pins donor
+`7def718e`. The #228 repair must advance that pin together with the new
+`pub_path_count_o` / `pub_path_o` shadow and datapath wiring; the donor commit
+alone does not create a default-fabric GET_AS_PATH producer. Parent #116 owns
+that default-on publication/rootfs transition; #117 still owns physical
+two-board and silicon acceptance. The parent's page of record is
 `docs/design/GPTP_PLANE.md`.
 
 ## Why a µCPU with an ALU
@@ -185,14 +200,20 @@ other build is bit-identical.
   through, both onto the counter's knobs in place of the CSR face's
   `/dev/ptpN` writes; settime stays with the CSR face (boot sets the epoch).
 - Publish bank out: GM identity, parent identity, flags (present, gm,
-  asCapable, sync), peer delay, offset and `pub_annq` leave the shadow as
-  wires beside the engine's commit pulse. Today only the GM identity has a
-  fabric consumer (`milan_datapath` muxes it over the CSR-published value
-  for the ADPDU/GET_AVB_INFO/AS_PATH face, the Milan-info answers and the
-  recentre latch); the other words and the commit pulse stay unconsumed
-  until #116 re-points the CSR readback words (ADP_GM 0x624/0x628,
-  GPTP_PDELAY 0x6E4, the 0x730 AS_PATH group) and the `tu` bit at the
-  plane.
+  asCapable, sync), peer delay, offset, `pub_annq`, and the raw selected
+  PathTrace leave the engine beside its commit pulse. For a present
+  PathTrace, raw count is the complete received length including the separate
+  GM output; a fixed or unknown-only Announce without the TLV publishes raw
+  count zero and seven zero tails while GM remains separately valid. A fabric
+  consumer must preserve that empty received path; only the parent's legacy
+  software-staging mode retains its historical GM-only alias. The donor ABI is
+  deliberately
+  bounded to eight entries: a deeper valid received
+  sequence is checked in full for loops, then publishes its first eight and
+  count eight, matching the parent GET_AS_PATH ceiling rather than exposing
+  parser-stale or unretained suffix bytes. BTCA stages this record
+  only on `take`, so a worse current Announce may re-commit but cannot replace
+  the retained best path.
 - ROM: the parent's builder generates the per-configuration 1,024-word
   image from this repo's `hdl/ucode/gen_gptp_ucode.py` (`--mac`, `--p1`,
   `--clk-hz` from the station YAML) and passes its path as

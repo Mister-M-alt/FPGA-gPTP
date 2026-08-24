@@ -26,7 +26,8 @@
 //                  1  timestamp regs    RO  (0 ingress ts, 1 egress ts)
 //                  2  scratch RAM       RW  (64 x 64, protocol state)
 //                  3  publish bank      RW  (0 gm id, 1 parent id,
-//                                            2 flags, 3 pdelay ns)
+//                                            2 flags, 3 pdelay ns,
+//                                            6 path count, 8..14 path tail)
 //                  4  PHC control       WO  (0 rate addend, 1 step)
 //                  5  timer arm         WO  (slot = addr, delta ms = data)
 //
@@ -94,6 +95,12 @@ module KL_gptp_engine
     output logic [31:0] pub_pdelay_ns_o,
     output logic [31:0] pub_offset_o,  //! last sync offset, ns (signed)
     output logic [63:0] pub_annq_o,    //! last received announce vector, raw
+    //! Raw selected PathTrace publication. A present sequence reports its
+    //! complete received length including the separately published GM at slot
+    //! zero; an absent TLV reports count zero. pub_path_o carries slots 1..7,
+    //! and every inactive tail slot is zero.
+    output logic  [3:0] pub_path_count_o,
+    output logic [7*64-1:0] pub_path_o,
     output logic        pub_commit_o,
 
     //! reserved effect strobes (base-ISA compat, unused by gPTP µcode)
@@ -116,6 +123,19 @@ module KL_gptp_engine
   logic        pev_valid_w;
   logic [7:0]  pev_code_w;
   logic [15:0] pev_seq_w;
+  //! The generated image writes its clockIdentity once during cold init and
+  //! scratch retains it across warm reset. Mirror that write in a dedicated
+  //! register so the streaming parser can compare every PathTrace identity,
+  //! including identities beyond the eight retained public slots, without
+  //! adding a second read port (and a LUTRAM replica) to scratch_r.
+  //! FPGA configuration establishes the cold-invalid state. These mirrors
+  //! deliberately have no warm-reset assignment: scratch is warm-retentive,
+  //! so the write-snooped identity must be as well. Avoiding a reset-time
+  //! scratch read preserves scratch_r's single-read-port LUTRAM inference.
+  /* verilator lint_off PROCASSINIT */
+  logic [63:0] local_clock_id_r = 64'd0;
+  logic        local_clock_valid_r = 1'b0;
+  /* verilator lint_on PROCASSINIT */
 
   KL_gptp_rx_parser u_parser (
       .clk_i        (clk_i),
@@ -125,6 +145,8 @@ module KL_gptp_engine
       .rx_sof_i     (rx_sof_i),
       .rx_eof_i     (rx_eof_i),
       .rx_err_i     (rx_err_i),
+      .local_clock_id_i (local_clock_id_r),
+      .local_clock_valid_i (local_clock_valid_r),
       .bank_we_o    (bank_we_w),
       .bank_addr_o  (bank_addr_w),
       .bank_wdata_o (bank_wdata_w),
@@ -138,8 +160,8 @@ module KL_gptp_engine
   //! the message bank ping-pongs: bank_sel_r flips as each accepted
   //! frame's event is pushed, so the frame a handler's event names
   //! survives ONE in-flight successor. A third frame within two handler
-  //! latencies reuses the first bank. The announce handler has its own
-  //! sequence guard; accepted Pdelay_Req events snapshot every handler input
+  //! latencies reuses the first bank. Announce has the frozen single-owner
+  //! context below; accepted Pdelay_Req events snapshot every handler input
   //! into the event-queue slot below, because a
   //! live response claim can deliberately hold one behind arbitrary
   //! accepted traffic.
@@ -154,6 +176,34 @@ module KL_gptp_engine
   logic [63:0] frame_cid_r;
   logic [15:0] frame_pn_r;
 
+  //! One complete frozen Announce context, written by the parser's existing
+  //! single bank-write stream and read serially by the µCPU. Keeping the
+  //! original 5-bit bank addresses makes this one compact 32x64 LUTRAM rather
+  //! than a wide register snapshot or a multi-read replica of bank_r.
+  (* ram_style = "distributed" *) logic [63:0] ann_ctx_r [0:31];
+  //! Publication needs the selected path in one state-port transaction. Keep
+  //! only that payload beside the serial-read context: the count plus w17..w23
+  //! (w16 is the separately published GM). Inactive words may remain stale
+  //! here; address 7 count-gates and zeroes them in the raw publish bank. No
+  //! reset/initial value is required: a qualified frame always writes w12 and
+  //! every tail word its count makes active before its handler can read them.
+  logic [7:0] ann_pub_count_r;
+  logic [7*64-1:0] ann_pub_tail_r;
+  logic ann_ctx_busy_r, ann_frame_capture_r, ann_event_capture_r;
+  logic [2:0] ann_fin_wait_r;
+  logic ann_reject_w, ann_deferred_capture_w, evq_full_w, push_w;
+  logic disp_announce_r;
+  logic ucpu_done_w;
+
+  //! w12 and the parser event are deliberately deferred together until all
+  //! final identity writes have settled. Bind that word to the accepted EOF
+  //! qualification, not to ann_frame_capture_r: a legal successor SOF may
+  //! already have changed the latter by the time this write reaches us.
+  assign ann_deferred_capture_w = bank_we_w && (bank_addr_w == 5'd12) &&
+                                  pev_valid_w &&
+                                  (pev_code_w == EV_RX_ANNOUNCE_C) &&
+                                  ann_event_capture_r;
+
   //! Scratch survives a warm reset, but an egress claim cannot: the frame
   //! and timestamp pipelines reset, so a pre-reset return may never arrive.
   //! Keep resettable validity beside the two LUTRAM claim words. Reads see
@@ -167,6 +217,7 @@ module KL_gptp_engine
     for (int i = 0; i < 64; i++) begin
       bank_r[i]    = '0;
       scratch_r[i] = '0;
+      if (i < 32) ann_ctx_r[i] = '0;
     end
   end
 
@@ -175,13 +226,58 @@ module KL_gptp_engine
       bank_sel_r  <= 1'b0;
       frame_cid_r <= '0;
       frame_pn_r  <= '0;
+      ann_frame_capture_r <= 1'b0;
+      ann_event_capture_r <= 1'b0;
+      ann_ctx_busy_r      <= 1'b0;
+      ann_fin_wait_r      <= '0;
     end else begin
+      //! A frame that starts while the one Announce context is owned stays
+      //! rejected even if the prior handler finishes in its middle; accepting
+      //! a suffix would create exactly the mixed epoch this context prevents.
+      if (rx_valid_i && rx_sof_i)
+        ann_frame_capture_r <= !ann_ctx_busy_r;
+      //! Preserve the completed frame's qualification across a zero-gap
+      //! successor SOF. The parser presents its event two clocks after EOF.
+      if (rx_valid_i && rx_eof_i) begin
+        ann_event_capture_r <= ann_frame_capture_r;
+        if (ann_ctx_busy_r && ann_frame_capture_r)
+          ann_fin_wait_r <= 3'd3;
+      end else if (ann_fin_wait_r != 3'd0) begin
+        ann_fin_wait_r <= ann_fin_wait_r - 3'd1;
+        //! A frame may be poisoned after its Announce-specific words were
+        //! staged. If no accepted parser event follows its EOF, release the
+        //! early reservation; the zero-gap successor remains conservatively
+        //! refused because its per-frame qualification was already false.
+        if (ann_fin_wait_r == 3'd1) ann_ctx_busy_r <= 1'b0;
+      end
       if (bank_we_w) begin
         bank_r[{bank_sel_r, bank_addr_w}] <= bank_wdata_w;
         if (bank_addr_w == 5'd2) frame_cid_r <= bank_wdata_w;
         if (bank_addr_w == 5'd3) frame_pn_r  <= bank_wdata_w[15:0];
+        if (ann_frame_capture_r || ann_deferred_capture_w) begin
+          ann_ctx_r[bank_addr_w] <= bank_wdata_w;
+          if (bank_addr_w == 5'd12)
+            ann_pub_count_r <= bank_wdata_w[7:0];
+          if ((bank_addr_w >= 5'd17) && (bank_addr_w <= 5'd23))
+            ann_pub_tail_r[64*(bank_addr_w-5'd17) +: 64] <= bank_wdata_w;
+          //! Reserve at the first Announce-only bank word, well before EOF,
+          //! so a zero-gap successor cannot overwrite source/path staging in
+          //! the two cycles before the deferred event appears.
+          if (bank_addr_w == 5'd8) ann_ctx_busy_r <= 1'b1;
+        end
       end
-      if (pev_valid_w && !evq_full_w) bank_sel_r <= !bank_sel_r;
+      if (pev_valid_w && (pev_code_w == EV_RX_ANNOUNCE_C)) begin
+        //! Only the frame that acquired this context may release a failed
+        //! enqueue. A deliberately rejected chaser has event_capture=false
+        //! and must not unlock or overwrite the still-queued owner.
+        if (ann_event_capture_r) begin
+          ann_fin_wait_r <= '0;
+          if (!push_w) ann_ctx_busy_r <= 1'b0;
+        end
+      end
+      if (ucpu_done_w && disp_announce_r) ann_ctx_busy_r <= 1'b0;
+      if (pev_valid_w && !evq_full_w && !ann_reject_w)
+        bank_sel_r <= !bank_sel_r;
     end
   end
 
@@ -266,6 +362,12 @@ module KL_gptp_engine
   //! handler input beside its event until dispatch. This array shares the
   //! event queue's write/read pointers; non-Pdelay slots are don't-care.
   (* ram_style = "distributed" *) logic [143:0] evq_pd_ctx_r [0:3];
+  //! Announce qualification, BMCA and public PathTrace consume the frozen
+  //! write-stream context above. At most one Announce may own it: later
+  //! Announces are explicitly dropped and counted until the accepted handler
+  //! completes, while unrelated events continue to use this queue. Milan's
+  //! one-Hz Announce cadence makes overload exceptional; an explicit drop is
+  //! safe, bounded and observable, unlike parser-bank ABA or a mixed epoch.
   logic [1:0]  evq_wp_r, evq_rp_r;
   logic [2:0]  evq_lvl_r;
   logic [15:0] ev_drop_r;
@@ -273,7 +375,7 @@ module KL_gptp_engine
   logic [15:0] txts_pend_seq_r;
   logic  [3:0] txts_pend_type_r;
 
-  logic evq_full_w, evq_empty_w;
+  logic evq_empty_w;
   assign evq_full_w  = (evq_lvl_r == 3'd4);
   assign evq_empty_w = (evq_lvl_r == 3'd0);
 
@@ -282,14 +384,16 @@ module KL_gptp_engine
   logic disp_valid_r;
   logic txts_pop_w;
 
-  logic        push_w;
   logic [39:0] push_data_w;
   always_comb begin : push_arb
     push_w      = 1'b0;
     push_data_w = '0;
     tev_ready_w = 1'b0;
+    ann_reject_w = pev_valid_w &&
+                   (pev_code_w == EV_RX_ANNOUNCE_C) &&
+                   !ann_event_capture_r;
     if (pev_valid_w) begin
-      push_w      = !evq_full_w;
+      push_w      = !evq_full_w && !ann_reject_w;
       push_data_w = {pev_code_w, pev_seq_w, 15'd0, bank_sel_r};
     end else if (tev_valid_w) begin
       push_w      = !evq_full_w;
@@ -322,7 +426,9 @@ module KL_gptp_engine
       evq_lvl_r <= evq_lvl_r + (push_w ? 3'd1 : 3'd0)
                              - (pop_w  ? 3'd1 : 3'd0);
 
-      if (pev_valid_w && evq_full_w) ev_drop_r <= ev_drop_r + 16'd1;
+      if (pev_valid_w && (evq_full_w || ann_reject_w))
+        ev_drop_r <= ev_drop_r + 16'd1;
+
 
       if (txts_valid_i) begin
         txts_pend_r     <= 1'b1;
@@ -407,6 +513,7 @@ module KL_gptp_engine
       disp_ts1_r   <= '0;
       disp_bank_r  <= 1'b0;
       disp_pdreq_r <= 1'b0;
+      disp_announce_r <= 1'b0;
       disp_pd_cid_r <= '0;
       disp_pd_pn_r <= '0;
     end else begin
@@ -416,6 +523,7 @@ module KL_gptp_engine
         disp_upc_r  <= UPC_W_C'(448);
         disp_bank_r <= 1'b0;
         disp_pdreq_r <= 1'b0;
+        disp_announce_r <= 1'b0;
         disp_ev_r   <= {24'd0, txts_ev_w};
         disp_ts0_r  <= txts_r;
         disp_ts1_r  <= phc_ns_i;
@@ -423,6 +531,7 @@ module KL_gptp_engine
         disp_upc_r   <= entry_w;
         disp_bank_r  <= ev_head_w[0];
         disp_pdreq_r <= (ev_head_w[39:32] == EV_RX_PDREQ_C);
+        disp_announce_r <= (ev_head_w[39:32] == EV_RX_ANNOUNCE_C);
         disp_pd_cid_r <= evq_pd_ctx_r[evq_rp_r][143:80];
         disp_pd_pn_r  <= evq_pd_ctx_r[evq_rp_r][79:64];
         disp_ev_r    <= {24'd0, ev_head_w};
@@ -457,7 +566,6 @@ module KL_gptp_engine
   logic [10:0] resp_len_w;
   logic  [4:0] resp_status_w;
   logic        ucpu_tx_ready_w;
-  logic        ucpu_done_w;
   logic [UPC_W_C-1:0] ucpu_dbg_upc_w;
   logic        ucpu_dbg_ovf_w;
 
@@ -512,6 +620,27 @@ module KL_gptp_engine
   // -------------------------------------------- state port region map
   logic [63:0] pub_gm_r, pub_parent_r, pub_annq_r;
   logic [31:0] pub_flags_r, pub_pdelay_r, pub_offset_r;
+  logic  [3:0] pub_path_count_r;
+  logic [7*64-1:0] pub_path_r;
+  //! Path state is staged directly into the raw publish bank on BTCA `take`.
+  //! The wrapper samples that bank only on COMMIT, just as it already does for
+  //! GM/parent. If the local vector wins, BECOME overwrites it with `[self]`
+  //! before the handler's sole COMMIT; a worse Announce never executes `take`
+  //! and therefore cannot disturb the selected record. Preserve this raw path
+  //! across warm reset with the scratch best vector; outward wires are gated
+  //! to canonical zero while the reset-cleared GM is zero.
+  // The initial writer is configuration state, not a second runtime driver.
+  /* verilator lint_off MULTIDRIVEN */
+  initial begin : pub_path_poweron
+    pub_path_count_r = '0;
+    pub_path_r       = '0;
+  end
+  //! The raw public ABI is bounded to eight complete entries. Count zero is
+  //! the honest publication for a selected fixed Announce without PathTrace;
+  //! its GM remains separately published and every tail word is zero. Counts
+  //! above the retained bank cap publish the first eight received entries.
+  wire [3:0] ann_pub_count_clamped_w = (ann_pub_count_r > 8'd8)
+      ? 4'd8 : ann_pub_count_r[3:0];
 
   logic [63:0] st_rd_mux_w;
   always_comb begin : st_read_mux
@@ -525,6 +654,10 @@ module KL_gptp_engine
             5'd3: st_rd_mux_w = {48'd0, disp_pd_pn_r};
             default: st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
           endcase
+        end else if (disp_announce_r) begin
+          //! Complete frozen Announce epoch at the same addresses as bank_r;
+          //! fixed-vector and BMCA reads therefore cannot mix parser epochs.
+          st_rd_mux_w = ann_ctx_r[st_addr_w[4:0]];
         end else begin
           st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
         end
@@ -540,13 +673,16 @@ module KL_gptp_engine
           st_rd_mux_w = scratch_r[st_addr_w[5:0]];
       end
       4'd3: begin
-        unique case (st_addr_w[2:0])
-          3'd0: st_rd_mux_w = pub_gm_r;
-          3'd1: st_rd_mux_w = pub_parent_r;
-          3'd2: st_rd_mux_w = {32'd0, pub_flags_r};
-          3'd3: st_rd_mux_w = {32'd0, pub_pdelay_r};
-          3'd4: st_rd_mux_w = {32'd0, pub_offset_r};
-          3'd5: st_rd_mux_w = pub_annq_r;
+        unique case (st_addr_w[3:0])
+          4'd0: st_rd_mux_w = pub_gm_r;
+          4'd1: st_rd_mux_w = pub_parent_r;
+          4'd2: st_rd_mux_w = {32'd0, pub_flags_r};
+          4'd3: st_rd_mux_w = {32'd0, pub_pdelay_r};
+          4'd4: st_rd_mux_w = {32'd0, pub_offset_r};
+          4'd5: st_rd_mux_w = pub_annq_r;
+          4'd6: st_rd_mux_w = {60'd0, pub_path_count_r};
+          4'd8, 4'd9, 4'd10, 4'd11, 4'd12, 4'd13, 4'd14:
+            st_rd_mux_w = pub_path_r[64*(st_addr_w[3:0]-4'd8) +: 64];
           default: st_rd_mux_w = 64'd0;
         endcase
       end
@@ -561,6 +697,12 @@ module KL_gptp_engine
   //! an asCapable port regain mastership and its Sync cadence.
   logic       boot_done_r;
   logic [7:0] boot_cnt_r;
+`ifndef SYNTHESIS
+  //! Address 7 may change raw path state before publication, but the BTCA
+  //! contest must always resolve through address 6 before any COMMIT. This
+  //! assertion makes a µcode mutation that exposes the transient fatal.
+  logic path_stage_pending_r;
+`endif
 
   always_ff @(posedge clk_i) begin : st_port
     if (!rst_n) begin
@@ -585,10 +727,23 @@ module KL_gptp_engine
       tmr_arm_delta_w <= '0;
       tmr_claim_valid_r  <= 1'b0;
       resp_claim_valid_r <= 1'b0;
+`ifndef SYNTHESIS
+      path_stage_pending_r <= 1'b0;
+`endif
     end else begin
       phc_addend_we_o <= 1'b0;
       phc_step_we_o   <= 1'b0;
       tmr_arm_we_w    <= 1'b0;
+`ifndef SYNTHESIS
+      if (local_clock_valid_r &&
+          (local_clock_id_r != scratch_r[6'd25]))
+        $error("PathTrace local clock mirror differs from ucode S_CID");
+      if (pub_commit_o && path_stage_pending_r)
+        $error("PathTrace COMMIT before BTCA path contest resolved");
+      if (pub_commit_o && (pub_path_count_r == 4'd0) &&
+          (pub_path_r != '0))
+        $error("Raw empty PathTrace committed with a nonzero tail");
+`endif
 
       if (!boot_done_r) begin
         boot_cnt_r <= boot_cnt_r + 8'd1;
@@ -615,6 +770,12 @@ module KL_gptp_engine
         unique case (st_addr_w[19:16])
           4'd2: begin
             scratch_r[st_addr_w[5:0]] <= st_wdata_w;
+            // Slot 25 mirrors generator S_CID.
+            if (st_addr_w[5:0] == 6'd25)
+              begin
+                local_clock_id_r    <= st_wdata_w;
+                local_clock_valid_r <= 1'b1;
+              end
             // Slots mirror S_TXQ_TMR=18 and S_TXQ_RESP=41 in the generator.
             // Bit 20 is TXP_PEND_C, so a handler's zero write consumes the
             // resettable validity together with the LUTRAM claim.
@@ -624,13 +785,43 @@ module KL_gptp_engine
               resp_claim_valid_r <= st_wdata_w[20];
           end
           4'd3: begin
-            unique case (st_addr_w[2:0])
-              3'd0: pub_gm_r     <= st_wdata_w;
-              3'd1: pub_parent_r <= st_wdata_w;
-              3'd2: pub_flags_r  <= st_wdata_w[31:0];
-              3'd3: pub_pdelay_r <= st_wdata_w[31:0];
-              3'd4: pub_offset_r <= st_wdata_w[31:0];
-              3'd5: pub_annq_r   <= st_wdata_w;
+            unique case (st_addr_w[3:0])
+              4'd0: pub_gm_r     <= st_wdata_w;
+              4'd1: pub_parent_r <= st_wdata_w;
+              4'd2: pub_flags_r  <= st_wdata_w[31:0];
+              4'd3: pub_pdelay_r <= st_wdata_w[31:0];
+              4'd4: pub_offset_r <= st_wdata_w[31:0];
+              4'd5: pub_annq_r   <= st_wdata_w;
+              //! Address 6 selects the already-staged best path (zero, hence
+              //! no write) or overwrites it with the self-master one-entry
+              //! path (nonzero). The handler has no COMMIT between address 7
+              //! and this own-vs-best contest, so raw transients are private.
+              4'd6: begin
+`ifndef SYNTHESIS
+                path_stage_pending_r <= 1'b0;
+`endif
+                if (st_wdata_w[3:0] != 4'd0) begin
+                  pub_path_count_r <= 4'd1;
+                  pub_path_r       <= '0;
+                end
+              end
+              //! Address 7 stages the current frozen Announce payload only
+              //! after BTCA `take`. Copy all active tails and clear every
+              //! inactive word on this one edge, so a following COMMIT cannot
+              //! expose parser-stale data from a prior longer PathTrace.
+              4'd7: begin
+`ifndef SYNTHESIS
+                path_stage_pending_r <= 1'b1;
+`endif
+                pub_path_count_r <= ann_pub_count_clamped_w;
+                for (int unsigned pk = 0; pk < 7; pk++) begin
+                  if (4'(pk + 2) <= ann_pub_count_clamped_w)
+                    pub_path_r[64*pk +: 64] <=
+                        ann_pub_tail_r[64*pk +: 64];
+                  else
+                    pub_path_r[64*pk +: 64] <= 64'd0;
+                end
+              end
               default: ;
             endcase
           end
@@ -660,6 +851,7 @@ module KL_gptp_engine
       end
     end
   end
+  /* verilator lint_on MULTIDRIVEN */
 
   assign pub_gm_id_o     = pub_gm_r;
   assign pub_parent_id_o = pub_parent_r;
@@ -667,6 +859,9 @@ module KL_gptp_engine
   assign pub_pdelay_ns_o = pub_pdelay_r;
   assign pub_offset_o    = pub_offset_r;
   assign pub_annq_o      = pub_annq_r;
+  assign pub_path_count_o = (pub_gm_r == 64'd0) ? 4'd0
+                                                 : pub_path_count_r;
+  assign pub_path_o       = (pub_gm_r == 64'd0) ? '0 : pub_path_r;
 
   // ------------------------------------------------------------ TX slot
   KL_gptp_tx_slot u_txslot (

@@ -23,6 +23,7 @@
 #include "VKL_gptp_rx_parser.h"
 
 static int checks = 0, fails = 0;
+static const uint64_t LOCAL_CID = 0x02A1B2FFFEC3D4E5ull;
 
 static void expect_eq(const char *what, uint64_t got, uint64_t exp) {
   checks++;
@@ -131,6 +132,8 @@ int main(int argc, char **argv) {
   // reset
   dut->rst_n = 0; dut->rx_valid_i = 0; dut->rx_sof_i = 0;
   dut->rx_eof_i = 0; dut->rx_err_i = 0; dut->rx_data_i = 0;
+  dut->local_clock_id_i = LOCAL_CID;
+  dut->local_clock_valid_i = 1;
   for (int i = 0; i < 4; i++) tick();
   dut->rst_n = 1;
   for (int i = 0; i < 2; i++) tick();
@@ -138,6 +141,41 @@ int main(int argc, char **argv) {
   auto w0_of = [](const Hdr &h) {
     return ((uint64_t)(h.mtype & 0xF) << 48) | ((uint64_t)h.seq << 32) |
            ((uint64_t)h.dom << 24) | ((uint64_t)h.flags << 8) | h.logint;
+  };
+
+  auto announce_frame = [](uint16_t seq, uint64_t gm, uint16_t steps,
+                           uint64_t src,
+                           const std::vector<uint64_t> &path) {
+    Hdr h; h.mtype = 0xB; h.seq = seq; h.flags = 0x0008;
+    h.srcid = src; h.srcpn = 1;
+    const uint16_t suffix = path.empty() ? 0 :
+                            (uint16_t)(4 + 8 * path.size());
+    Frame f = common(h, (uint16_t)(30 + suffix));
+    for (int i = 0; i < 10; i++) f.u8(0);
+    f.u16(0xFFC4); f.u8(0);
+    f.u8(100); f.u32(0xF8FE436A); f.u8(248);
+    f.u64(gm); f.u16(steps); f.u8(0xA0);
+    if (!path.empty()) {
+      f.u16(0x0008); f.u16((uint16_t)(8 * path.size()));
+      for (uint64_t hop : path) f.u64(hop);
+    }
+    return f;
+  };
+  auto set_declared_to_physical = [](Frame &f) {
+    const uint16_t n = (uint16_t)(f.b.size() - 14);
+    f.b[16] = (uint8_t)(n >> 8);
+    f.b[17] = (uint8_t)n;
+  };
+  auto append_tlv = [&](Frame &f, uint16_t type,
+                        const std::vector<uint8_t> &value) {
+    f.u16(type); f.u16((uint16_t)value.size());
+    for (uint8_t b : value) f.u8(b);
+    set_declared_to_physical(f);
+  };
+  auto append_path_tlv = [&](Frame &f, const std::vector<uint64_t> &path) {
+    f.u16(0x0008); f.u16((uint16_t)(8 * path.size()));
+    for (uint64_t hop : path) f.u64(hop);
+    set_declared_to_physical(f);
   };
 
   // ---- Announce with a 2-hop path trace TLV -----------------------------
@@ -155,7 +193,7 @@ int main(int argc, char **argv) {
     f.u16(1);                                        // stepsRemoved
     f.u8(0xA0);                                      // timeSource
     f.u16(0x0008); f.u16(16);                        // path trace TLV
-    f.u64(0x1111111111111111ull);
+    f.u64(0x00220FFFFE334455ull);
     f.u64(0x2222222222222222ull);
     feed(f.b, false);
     expect_eq("ann event", ev_seen ? ev_code : 0, 3);
@@ -170,8 +208,293 @@ int main(int argc, char **argv) {
     expect_eq("ann w10", bank[10],
               (1ull << 48) | (0xA0ull << 40));
     expect_eq("ann w12 hops", bank[12], 2);
-    expect_eq("ann w16 pt0", bank[16], 0x1111111111111111ull);
+    expect_eq("ann w16 pt0", bank[16], 0x00220FFFFE334455ull);
     expect_eq("ann w17 pt1", bank[17], 0x2222222222222222ull);
+  }
+
+  // ---- Announce declared-length and complete-PathTrace boundary --------
+  // A fixed 64-octet Announce without PathTrace is qualified and reported
+  // honestly as count zero. If a declared suffix is present, 10.5.3.3 makes
+  // PathTrace lengthField 8N and N=stepsRemoved+1. These probes bind parsing
+  // to the PTP message rather than physical Ethernet padding and bite
+  // independently on an invalid declared suffix, overrun, truncation,
+  // misalignment, and count mismatch. A valid message may still have
+  // arbitrary physical padding after its declared end.
+  const uint64_t AGM = 0x001122FFFE334455ull;
+  const uint64_t ASRC = 0x001122FFFE556677ull;
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA001, AGM, 0, ASRC, {});
+    feed(f.b, false);                               // declared/exact 64
+    expect_eq("TLV-less ann: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("TLV-less ann: zero count and loop", bank[12], 0);
+    expect_eq("TLV-less ann: no retained identity", bank.count(16), 0);
+    expect_eq("TLV-less ann: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA002, AGM, 1, ASRC, {});
+    // Keep messageLength 64, but append bytes whose physical shape used to
+    // be mistaken for an in-message PathTrace.
+    f.u16(0x0008); f.u16(16); f.u64(AGM); f.u64(LOCAL_CID);
+    feed(f.b, false);
+    expect_eq("out-of-message path: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("out-of-message path: zero count and loop", bank[12], 0);
+    expect_eq("out-of-message path: no retained identity", bank.count(16), 0);
+    expect_eq("out-of-message path: no drop", dut->drop_cnt_o, d0);
+  }
+  // IEEE 1588-2008 14.1: a complete unknown TLV is ignored and the next TLV
+  // is attempted. Generic lengthField is even (5.3.8); zero is permitted.
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA010, AGM, 0, ASRC, {});
+    append_tlv(f, 0x1234, {0xAA, 0x55});
+    feed(f.b, false);
+    expect_eq("unknown-only ann: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("unknown-only ann: zero count", bank[12], 0);
+    expect_eq("unknown-only ann: no identity", bank.count(16), 0);
+    expect_eq("unknown-only ann: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA016, AGM, 0, ASRC, {});
+    //! Structurally valid ORGANIZATION_EXTENSION, but neither this OUI nor
+    //! subtype is recognized here: IEEE 1588-2008 14.1 says skip it.
+    append_tlv(f, 0x0003, {0x12, 0x34, 0x56, 0xAB, 0xCD, 0xEF});
+    feed(f.b, false);
+    expect_eq("unknown organization TLV: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("unknown organization TLV: zero count", bank[12], 0);
+    expect_eq("unknown organization TLV: no identity", bank.count(16), 0);
+    expect_eq("unknown organization TLV: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA011, AGM, 0, ASRC, {});
+    append_tlv(f, 0x1234, {});
+    feed(f.b, false);
+    expect_eq("zero-length unknown ann: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("zero-length unknown ann: zero count", bank[12], 0);
+    expect_eq("zero-length unknown ann: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA012, AGM, 0, ASRC, {});
+    append_tlv(f, 0x1111, {});
+    append_tlv(f, 0x2222, {1, 2, 3, 4});
+    feed(f.b, false);
+    expect_eq("two unknown TLVs: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("two unknown TLVs: zero count", bank[12], 0);
+    expect_eq("two unknown TLVs: no identity", bank.count(16), 0);
+    expect_eq("two unknown TLVs: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA013, AGM, 1, ASRC, {});
+    append_tlv(f, 0x1111, {0xA1, 0xA2});
+    append_path_tlv(f, {AGM, ASRC});
+    feed(f.b, false);
+    expect_eq("unknown before path: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("unknown before path: count", bank[12], 2);
+    expect_eq("unknown before path: head", bank[16], AGM);
+    expect_eq("unknown before path: tail", bank[17], ASRC);
+    expect_eq("unknown before path: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA014, AGM, 1, ASRC, {});
+    append_path_tlv(f, {AGM, ASRC});
+    append_tlv(f, 0x2222, {0xB1, 0xB2});
+    feed(f.b, false);
+    expect_eq("unknown after path: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("unknown after path: count", bank[12], 2);
+    expect_eq("unknown after path: head", bank[16], AGM);
+    expect_eq("unknown after path: tail", bank[17], ASRC);
+    expect_eq("unknown after path: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA015, AGM, 1, ASRC, {});
+    append_tlv(f, 0x1111, {});
+    append_tlv(f, 0x2222, {0xC1, 0xC2});
+    append_path_tlv(f, {AGM, ASRC});
+    append_tlv(f, 0x3333, {1, 2, 3, 4});
+    feed(f.b, false);
+    expect_eq("unknowns around path: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("unknowns around path: count", bank[12], 2);
+    expect_eq("unknowns around path: head", bank[16], AGM);
+    expect_eq("unknowns around path: tail", bank[17], ASRC);
+    expect_eq("unknowns around path: no drop", dut->drop_cnt_o, d0);
+  }
+  // A declared suffix must be a complete chain. Trailing 1..3 header bytes,
+  // odd generic values, length overflow and physical truncation are refused.
+  for (unsigned partial = 1; partial <= 3; partial++) {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame((uint16_t)(0xA020 + partial), AGM, 0, ASRC, {});
+    for (unsigned i = 0; i < partial; i++) f.u8((uint8_t)(0xD0 + i));
+    set_declared_to_physical(f);
+    feed(f.b, false);
+    char n[80];
+    snprintf(n, sizeof n, "partial TLV header %u: no event", partial);
+    expect_eq(n, ev_seen, 0);
+    snprintf(n, sizeof n, "partial TLV header %u: no w12", partial);
+    expect_eq(n, bank.count(12), 0);
+    snprintf(n, sizeof n, "partial TLV header %u: one drop", partial);
+    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA024, AGM, 0, ASRC, {});
+    append_tlv(f, 0x1234, {0xEE});                  // odd lengthField
+    feed(f.b, false);
+    expect_eq("odd unknown length: no event", ev_seen, 0);
+    expect_eq("odd unknown length: no w12", bank.count(12), 0);
+    expect_eq("odd unknown length: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA025, AGM, 0, ASRC, {});
+    f.u16(0x1234); f.u16(0xFFFE);                   // must not wrap containment
+    set_declared_to_physical(f);
+    feed(f.b, false);
+    expect_eq("huge unknown length: no event", ev_seen, 0);
+    expect_eq("huge unknown length: no w12", bank.count(12), 0);
+    expect_eq("huge unknown length: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA026, AGM, 0, ASRC, {});
+    f.u16(0x1234); f.u16(4); f.u16(0xCAFE);         // declares value overrun
+    set_declared_to_physical(f);
+    feed(f.b, false);
+    expect_eq("unknown crosses declaration: no event", ev_seen, 0);
+    expect_eq("unknown crosses declaration: no w12", bank.count(12), 0);
+    expect_eq("unknown crosses declaration: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA027, AGM, 0, ASRC, {});
+    append_tlv(f, 0x1234, {1, 2, 3, 4});
+    f.b.resize(f.b.size() - 2);                     // declaration stays longer
+    feed(f.b, false);
+    expect_eq("physically truncated unknown: no event", ev_seen, 0);
+    expect_eq("physically truncated unknown: no w12", bank.count(12), 0);
+    expect_eq("physically truncated unknown: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA028, AGM, 0, ASRC, {});
+    append_path_tlv(f, {AGM});
+    f.u16(0x1234);                                  // partial TLV after path
+    set_declared_to_physical(f);
+    feed(f.b, false);
+    expect_eq("malformed after valid path: no event", ev_seen, 0);
+    expect_eq("malformed after valid path: no w12", bank.count(12), 0);
+    expect_eq("malformed after valid path: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  // Only one PATH_TRACE is defined for an Announce. Reject duplicates before
+  // a second value can overwrite the selected count, hide a conflict or hide
+  // a local-identity loop.
+  for (unsigned duplicate = 0; duplicate < 3; duplicate++) {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame((uint16_t)(0xA030 + duplicate), AGM, 0, ASRC, {});
+    append_path_tlv(f, {AGM});
+    const uint64_t hop = duplicate == 0 ? AGM
+                       : duplicate == 1 ? 0x00BAD0FFFE000001ull : LOCAL_CID;
+    append_path_tlv(f, {hop});
+    feed(f.b, false);
+    char n[88];
+    snprintf(n, sizeof n, "duplicate path %u: no event", duplicate);
+    expect_eq(n, ev_seen, 0);
+    snprintf(n, sizeof n, "duplicate path %u: no w12", duplicate);
+    expect_eq(n, bank.count(12), 0);
+    snprintf(n, sizeof n, "duplicate path %u: one drop", duplicate);
+    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA040, AGM, 0, ASRC, {});
+    append_tlv(f, 0x1234, std::vector<uint8_t>(1432, 0x5A));
+    feed(f.b, false);                               // messageLength == 1500
+    expect_eq("maximum unknown TLV: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("maximum unknown TLV: zero count", bank[12], 0);
+    expect_eq("maximum unknown TLV: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA009, AGM, 0, ASRC, {});
+    f.b[16] = 0; f.b[17] = 68;                      // declares a suffix
+    f.u32(0xDEADBEEF);                              // but no complete TLV
+    feed(f.b, false);
+    expect_eq("declared suffix without path: no event", ev_seen, 0);
+    expect_eq("declared suffix without path: no w12", bank.count(12), 0);
+    expect_eq("declared suffix without path: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA003, AGM, 1, ASRC, {AGM, ASRC});
+    f.b.resize(f.b.size() - 8);                     // declared 2, got 1
+    feed(f.b, false);
+    expect_eq("truncated path: no event", ev_seen, 0);
+    expect_eq("truncated path: no w12", bank.count(12), 0);
+    expect_eq("truncated path: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA008, AGM, 1, ASRC, {AGM, ASRC});
+    f.b[16] = 0; f.b[17] = 76;                      // declares only 1 hop
+    feed(f.b, false);                               // physical 2nd is padding
+    expect_eq("declared path overrun: no event", ev_seen, 0);
+    expect_eq("declared path overrun: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA004, AGM, 0, ASRC, {AGM});
+    f.b[81] = 9;                                    // lengthField 9
+    f.b[16] = 0; f.b[17] = 77;                      // contains all 9 bytes
+    f.u8(0xEE);
+    feed(f.b, false);
+    expect_eq("misaligned path: no event", ev_seen, 0);
+    expect_eq("misaligned path: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA005, AGM, 2, ASRC, {AGM, ASRC});
+    feed(f.b, false);                               // N=2, steps+1=3
+    expect_eq("path-count mismatch: no event", ev_seen, 0);
+    expect_eq("path-count mismatch: one drop", dut->drop_cnt_o,
+              (uint16_t)(d0 + 1));
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA006, AGM, 0, ASRC, {AGM});
+    f.u16(0x0008); f.u16(8); f.u64(LOCAL_CID);      // physical padding
+    feed(f.b, false);
+    expect_eq("valid ann with padding: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("valid ann with padding: count", bank[12], 1);
+    expect_eq("valid ann with padding: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    std::vector<uint64_t> path;
+    path.push_back(AGM);
+    for (unsigned i = 1; i < 8; i++) path.push_back(0x7000 + i);
+    path.push_back(LOCAL_CID);                       // ninth, beyond storage
+    Frame f = announce_frame(0xA007, AGM, 8, ASRC, path);
+    feed(f.b, false);
+    expect_eq("deep self path: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("deep self path: full count+loop", bank[12], 0x109);
+    expect_eq("deep self path: first retained", bank[16], AGM);
+    expect_eq("deep self path: eighth retained", bank[23], 0x7007);
+    expect_eq("deep self path: no drop", dut->drop_cnt_o, d0);
   }
 
   // ---- Sync -------------------------------------------------------------
@@ -471,7 +794,7 @@ int main(int argc, char **argv) {
   // it must hold for every type the table names, not only the Follow_Up
   // that motivated it (the #18 review's MR8, the arm narrowed to
   // Follow_Up, passed both suites). For each of Sync (44, Table 11-8),
-  // Announce (64, Table 10-7), Pdelay_Resp and Pdelay_Resp_Follow_Up
+  // Pdelay_Resp and Pdelay_Resp_Follow_Up
   // (54, Tables 11-12 / 11-13), Pdelay_Req (54, Table 11-11, #12) and
   // Signaling (34, the header alone): a physically complete frame
   // declaring one octet below the minimum is refused at the
@@ -479,7 +802,7 @@ int main(int argc, char **argv) {
   // the same frame declaring the exact minimum dispatches with no drop.
   struct LenArm { const char *tag; uint8_t mtype; uint16_t minlen; uint8_t ev; };
   const LenArm len_arms[] = {
-    {"sync", 0x0, 44, 1}, {"announce", 0xB, 64, 3}, {"pdresp", 0x3, 54, 5},
+    {"sync", 0x0, 44, 1}, {"pdresp", 0x3, 54, 5},
     {"pdrfu", 0xA, 54, 6}, {"pdreq", 0x2, 54, 4}, {"signaling", 0xC, 34, 7},
   };
   for (const LenArm &a : len_arms) {
@@ -718,7 +1041,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 3; i++) tick();
     expect_eq("sof and eof without valid: not a frame", dut->drop_cnt_o, d3);
   }
-  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 45));
+  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 44));
 
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   delete dut;
