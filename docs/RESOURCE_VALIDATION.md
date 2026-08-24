@@ -392,3 +392,57 @@ reaches, because the cadence leg the injected frame re-arms
 desynchronises every exchange after it), lint clean. The parser suite
 carries one more that the engine suite cannot see, one type dropped
 from the list: Signaling refused, 5 checks.
+
+## The portNumber half of the pairing arm: ROM words only, again
+
+FPGA-gPTP #36, found by the parent's negative campaign the round after
+#8 landed: the pairing round implemented the Figure 11-8
+`requestingPortIdentity` arm as one `FMT_Q` compare against the parser's
+bank word 6, which is the clockIdentity and nothing else. The 16-bit
+portNumber the same parser lands in bank word 7 was never read, and the
+generator's own header said so ("the clockIdentity alone, never the
+portNumber"). A Pdelay_Resp carrying OUR clockIdentity at a portNumber
+that is not ours was therefore taken: the parent measured the pair
+completing, `neighborPropDelay` published at 4,054,625 ns where the real
+exchange had left 599, and `asCapable` dropped -- a frame addressed to
+another port removing this port from the gPTP domain.
+
+The fix is the other half of the same arm, on both Pdelay receive
+messages: bank word 7 against `OUR_PORTNUM_C`, the one definition of
+thisPort, which `e_hdr` already writes into every `sourcePortIdentity`
+this engine transmits. One constant, both directions, so the transmit
+and receive halves cannot drift apart. The two compares stay separate
+branches per message rather than one shared helper: each is then its own
+arm to plant against, and the parent's campaign distinguishes them.
+
+No RTL changed. The ROM grew from 927 to 935 real words of 1,024 (+8:
+four words per message, `RDST` the bank word, `CMP` against the
+constant, `BRS` past the exit, `BR` out). Same instrument, Vivado 2026.1
+OOC on `xc7a100tfgg484-2` at 100 MHz, 2026-08-24, against the pin
+c33fb1af (PR #24, the unlisted messageType arm) re-measured the same day
+in its own clone:
+
+| | c33fb1af (PR #24, the unlisted messageType arm) | the portNumber half | delta |
+|---|---|---|---|
+| Slice LUTs | 3,116 (2,790 logic + 326 LUTRAM) | **3,116** (2,790 + 326) | **0** |
+| `u_ucpu` LUTs | 1,997 | 1,997 | 0 |
+| `u_parser` LUTs | 543 | 543 | 0 |
+| Registers | 2,390 | 2,390 | 0 |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+1.898 ns, met** | 0 |
+
+Byte-identical, as a ROM-only change must be, and the same shape the
+pairing round measured for the same reason: the ROM is 1,024 words deep
+whether 927 or 935 of them are real. Verification at this measurement:
+ucpu 768 / parser 167 / engine 327 checks, sixty-six planted mutations
+red, lint clean. This round's two are the new arm bypassed one message
+at a time (the `BR out` deleted, so a mismatch falls through): on the
+Pdelay_Resp half 46 of the engine suite's 327 checks fail, headed by
+`Resp at a foreign requesting portNumber: pdelay unmoved got
+00000000fffffe71 exp 0000000000000259`; on the Follow_Up half 42 fail,
+headed by `Follow_Up at a foreign requesting portNumber: pdelay
+unmoved`, with the Pdelay_Resp probe still green. Both cascades are the
+poisoned `neighborPropDelay` travelling downstream, which is the defect
+itself: this suite has no recovery gate between its sections, so a
+wrongly consumed pair desynchronises every exchange after it.

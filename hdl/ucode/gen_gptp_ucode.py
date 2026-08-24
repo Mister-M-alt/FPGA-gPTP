@@ -68,8 +68,11 @@ Pdelay_Resp owns the stored t2/t4 and the pairing, which keeps one
 exchange's timestamps from one clock; the multiple-responder policy
 itself stays the Milan 4.2.6.2.5 cease rule below (the 2011 figure's
 RESET on a second response is not adopted, as the v7 round decided for
-same-identity duplicates). Identity scope is unchanged: the clockIdentity
-alone, never the portNumber.
+same-identity duplicates). Identity scope is the WHOLE
+requestingPortIdentity the figure names: the clockIdentity and the
+16-bit portNumber behind it (bank words 6 and 7), so a response
+addressed to another port of this clock arms nothing and consumes
+nothing (FPGA-gPTP #36).
 
 --- v7, the cease-rule round ---
 
@@ -275,6 +278,13 @@ PT_CAP_C = 8                    # hops the message bank holds (w16..w23):
 # ---- 802.1AS-2011 11.2.15.3 Pdelay_Resp / Resp_Follow_Up pairing ------------
 RSP_ARMED_C = 0x10000           # set above the 16-bit sequenceId in
                                 # S_RSPSEQ: a zero word is "no response"
+OUR_PORTNUM_C = 1               # thisPort. ONE definition, read by both
+                                # sides: e_hdr writes it into every
+                                # sourcePortIdentity we transmit, and the
+                                # Pdelay receive guards qualify a received
+                                # requestingPortIdentity.portNumber against
+                                # it. A second copy would let the transmit
+                                # and receive halves drift apart in silence
 
 # ---- our clock vector (Milan defaults) -------------------------------------
 P1_C, P2_C = 248, 248
@@ -451,7 +461,7 @@ def e_hdr(p, mtype, flags, seq_reg, logint, msglen):
     p.emit("BFLD", ra=0, fmt=FMT_D)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("BFLD", ra=RC, fmt=FMT_Q)
-    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("MOVE", rd=RT, ra=0, imm=OUR_PORTNUM_C)
     p.emit("BFLD", ra=RT, fmt=FMT_W)
     p.emit("BFLD", ra=seq_reg, fmt=FMT_W)
     p.emit("MOVE", rd=RT, ra=0, imm=control)
@@ -732,9 +742,19 @@ def prog_rx_pdreq(base):
 def prog_rx_pdresp(base):
     p = Prog(base)
     e_guard_init(p, "out")
+    # 11.2.15.3 (Figure 11-8, WAITING_FOR_PDELAY_RESP): the response is
+    # ours only when its requestingPortIdentity is THIS PORT'S -- both
+    # halves. The clockIdentity is bank word 6, the 16-bit portNumber
+    # bank word 7, and the two are separate branches so each is its own
+    # arm to plant against (FPGA-gPTP #36)
     p.emit("RDST", rd=RA, imm=RG_BANK | 6, fmt=FMT_Q)
     p.emit("RDST", rd=RB, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=RB, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="myclk")
+    p.emit("BR", label="out")
+    p.label("myclk")
+    p.emit("RDST", rd=RA, imm=RG_BANK | 7, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_W, imm=OUR_PORTNUM_C)
     p.emit("BRS", cnd=BRS_Z, label="mine")
     p.emit("BR", label="out")
     p.label("mine")
@@ -798,9 +818,21 @@ def prog_rx_pdresp(base):
 def prog_rx_pdrfu(base):
     p = Prog(base)
     e_guard_init(p, "out")
+    # Figure 11-8's WAITING_FOR_PDELAY_RESP_FOLLOW_UP transition names
+    # the sequenceId and the sourcePortIdentity of the stored
+    # Pdelay_Resp (both in prog_leg_pdpost), NOT the Follow_Up's own
+    # requestingPortIdentity. Qualifying it here anyway is the engine's
+    # own hardening, and it carries the same identity scope as the
+    # response half above: clockIdentity in bank word 6, portNumber in
+    # bank word 7
     p.emit("RDST", rd=RA, imm=RG_BANK | 6, fmt=FMT_Q)
     p.emit("RDST", rd=RB, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=RB, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label="myclk")
+    p.emit("BR", label="out")
+    p.label("myclk")
+    p.emit("RDST", rd=RA, imm=RG_BANK | 7, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_W, imm=OUR_PORTNUM_C)
     p.emit("BRS", cnd=BRS_Z, label="mine")
     p.emit("BR", label="out")
     p.label("mine")

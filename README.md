@@ -67,8 +67,17 @@ neighborPropDelay and dropping asCapable (#8): both Pdelay receive
 handlers now pair per 802.1AS-2011 11.2.15.3, a Pdelay_Resp taken only
 for the outstanding request's sequenceId and never again once its
 exchange has completed, a Follow_Up only behind that Pdelay_Resp and
-from its sender (+32 ROM words, zero LUT). Nothing of #6 through #12
-remains open. The donor issues open at this commit are all review
+from its sender (+32 ROM words, zero LUT), and then the half of that
+same arm the pairing round left unimplemented (#36, found by the
+parent's negative campaign): both Pdelay receive handlers qualified
+`requestingPortIdentity.clockIdentity` and stopped there, so a
+Pdelay_Resp carrying our clockIdentity at a portNumber that is not ours
+was taken, published a delay measured across a conversation this port
+is not part of and dropped asCapable. Figure 11-8 names the WHOLE
+requestingPortIdentity, so the 16-bit portNumber the parser lands in
+bank word 7 is now compared against `OUR_PORTNUM_C` on both messages
+(+8 ROM words, zero LUT). Nothing of #6 through #12 remains open, and
+neither does #36. The donor issues open at this commit are all review
 findings on pre-existing behaviour: #23 (a Pdelay_Resp sourced from our
 own clockIdentity climbs the asCapable ladder, the Figure 11-8
 thisClock condition; in review as PR #25), #26 (a Pdelay_Req sourced
@@ -76,8 +85,9 @@ from our own clockIdentity is answered, the same rule on the responder
 side) and #27 (a zero-gap 1-byte runt landing the cycle after a dropped
 frame is not counted); the issue tracker is the authority, not this
 paragraph. Measured at this commit (`main` 9d5fb025 plus the unlisted
-messageType arm): ucpu 768 / parser 167 / engine 323 checks, sixty-four
-planted mutations red, lint clean; the ROM is 927 of 1,024 words; the
+messageType arm, plus the #36 portNumber arm): ucpu 768 / parser 167 /
+engine 327 checks, sixty-six planted mutations red, lint clean; the ROM
+is 935 of 1,024 words; the
 engine synthesizes OOC at 3,116 LUT / 2,390 FF / WNS +1.898 ns
 (`docs/RESOURCE_VALIDATION.md`).
 
