@@ -14,7 +14,10 @@
 //                buffered — the sys-side producer is ~10x faster than
 //                the 100M wire drain, so it can never underrun after
 //                that. sfd_toggle at the SFD (egress timestamp point),
-//                done_toggle at frame end (egress-timestamp return).
+//                done_toggle at frame end (egress-timestamp return). The
+//                stamped frame's {messageType, sequenceId} is extracted
+//                from that same FIFO stream and held stable around the
+//                done toggle for bundled-data CDC back to sys.
 //---------------------------------------------------------------------------//
 `default_nettype none
 
@@ -33,6 +36,8 @@ module bench_mii_tx (
 
     output logic       sfd_toggle_o,
     output logic       done_toggle_o,
+    output logic [15:0] frame_seq_o,
+    output logic  [3:0] frame_type_o,
     output logic [15:0] tx_cnt_o
 );
 
@@ -49,6 +54,7 @@ module bench_mii_tx (
   logic        fcs_ph_r;
   logic [4:0]  ifg_r;
   logic [15:0] cnt_r;
+  logic [5:0]  frame_byte_r;
 
   function automatic logic [31:0] crc32_byte(input logic [31:0] c,
                                              input logic [7:0] d);
@@ -88,6 +94,9 @@ module bench_mii_tx (
       f_rd_o        <= 1'b0;
       sfd_toggle_o  <= 1'b0;
       done_toggle_o <= 1'b0;
+      frame_seq_o   <= '0;
+      frame_type_o  <= '0;
+      frame_byte_r  <= '0;
     end else begin
       f_rd_o <= 1'b0;
 
@@ -110,11 +119,14 @@ module bench_mii_tx (
           mii_d_o      <= 4'hD;
           sfd_toggle_o <= ~sfd_toggle_o;
           // fetch the first byte (sof word)
-          byte_r <= f_data_i[7:0];
-          last_r <= f_data_i[8];
-          crc_r  <= crc32_byte('1, f_data_i[7:0]);
-          f_rd_o <= 1'b1;
-          st_r   <= S_LO;
+          byte_r       <= f_data_i[7:0];
+          last_r       <= f_data_i[8];
+          crc_r        <= crc32_byte('1, f_data_i[7:0]);
+          f_rd_o       <= 1'b1;
+          frame_byte_r <= '0;
+          frame_seq_o  <= '0;
+          frame_type_o <= '0;
+          st_r         <= S_LO;
         end
 
         S_LO: begin
@@ -134,6 +146,17 @@ module bench_mii_tx (
             crc_r  <= crc32_byte(crc_r, f_data_i[7:0]);
             f_rd_o <= 1'b1;
             st_r   <= S_LO;
+            if (frame_byte_r != 6'h3F)
+              frame_byte_r <= frame_byte_r + 6'd1;
+            // Untagged gPTP: messageType is frame byte 14 and sequenceId
+            // is the big-endian word at frame bytes 44..45. case selects
+            // the word being fetched, i.e. the byte after frame_byte_r.
+            unique case (frame_byte_r)
+              6'd13: frame_type_o      <= f_data_i[3:0];
+              6'd43: frame_seq_o[15:8] <= f_data_i[7:0];
+              6'd44: frame_seq_o[7:0]  <= f_data_i[7:0];
+              default: ;
+            endcase
           end
         end
 

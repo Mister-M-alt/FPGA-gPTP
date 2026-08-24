@@ -277,9 +277,10 @@ S_PTIDX, S_ZERO = 37, 38                 # path-trace walk: the DESC_ADDR
                                          # a word on either
 S_TXQ_RESP = 41                          # the second egress-timestamp
                                          # claim. Each claim holds the
-                                         # sequenceId its frame went out
-                                         # with, or'd with TXP_PEND_C while
-                                         # that frame's stamp is owed and
+                                         # {messageType, sequenceId} its
+                                         # frame went out with, or'd with
+                                         # TXP_PEND_C while that frame's
+                                         # stamp is owed and
                                          # with TXP_SYNC_C when the frame
                                          # is a Sync, and zero once the
                                          # stamp has been taken. Two cells
@@ -306,6 +307,10 @@ PT_CAP_C = 8                    # hops the message bank holds (w16..w23):
                                 # mirrors KL_gptp_rx_parser's cap
 
 # ---- 802.1AS-2011 11.2.15.3 Pdelay_Resp / Resp_Follow_Up pairing ------------
+TXT_TYPE_SHIFT_C = 16           # claim bits [19:16] carry messageType
+TXT_TYPE_MASK_C = 0xF << TXT_TYPE_SHIFT_C
+TXT_PDREQ_C = 0x2 << TXT_TYPE_SHIFT_C
+TXT_PDRESP_C = 0x3 << TXT_TYPE_SHIFT_C
 TXP_PEND_C = 0x100000           # "a stamp is owed for this frame" and,
 TXP_SYNC_C = 0x200000           # for the timer-driven claim, "the frame
                                 # is a Sync, so its stamp builds the
@@ -317,7 +322,7 @@ TXP_SYNC_C = 0x200000           # for the timer-driven claim, "the frame
                                 # is masked to TXQ_MASK_C before it is
                                 # compared: the sequenceId is 16 bits on
                                 # the wire, the counters behind it are not
-TXQ_MASK_C = 0xFFFF | TXP_PEND_C | TXP_SYNC_C
+TXQ_MASK_C = 0xFFFF | TXT_TYPE_MASK_C | TXP_PEND_C | TXP_SYNC_C
 RSP_ARMED_C = 0x10000           # set above the 16-bit sequenceId in
                                 # S_RSPSEQ: a zero word is "no response"
 
@@ -772,11 +777,11 @@ def prog_rx_pdreq(base):
     # of 1588, so the base clause applies through the profile rather than
     # through any 802.1AS clause of its own.
     #
-    # Answering our own reflected request is not merely useless: the
-    # response takes the shared S_PEND cell, so an egress timestamp our
-    # own outstanding Pdelay_Req was waiting for is routed to the
-    # Follow_Up leg instead and t1 is lost (#28, which this compare does
-    # not close: any peer's request in that window does the same).
+    # Answering our own reflected request is not merely useless: before
+    # #28, a response could steal the egress timestamp our outstanding
+    # Pdelay_Req was waiting for. The type-qualified claim below closes
+    # that routing ambiguity, while this identity gate remains required
+    # by the base protocol.
     #
     # Refusing ahead of the scratch writes is belt-and-braces, not
     # load-bearing: measured, moving the compare below them leaves the
@@ -802,7 +807,8 @@ def prog_rx_pdreq(base):
     p.emit("BFLD", ra=RC, fmt=FMT_W)
     # RA still holds the request's sequenceId, the one this response
     # carries and the one the stamper reads back at the MAC boundary
-    p.emit("ALU", rd=RT, ra=RA, rb=0, cnd=ALU_OR, imm=TXP_PEND_C)
+    p.emit("ALU", rd=RT, ra=RA, rb=0, cnd=ALU_OR,
+           imm=TXP_PEND_C | TXT_PDRESP_C)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)
     p.emit("SEND")
     p.label("out")
@@ -912,35 +918,24 @@ def prog_rx_signal(base):
 
 
 def prog_tx_ts(base):
-    """Match the stamp to a claim by sequenceId, which narrows the guess.
+    """Match the stamp to a claim by {messageType, sequenceId}.
 
-    KL_gptp_txstamp reads the sequenceId at the MAC boundary and returns it
-    beside the timestamp; the engine carries it in the event descriptor and
-    the dispatch preloads that descriptor into REV, sequenceId at bits
-    [31:16]. Comparing it against the claim its transmitter left is
-    order-independent, so it rests on no assumption about the order stamps
-    come back in, which is a property of the parent's merge and stamper
-    that this repository cannot establish.
+    The parent stamper returns both fields from the PTP header beside the
+    timestamp. The engine packs messageType in REV[19:16] and sequenceId
+    in REV[15:0]. Every transmitter that needs a stamp leaves the same pair
+    in its claim, so credit is order-independent even when both ends start
+    their 16-bit counters at zero. Frames that deliberately leave no claim
+    (Announce and both Follow_Up kinds) cannot clear another frame's claim,
+    because their messageType differs. Two frames of one claimed type are
+    never outstanding at once; the transmitter-side claim gates establish
+    that invariant.
 
-    This does NOT make the credit unambiguous, and #28 stays open for what
-    it does not cover. Sixteen bits of sequenceId is not an identity: two
-    outstanding frames whose tags coincide are indistinguishable here, and
-    the two ends of a link both start S_MYSEQ at zero and advance once a
-    second, so their request sequences are equal from boot rather than
-    coinciding one time in 65,536. Worse, three legs SEND and leave no
-    claim at all, prog_leg_anntx, prog_leg_syncfu and prog_leg_rfu, while
-    the parent's stamper stamps every armed 0x88F7 frame without filtering
-    on messageType, so a stamp from one of those can match and clear a
-    claim that belongs to a different frame. What this arm does achieve is
-    real: the shared cell is gone, each claim is explicit, and the case
-    that used to be a certainty rather than a coincidence, a peer request
-    landing anywhere in our outstanding interval, is closed. The clean
-    closure is msgType beside the sequenceId
-    (kebag-logic/milan-fpga#214), after which this compare takes both and
-    #28 can close."""
+    The engine still has one timestamp holding register, so two returns
+    arriving before the first dispatch can overwrite it; that independent
+    buffering defect remains FPGA-gPTP #31."""
     p = Prog(base)
-    p.emit("ALU", rd=RU, ra=REV, rb=0, cnd=ALU_SHR, imm=16)
-    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=0xFFFF)
+    p.emit("ALU", rd=RU, ra=REV, rb=0, cnd=ALU_AND,
+           imm=0xFFFF | TXT_TYPE_MASK_C)
     p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_OR, imm=TXP_PEND_C)
     p.emit("RDST", rd=RA, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=TXQ_MASK_C)
@@ -1121,7 +1116,8 @@ def prog_tmr(base, mac, seq_seed=0):
     # routed to the Sync Follow_Up leg. Masking here also bounds the
     # counter itself, since the write-back below takes the masked value
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=0xFFFF)
-    p.emit("ALU", rd=RT, ra=RA, rb=0, cnd=ALU_OR, imm=TXP_PEND_C)
+    p.emit("ALU", rd=RT, ra=RA, rb=0, cnd=ALU_OR,
+           imm=TXP_PEND_C | TXT_PDREQ_C)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_ADD, imm=1)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
