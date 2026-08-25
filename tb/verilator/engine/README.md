@@ -32,8 +32,9 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 5 | become-master waits for asCapable |
 | 7b | 802.1AS-2011 11.2.15.3 (Figure 11-8): a Pdelay_Resp_Follow_Up pairs with ONE Pdelay_Resp for the outstanding request. Before any Resp, with a stale sequenceId (the parent campaign's 0xEEEE probe), behind a stale-sequence Resp (0xEEEE, and the outstanding sequence with its high byte flipped), from another responder, duplicated, or for a superseded request it leaves pdelay and asCapable unmoved (a wrongly consumed one would publish -400 ns and clear asCapable); the paired Follow_Up and the next exchange compute the model value |
 | 8b | a BETTER Announce in a foreign domain never reaches BTCA: GM, parent, flags and the raw published vector hold and the drop is counted (802.1AS-2011 8.1, IEEE 1588-2008 9.5.1) |
-| 8c..8m | 802.1AS-2011 10.3.10.2.1 qualifyAnnounce: a priority1-1 Announce from our own clockIdentity (a), with stepsRemoved 255, 0x0100 or 0xFFFF (b: the 16-bit field, not its low byte), or with our identity in its path trace (c: the second hop, the eighth hop at the bank's cap, the fourth of twelve beyond it, the FIRST hop of two with a bridge behind us, the only hop) is refused ahead of every write: GM, parent, flags and the raw published vector hold, and the parser's drop counter does not move (a qualification refusal is not a header drop). The first-hop shape is the one loop an end station meets without forgery, our own Announce returned through a bridge; it pins the walk's base word |
-| 8h, 8k, 8l | the controls adopt: stepsRemoved 254 and a one-hop path trace without us, landing in a bank whose upper hop words still hold our identity (the walk is gated by the TLV's hop count, not the bank's depth); then two announces whose source clockIdentity and first hop each differ from ours in one 32-bit half only (the compares are 64 bits wide, never a half); each announcer's degrade hands mastership straight back (10.3.5) |
+| 8c..8m | 802.1AS-2011 10.3.10.2.1 qualifyAnnounce: a priority1-1 Announce from our own clockIdentity (a), with stepsRemoved 255, 0x0100 or 0xFFFF (b: the 16-bit field, not its low byte), or with our identity in its path trace (c: the second hop, the eighth retained hop, the tenth of twelve beyond the public cap, the FIRST hop of two with a bridge behind us, the only hop) is refused ahead of every write: GM, parent, flags and the raw published vector hold. The twelve-hop case is the first nonzero PathTrace after reset and proves the deferred count belongs to that event while the parser's complete-wire loop bit sees identities beyond retained word 23. The first-hop shape is the ordinary loop of our own Announce returned through a bridge |
+| 8h, 8k, 8l, 8n | controls adopt the maximum 179-identity PathTrace allowed by the declared untagged Ethernet payload, proving every identity was checked before the first eight publish; two smaller valid sequences whose head equals GM while their source and a later hop differ from ours in one 32-bit half only prove the compares are 64 bits wide; a fixed competing Announce without PathTrace adopts with honest raw count zero and all tails zero (10.3.10.2.1(d), 10.3.13.2.1(f)); each announcer's degrade hands mastership straight back (10.3.5) |
+| 9 | adoption publishes a four-entry canonical path; unrelated worse Announces with and without PathTrace each reach `they_win` and re-commit without replacing selected path A with B or raw zero. A twelve-entry refresh clamps to eight, a three-entry refresh clears inactive tails, then an exact eight-entry refill makes the fixed no-PathTrace transition prove all seven tails clear beside raw count zero. A complete unknown-only suffix also publishes raw zero, while an unknown TLV before a valid PathTrace is skipped and the later path becomes selected. TLV-shaped physical padding remains count zero. A partial generic header, odd unknown length, TLV crossing messageLength, physical truncation, duplicate PathTrace, length 9, N != stepsRemoved+1 and a head unequal to GM each produce no commit and one parser drop. Behind a stalled response, same-sequence A owns the frozen context while literal EOF/SOF-adjacent B/C are counted drops; both nonempty and raw-empty A snapshots remain coherent and the first post-release C is accepted |
 | 10, 12 | sync-ok rises on a completed pair, falls at 375 ms (Table 4.2) |
 | 11 | a Follow_Up later than 125 ms pairs with nothing (Table 4.2) |
 | 11b | a Sync/Follow_Up pair in a foreign domain never steers: offset, PHC writes and flags hold, both drops are counted, and the foreign Sync leaves no pending slot for a domain-0 Follow_Up |
@@ -44,13 +45,13 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 15 | closed loop: a +140 ppm master (above half the clamp on purpose) locks under 200 ns after one re-base, the addend carrying its rate |
 | 16, 17 | a Follow_Up pairs only with its Sync's sequenceId AND sourcePortIdentity (11.4.4) |
 | 18 | gmId tie -> stepsRemoved (shorter wins, longer loses) -> sourcePortIdentity tiebreak switches the parent with NO sync-ok flicker |
-| 18b | a delayed dispatch reads the frame its event names (the second bank): a worse announce beside a parent Sync REJECTS, never a wrongful takeover |
+| 18b | a delayed dispatch reads the complete frozen context its event names: a worse announce beside a parent Sync REJECTS, never a wrongful takeover |
 | 19 | a parent degrading below us yields mastership IMMEDIATELY (10.3.5) |
 | 20 | every two-step Sync carries ten zero reserved bytes (Table 11-8); phase 7 proves its Follow_Up still carries the live egress timestamp |
 | 21 | an asCapable fall stops sync consumption and steering; recovery resumes it |
 | 21b | become resets the best record: no ghost GM outlives the receipt timeout |
 | 21c | the priority vector outranks the identity in the compare order |
-| 21d | the same delayed shape with a BETTER announce ADOPTS: the torn-read window is retired, the v6 seq guard stays belt-and-braces |
+| 21d | the same delayed shape with a BETTER announce ADOPTS from its frozen context; no live-bank sequence guard is part of the proof |
 | 22 | negative pdelay in [-80, 0) keeps asCapable (4.2.6.2.7) |
 | 23 | over 800 ns clears it (neighborPropDelayThresh, 4.2.6.1.1) |
 | 24 | recovery needs two good exchanges again |
@@ -59,25 +60,25 @@ v1.2 4.2.6 profile number is pinned by a phase that fails if it drifts:
 | 26b | a completed exchange cannot be completed again (Figure 11-8 as corrected by Cor2-2015): with asCapable down and one exchange in, the identical Resp + Follow_Up pair replayed is not a second exchange (asCapable holds down, Milan 4.2.6.2.4) and a replay with t4 skewed +2 us cannot move the published delay |
 | 27 | the Milan 4.2.6.2.5 cease rule: three multi-identity intervals stop Pdelay_Req and drop asCapable, the cadence countdown resumes them, the ladder re-earns; SAME-identity duplicates are not a storm; replayed forged response pairs (t3 skewed) can neither climb nor publish mid-cease |
 | 27b | a second identity answering AFTER the first responder's Follow_Up (the exchange already completed, so its Pdelay_Resp takes the handler's post-completion path) still counts for the Milan 4.2.6.2.5 cease: asCapable falls, no requests over the window, the countdown resumes them, the ladder re-earns |
-| 28 | a warm reset during a cease still resumes: the countdown lives in reset-surviving scratch and the boot re-arms the cadence |
+| boot, 28 | before ROM init installs the local clockIdentity, a first-event nine-hop self path is parser-refused. After warm reset, a valid better no-PathTrace Announce first commits the expected GM/parent with count zero and seven zero tails, with no mixed snapshot in that selected epoch; the write-snooped identity remains valid and a later ninth-hop self loop is accepted by the parser but refused by qualification. The cease countdown still lives in reset-surviving scratch and boot re-arms the cadence |
 | 29 | a chasing Follow_Up cannot steal the Resp's arrival stamp: the ingress timestamp stages at sof and commits at EOF into the bank the frame occupies (the parent fabric bench's finding -- a single register loses to back-to-back delivery) |
 | 30 | a zero-gap 1-byte runt cannot poison the predecessor's stamp: the commit is length-qualified (>= 3 bytes -- no event-carrying frame is shorter, and a runt's eof can land before the predecessor's bank flip) |
 | 31 | warm reset withholds the boundary return of an outstanding Pdelay_Req, Pdelay_Resp and master Sync in turn. The two reset-surviving scratch claims read empty after reset, a fresh response pair completes, and the hardware bootstrap re-arms both request and Announce-receipt timers so master Sync cadence returns without a bitstream reload (#41) |
 | 32 | `tx_ready_i` is low at the first byte, in the body, for one cycle and for many cycles; capture advances only on valid/ready. Two different peer requests enter before response 1's boundary stamp, response 2 waits while two accepted Signaling frames reuse both ping-pong banks, and each response still carries its exact ingress `requestReceiptTimestamp` and gets the Follow_Up carrying its own requester identity, port and exact egress stamp with zero event drops (#40, #33) |
 
-The same 408-check workload runs against three generated images: the shipping
+The same 656-check workload runs against three generated images: the shipping
 image, `S_MYSEQ` seeded to `0x200000`, and `S_SSEQ` seeded to `0x10000`. The
 last image reaches Sync 65,536 immediately; without the 16-bit bound, its
 first type-0 return cannot match the aliased type-1 claim and the cadence
 stops (#39).
 
-All eighty-five planted mutations turn the run red. The list below
-enumerates eighty-four of them, and the shortfall is inherited rather
-than new: the headline moved from thirty-one to thirty-six and then to
-forty on rounds that each named three new mutations, so it has run ahead
-of the prose since before the field campaign. The arithmetic has been
-exact since forty-one, every round since names its own, and this round's
-eight mutations are named explicitly below. The list: (the own-source rule removed, its
+Every planted mutation turns the run red. The historical enumeration below
+has an inherited one-entry headline/prose shortfall: the headline moved from
+thirty-one to thirty-six and then to forty on rounds that each named three new
+mutations, so it has run ahead of the prose since before the field campaign.
+The arithmetic was exact from forty-one through the pre-PathTrace rounds; the
+later PathTrace and TLV-walker controls are tabulated separately below. The
+list: (the own-source rule removed, its
 identity compare narrowed to 32 bits, the stepsRemoved bound off by one
 in either direction, its compare narrowed to a byte, a dead path-trace
 compare, the hop compare narrowed to 32 bits, the hop read from the next
@@ -124,8 +125,10 @@ the Follow_Up TLV block applied to Sync as well, the Pdelay_Req
 minimum reverted to the 34-octet header, and the unlisted messageType
 arm removed, so a frame no handler claims dispatches into the timer
 program, the queued Pdelay request snapshot bypassed so two accepted
-Signaling chasers erase its handler input, and only that snapshot's ingress
-timestamp bypassed back to the live bank).
+Signaling chasers erase its handler input, only that snapshot's ingress
+timestamp bypassed back to the live bank, inactive public PathTrace tails left
+unchanged on a shorter selection, later frames allowed to overwrite the owned
+Announce context, and the owned-context Announce admission/drop gate disabled).
 
 The eight new negative controls fail independently. The first seven recorded
 results predate the two permanent `requestReceiptTimestamp` assertions:
@@ -141,6 +144,26 @@ names the corrupted `requestReceiptTimestamp`. The differing reached totals
 are expected: a missing cadence or response removes later frame-dependent
 assertions; every mutation returns non-zero and names its first violated
 invariant.
+
+The original three PathTrace/context mutations remain independently red on
+their 471-check baseline: removing inactive-tail zeroing gives 465 PASS / 6
+FAIL; allowing later frames to overwrite the frozen context gives 466 / 5;
+disabling the Announce admission/drop gate gives 469 / 2. Seven strict
+present-TLV controls on the pre-adjudication 514-check workload remove, in
+turn, deferred owner capture (513 / 1), either declared-boundary guard set
+(508 / 6 each), lengthField alignment (508 / 6), all-hop self comparison
+(437 / 77), N = stepsRemoved+1 (508 / 6), and cold local-clock validity
+(513 / 1).
+
+The current generic-walker controls are independently red on the 268-check
+parser workload: stopping after the first nonzero TLV value reaches 255 PASS /
+13 FAIL, changing exact-fit containment from `>` to `>=` reaches 234 / 34,
+and removing singular-PathTrace rejection reaches 259 / 9. On the 656-check
+engine workload, removing inactive-tail zeroing first names five stale-tail
+failures in the count-eight-to-short transition and then terminates at the
+independent `raw empty ... nonzero tail` RTL assertion on the next count-zero
+COMMIT. The production form was restored before the exact-head merge bar and
+OOC measurement.
 
 ## Engine input-drive ledger
 

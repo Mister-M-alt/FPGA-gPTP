@@ -794,3 +794,115 @@ with ready low (384 / 9 of 393). On the current 408-check workload, bypassing
 only the queued request's saved ingress timestamp gives 407 / 1 and names the
 corrupted `requestReceiptTimestamp`. Each production form was restored before
 the OOC and routed builds.
+
+## Raw selected PathTrace and bounded Announce parsing: +1,333 LUT
+
+The parent fabric-owner transition needs more than the selected GM and parent:
+its public GET_AS_PATH contract serves the selected published sequence through
+eight entries. The prior donor exported no PathTrace count or vector, so a
+default fabric build could reconstruct only `{GM,parent}` and silently lose a
+longer received path. This round exports `pub_path_count_o` as the raw selected
+path count and `pub_path_o` as entries 1..7. A present sequence includes the
+separately exported GM at entry zero. An otherwise-valid fixed 64-octet
+Announce without PathTrace publishes honest raw count zero with every tail
+zero, as the absent case in 10.3.10.2.1(d) and 10.3.13.2.1(f) requires, rather
+than fabricating `[GM]`. A fabric consumer preserves that empty received path;
+only the parent's legacy software-staging mode retains its historical GM-only
+alias. A valid sequence longer than the retained eight is checked in full and
+explicitly clamped to the first eight at the public boundary.
+
+The parser treats declared PTP messageLength as the security boundary, not
+the physical Ethernet frame length. Per IEEE 1588-2008 5.3.8/14.1 and
+802.1AS-2011 10.5.1, its generic walker skips complete even-length unknown
+TLVs (including zero-length values) and attempts the next TLV. The complete
+suffix must end on a TLV boundary. It refuses a declaration above the untagged
+1,500-octet payload, an actual frame shorter than its declaration, a partial
+header, an odd, wrapping or crossing length, malformed data after a valid
+PathTrace, and duplicate PathTrace TLVs. A present PathTrace additionally
+requires a nonzero 8N length, N equal to stepsRemoved + 1, and a first identity
+equal to grandmasterIdentity. Exact length 64 and complete unknown-only suffixes
+publish raw zero; bytes beyond messageLength are padding and cannot alter that
+result. As many as 179 wire identities are compared against a write-snooped
+local clockIdentity. Word 12 freezes the full count and complete-path loop
+verdict while words 16..23 retain the first eight. Before ROM initialization
+installs that identity, Announce is refused. The mirror is warm-retentive like
+scratch and adds no second scratch read port.
+
+The selected record moves only in BTCA's `take` block. A worse unrelated
+Announce may reach the common `they_win` publication path, but it never stages
+its PathTrace and therefore re-commits the retained GM, parent and path as one
+tuple. A current-parent refresh does take and replaces the tuple; a local win
+overwrites it with `[self]` before the handler's sole COMMIT. A nonempty
+received path is also required to start with the Announce's separate
+grandmasterIdentity. Replacing a forged head would synthesize a sequence that
+was never received, so the handler rejects it instead.
+
+Announce handler lifetime is bounded independently of the two live parser
+banks. The parser's one write stream fills one 32 x 64-bit frozen context RAM;
+the accepted Announce owns it through handler END. Chasing Announces are
+explicitly dropped and included in `dbg_ev_drop_o` while it is owned, whereas
+other event types continue through the four-entry queue. This makes overload
+observable and prevents a third frame or a repeated 16-bit sequenceId from
+turning bank reuse into an ABA guard. Once the handler releases the context,
+the next Announce is accepted normally.
+
+Vivado infers that context as eleven RAM32M primitives. Handler fixed-vector
+and BMCA reads use its one serial port; the parser's streaming loop verdict
+removed the old indexed w16..w23 qualification walk. A
+separate 456-bit frozen publication payload holds only `{count,w17..w23}` so
+BTCA address 7 can stage the whole selected tail on one edge without fourteen
+more ROM instructions or a wide eight-way handler-read mux. The parser
+intentionally leaves words above a shorter path stale; address 7 count-gates
+the payload and writes zero to every inactive public slot. No initialization
+of the payload is required because a qualified frame writes w12 and every word
+its retained count makes active before its event can run. The deferred w12 and
+event are tied to the accepted owner even when the next frame's SOF is exactly
+one cycle after EOF, so a zero-gap successor cannot substitute a stale count.
+
+Same instrument, Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100 MHz,
+2026-08-25, with exact donor base `7def718e9bf5898c82f2c8da9d5c4ce330ebd6f2`
+(tree `431b5c64f84df4ab27117a0ecc5e4904ea360454`) re-measured in a separate
+worktree:
+
+| | `7def718e` (`main`) | PathTrace/ownership repair | delta |
+|---|---|---|---|
+| Slice LUTs | 3,336 (2,914 logic + 422 LUTRAM) | **4,669** (4,203 + 466) | **+1,333** |
+| Registers | 2,635 | **3,734** | **+1,099** |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +2.445 ns | **+1.898 ns, met** | -0.547 ns |
+
+The standalone µCPU remains at 1,701 LUT / 734 registers / 1.5 BRAM tiles /
+4 DSP, WNS +1.949 ns; the shipping ROM is 924 real words of 1,024.
+Verification at this measurement is ucpu 768 / parser 268 / engine 656 checks
+in each of the shipping, high-request and
+high-Sync images, plus both strict engine and Arty-top lint gates. Directed
+controls cover absent, unknown, complete and malformed TLV chains, physical padding,
+first-ever nonzero and maximum 179-entry traces, all-hop loop detection before
+and after warm reset, long-to-short inactive clearing, greater-than-eight
+clamping, forged heads, worse-current retention, current-parent refresh,
+local-GM transition, and a three-Announce same-sequence backlog where zero-gap
+A remains coherent, B/C are counted drops, and the first post-release C is
+accepted.
+
+Three new safe mutations make that coverage red independently. Removing the
+inactive-tail zero writes gives 465 PASS / 6 FAIL of 471 (the long-to-short and
+post-release traces expose retained words). Letting later frames write the
+owned frozen context gives 466 / 5 (A's count/tail and two delayed-dispatch
+identity outcomes tear). Disabling the Announce admission/drop gate gives
+469 / 2 (B/C commit and neither refusal is counted). Seven additional strict
+present-TLV controls on the pre-adjudication 514-check workload remove, in
+turn, deferred owner capture (513 / 1), declared containment guards (508 / 6),
+physical-completion guards (508 / 6), 8N alignment (508 / 6), all-hop self
+comparison (437 / 77), N = stepsRemoved+1 (508 / 6), and cold local-identity
+validity (513 / 1).
+
+The current generic-walker controls are independently red on the 268-check
+parser workload: stopping after the first nonzero TLV value reaches 255 PASS /
+13 FAIL, changing exact-fit containment from `>` to `>=` reaches 234 / 34,
+and removing singular-PathTrace rejection reaches 259 / 9. On the 656-check
+engine workload, removing inactive-tail zeroing first names five stale-tail
+failures in the count-eight-to-short transition and then terminates at the
+independent raw-empty/nonzero-tail RTL assertion on the next count-zero COMMIT.
+Production RTL was restored before the measured synthesis and exact-commit
+merge bar.
