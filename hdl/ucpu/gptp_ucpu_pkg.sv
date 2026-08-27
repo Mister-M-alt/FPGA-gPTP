@@ -31,11 +31,10 @@
 //                event handlers, not descriptor walks; half the AECP depth
 //                is one RAMB36 less on the reference part.
 //
-//                The register file is 16 x 64 bits. r15..r13 are preloaded
-//                at dispatch with the event descriptor:
+//                The register file is 16 x 64 bits. r15 and r14 are
+//                preloaded at dispatch with the event descriptor:
 //                  r15 = {event_code[7:0], seq_id[15:0], aux[15:0]}
 //                  r14 = event timestamp 0 (rx capture / expiry time, ns)
-//                  r13 = event timestamp 1 (secondary capture, ns)
 //---------------------------------------------------------------------------//
 `default_nettype none
 
@@ -80,7 +79,7 @@ package gptp_ucpu_pkg;
     OP_CHECK_LOCK = 5'd13,  // kept; unused (no lock context)
     OP_CHECK_ARG  = 5'd14,
     OP_MAP_VALID  = 5'd15,  // kept; unused
-    // Gather (atomic snapshots: live PHC, free-running ms)
+    // Gather (engine-selected atomic snapshots)
     OP_GATHER_EXT = 5'd16,
     OP_READ_CTRS  = 5'd17,  // kept; unused
     // Iterate

@@ -31,7 +31,7 @@
 //                  4  PHC control       WO  (0 rate addend, 1 step)
 //                  5  timer arm         WO  (slot = addr, delta ms = data)
 //
-//                gather: sel 0 = live PHC ns snapshot, sel 1 = ms now.
+//                gather: free-running millisecond time.
 //
 //                The publish bank IS the software contract this plane
 //                retires (GM identity, asCapable/sync verdicts, peer
@@ -47,7 +47,7 @@
 //                Dispatch is gated on the serializer being idle so a handler
 //                never builds into a slot still on the wire.
 //                r14 carries the frame's ingress timestamp (or the
-//                egress stamp for EV_TX_TS), r13 the PHC at dispatch.
+//                egress stamp for EV_TX_TS).
 //---------------------------------------------------------------------------//
 `default_nettype none
 
@@ -82,7 +82,6 @@ module KL_gptp_engine
     input  wire   [3:0] txts_type_i,
 
     //! PHC face (the parent timestamp_counter's knobs)
-    input  wire  [63:0] phc_ns_i,
     output logic        phc_addend_we_o,
     output logic [31:0] phc_addend_o,
     output logic        phc_step_we_o,
@@ -498,7 +497,7 @@ module KL_gptp_engine
                  disp_ready_w && ser_idle_w && !disp_valid_r;
 
   logic [UPC_W_C-1:0] disp_upc_r;
-  logic [63:0] disp_ev_r, disp_ts0_r, disp_ts1_r;
+  logic [63:0] disp_ev_r, disp_ts0_r;
   logic        disp_bank_r;
   logic        disp_pdreq_r;
   logic [63:0] disp_pd_cid_r;
@@ -510,7 +509,6 @@ module KL_gptp_engine
       disp_upc_r   <= '0;
       disp_ev_r    <= '0;
       disp_ts0_r   <= '0;
-      disp_ts1_r   <= '0;
       disp_bank_r  <= 1'b0;
       disp_pdreq_r <= 1'b0;
       disp_announce_r <= 1'b0;
@@ -526,7 +524,6 @@ module KL_gptp_engine
         disp_announce_r <= 1'b0;
         disp_ev_r   <= {24'd0, txts_ev_w};
         disp_ts0_r  <= txts_r;
-        disp_ts1_r  <= phc_ns_i;
       end else if (pop_w) begin
         disp_upc_r   <= entry_w;
         disp_bank_r  <= ev_head_w[0];
@@ -541,7 +538,6 @@ module KL_gptp_engine
                           : (ev_head_w[39:32] == EV_RX_PDREQ_C)
                               ? evq_pd_ctx_r[evq_rp_r][63:0]
                               : rxts_bank_r[ev_head_w[0]];
-        disp_ts1_r <= phc_ns_i;
       end
     end
   end
@@ -579,7 +575,6 @@ module KL_gptp_engine
       .disp_upc_i         (disp_upc_r),
       .disp_ev_i          (disp_ev_r),
       .disp_ts0_i         (disp_ts0_r),
-      .disp_ts1_i         (disp_ts1_r),
       .st_req_o           (st_req_w),
       .st_we_o            (st_we_w),
       .st_name_o          (st_name_w),
@@ -843,11 +838,10 @@ module KL_gptp_engine
         endcase
       end
 
-      // gather: atomic snapshots
+      // gather: atomic millisecond snapshot
       gx_valid_r <= gx_req_w && !gx_valid_r;
       if (gx_req_w) begin
-        gx_data_r <= (gx_sel_w[3:0] == 4'd1) ? {32'd0, ms_now_w}
-                                             : phc_ns_i;
+        gx_data_r <= {32'd0, ms_now_w};
       end
     end
   end
