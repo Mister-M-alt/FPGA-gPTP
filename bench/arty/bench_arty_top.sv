@@ -266,7 +266,6 @@ module bench_arty_top (
       .txts_ns_i          (txts_r),
       .txts_seq_i         (txts_seq_r),
       .txts_type_i        (txts_type_r),
-      .phc_ns_i           (phc_ns_w),
       .phc_addend_we_o    (phc_add_we_w),
       .phc_addend_o       (phc_add_w),
       .phc_step_we_o      (phc_step_we_w),

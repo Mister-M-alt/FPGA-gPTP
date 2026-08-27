@@ -284,7 +284,6 @@ static void tick() {
         (__int128)(int64_t)dut->phc_step_o << 24);
   }
   phc_acc += (unsigned __int128)(uint64_t)((500ll << 24) + phc_adj);
-  dut->phc_ns_i = phc();
   if (tx_fire) {
     if (tx_sof) { cur.clear(); in_tx = true; }
     if (in_tx) cur.push_back(tx_data);
@@ -626,7 +625,6 @@ int main(int argc, char **argv) {
   dut->tx_ready_i = 1;
   dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
   dut->txts_type_i = 0;
-  dut->phc_ns_i = 0;
   for (int i = 0; i < 8; i++) tick();
   dut->rst_n = 1;
 

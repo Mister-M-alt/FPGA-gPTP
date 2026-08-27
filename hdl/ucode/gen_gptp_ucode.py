@@ -383,7 +383,7 @@ TX_CONTROL_BY_TYPE_C = {
 # ---- register conventions --------------------------------------------------
 R0, RA, RB, RC, RD_, RT, RU, RSEC, RNS, RP = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
 RV, RW = 10, 11
-REV, RTS0, RTS1 = 15, 14, 13
+REV, RTS0 = 15, 14
 
 # shared-leg bases: filled by the packing pass, referenced through LB[]
 LB = {}
@@ -1118,15 +1118,15 @@ def prog_tb_battery(base):
     p = Prog(base)
     for n, cnd in enumerate([ALU_ADD, ALU_SUB, ALU_AND, ALU_OR, ALU_XOR,
                              ALU_SHL, ALU_SHR, ALU_SAR]):
-        p.emit("ALU", rd=1, ra=14, rb=13, cnd=cnd)
+        p.emit("ALU", rd=1, ra=RTS0, rb=REV, cnd=cnd)
         p.emit("WRST", ra=1, imm=RG_SCR | n, fmt=FMT_Q)
-    p.emit("MD", rd=1, ra=14, rb=13, cnd=MD_MULS)
+    p.emit("MD", rd=1, ra=RTS0, rb=REV, cnd=MD_MULS)
     p.emit("WRST", ra=1, imm=RG_SCR | 8, fmt=FMT_Q)
-    p.emit("MD", rd=1, ra=14, rb=13, cnd=MD_DIVU)
+    p.emit("MD", rd=1, ra=RTS0, rb=REV, cnd=MD_DIVU)
     p.emit("WRST", ra=1, imm=RG_SCR | 9, fmt=FMT_Q)
-    p.emit("ALU", rd=1, ra=14, rb=0, cnd=ALU_ADD, imm=0xABC)
+    p.emit("ALU", rd=1, ra=RTS0, rb=0, cnd=ALU_ADD, imm=0xABC)
     p.emit("WRST", ra=1, imm=RG_SCR | 10, fmt=FMT_Q)
-    p.emit("ALU", rd=1, ra=14, rb=0, cnd=ALU_SHR, imm=16)
+    p.emit("ALU", rd=1, ra=RTS0, rb=0, cnd=ALU_SHR, imm=16)
     p.emit("WRST", ra=1, imm=RG_SCR | 11, fmt=FMT_Q)
     p.emit("END")
     return p

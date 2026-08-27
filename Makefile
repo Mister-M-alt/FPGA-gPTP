@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
 
-.PHONY: all tb lint ooc clean
+.PHONY: all contract tb lint ooc clean
 
-all: tb lint
+all: contract tb lint
+
+contract:
+	python3 tb/check_phc_contract.py
 
 tb:
 	$(MAKE) -C tb/verilator/ucpu

@@ -200,10 +200,11 @@ other build is bit-identical.
   tag into its event and credits only the exact transmitter claim; an
   unclaimed Announce or Follow_Up stamp cannot consume another frame's
   timestamp.
-- PHC: `phc_ns_i` is the live `timestamp_counter` value; the engine's
-  adjfine pulse is latched to a level in the shadow and its adjtime passes
-  through, both onto the counter's knobs in place of the CSR face's
-  `/dev/ptpN` writes; settime stays with the CSR face (boot sets the epoch).
+- PHC: the engine's adjfine pulse is latched to a level in the shadow and its
+  adjtime passes through, both onto the `timestamp_counter` knobs in place of
+  the CSR face's `/dev/ptpN` writes; settime stays with the CSR face (boot sets
+  the epoch). Ingress and egress timestamps enter through their event-specific
+  interfaces; the engine has no free-running nanosecond-counter input.
 - Publish bank out: GM identity, parent identity, flags (present, gm,
   asCapable, sync), peer delay, offset, `pub_annq`, and the raw selected
   PathTrace leave the engine beside its commit pulse. For a present

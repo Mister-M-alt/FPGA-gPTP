@@ -176,11 +176,11 @@ OOC measurement.
 | `rx_ts_i` | live | independently selected ingress timestamp per injected frame |
 | `tx_ready_i` | live | phase 32 drives first-beat, body, one-cycle and long stalls; capture advances only on a valid/ready handshake (#33) |
 | `txts_valid_i`, `txts_ns_i`, `txts_seq_i`, `txts_type_i` | live | automatic and deliberately reordered/withheld returns carry the selected frame's exact stamp and complete header tag; #31 bounds the remaining one-entry behavior |
-| `phc_ns_i` | live, intentionally unread by shipping µcode | the PHC model advances and is steered every tick; #38 records the lack of a behavioral consumer rather than hiding it behind a constant |
 
 There are no other engine inputs. Constant `rx_err_i` is therefore an explicit
 parent-interface contract with direct lower-level coverage, not an accidental
-blind spot; every other functional input changes in this workload.
+blind spot; every remaining functional input changes in this workload and is
+read by logic the DUT executes.
 
 ```sh
 make        # regenerates gptp_ucode.hex from hdl/ucode/, builds, runs

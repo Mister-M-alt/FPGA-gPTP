@@ -5,7 +5,7 @@
 //
 // Drives the µCPU directly (no wrap needed: every observable is a port),
 // dispatching the TB battery µprogram at entry 704 with random and directed
-// operand pairs preloaded into r14/r13. The program computes twelve results
+// operand pairs preloaded into r14/r15. The program computes twelve results
 // (ADD/SUB/AND/OR/XOR/SHL/SHR/SAR/MULS/DIVU + two immediate forms) and
 // writes each to scratch words 0..11 through the state port; this harness
 // implements the state port, records the writes, and compares every one
@@ -100,9 +100,8 @@ int main(int argc, char **argv) {
 
     rec.clear();
     dut->disp_upc_i  = 704;
-    dut->disp_ev_i   = 0x0102030405060708ull;
+    dut->disp_ev_i   = b;                // -> r15
     dut->disp_ts0_i  = a;                // -> r14
-    dut->disp_ts1_i  = b;                // -> r13
     dut->disp_valid_i = 1;
     tick();
     while (!dut->disp_ready_o) { dut->disp_valid_i = 0; tick();

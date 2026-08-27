@@ -991,3 +991,54 @@ The rows are separable. With the Follow_Up arm bypassed the Pdelay_Resp
 probe does not appear in the failure list at all, and the last two rows
 are the direction FPGA-gPTP #30 recorded as unpinned on the Follow_Up
 path, which no probe drove before this round.
+
+## Removing the unread PHC nanosecond input
+
+FPGA-gPTP #38 found that the engine bench drove `phc_ns_i` but no shipped
+microprogram read either path it fed. FPGA-gPTP #46 made the interface
+decision: remove that input, its dispatch register and r13 preload, and the
+nanosecond leg of the gather mux. The event-specific ingress and egress
+timestamp inputs, the millisecond gather source, and both PHC adjustment
+outputs remain.
+
+The standalone arithmetic battery now supplies its second operand through the
+event preload at r15. This keeps all 768 independent ALU/multiply/divide checks
+without preserving a test-only consumer of the deleted r13 preload. A source
+contract in `tb/check_phc_contract.py` rejects any return of the removed port
+or preload tokens and also requires the surviving event timestamp and PHC
+control paths in both the engine and the Arty integration.
+
+Same instrument, Vivado 2026.1 OOC on `xc7a100tfgg484-2` at 100 MHz,
+2026-08-27. The exact `main` base `5d2c0f31129cb165229ee68bb9e8c6f50f56e038`
+and implementation commit `8f1d5fc` were synthesized consecutively from the
+same worktree path:
+
+| engine OOC | `5d2c0f3` (`main`) | input removed | delta |
+|---|---:|---:|---:|
+| Slice LUTs | 4,669 (4,203 logic + 466 LUTRAM) | **4,719** (4,253 + 466) | **+50** |
+| Registers | 3,734 | **3,639** | **-95** |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.898 ns | **+2.249 ns, met** | **+0.351 ns** |
+
+| standalone µCPU OOC | `5d2c0f3` (`main`) | preload removed | delta |
+|---|---:|---:|---:|
+| Slice LUTs | 1,701 (1,569 logic + 132 LUTRAM) | **1,643** (1,511 + 132) | **-58** |
+| Registers | 734 | **733** | **-1** |
+| BRAM tiles | 1.5 | 1.5 | 0 |
+| DSP48E1 | 4 | 4 | 0 |
+| WNS at 100 MHz, OOC | +1.949 ns | **+1.941 ns, met** | -0.008 ns |
+
+The aggregate engine LUT result is recorded as measured, not replaced by
+#46's earlier tie-off estimate: this full removal returned 95 registers and
+improved WNS, but the flattened engine mapped to 50 more LUTs. The hierarchy
+report attributes 150 fewer LUTs to `u_ucpu` (2,785 to 2,635) and 200 more
+across the rebuilt surrounding hierarchy. Those attributions are synthesis
+mapping outcomes rather than separately optimized module totals; the engine
+total above is the result that matters. The standalone µCPU measurement
+independently shows the removed preload logic shrinking by 58 LUTs.
+
+Verification at this measurement: the PHC source contract passes; uCPU 768 /
+parser 268 / engine 664 checks pass in the shipping, high-request and
+high-Sync images; the two-tag Arty MII test passes; strict engine and Arty-top
+lint are clean; and the generated ROM remains 932 real words of 1,024.

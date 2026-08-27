@@ -28,8 +28,8 @@
 //                the ROM is 1024 deep (UPC_W_C = 10 — event handlers, not
 //                descriptor walks), and dispatch clears the build cursor
 //                to 0 (a gPTP PDU has no 12-byte AECP response header).
-//                r15/r14/r13 preload at dispatch: event descriptor,
-//                timestamp 0, timestamp 1 (gptp_ucpu_pkg).
+//                r15/r14 preload at dispatch: event descriptor and
+//                timestamp 0 (gptp_ucpu_pkg).
 //
 //                RAW hazard: single pending-writeback interlock. Branches
 //                resolve in E and flush F/D. Multi-cycle operations
@@ -52,7 +52,6 @@ module KL_gptp_ucpu
     input  wire  [UPC_W_C-1:0] disp_upc_i,
     input  wire  [63:0]        disp_ev_i,     //! -> r15 event descriptor
     input  wire  [63:0]        disp_ts0_i,    //! -> r14 timestamp 0
-    input  wire  [63:0]        disp_ts1_i,    //! -> r13 timestamp 1
 
     //! state port: engine region map (msg bank / ts regs / scratch /
     //! publish / phc / timer), 1RW, single outstanding
@@ -67,7 +66,7 @@ module KL_gptp_ucpu
     input  wire  [63:0] st_rdata_i,
     input  wire         st_err_i,
 
-    //! gather port: atomic snapshots (live PHC ns, free-running ms)
+    //! gather port: engine-selected atomic snapshots
     output logic        gx_req_o,
     output logic  [7:0] gx_sel_o,
     input  wire         gx_valid_i,
@@ -122,8 +121,8 @@ module KL_gptp_ucpu
   end
 
   // ------------------------------------------------------- machine state
-  typedef enum logic [2:0] {
-    S_IDLE, S_PRE2, S_PRE1, S_PRE0, S_RUN
+  typedef enum logic [1:0] {
+    S_IDLE, S_PRE_EV, S_PRE_TS0, S_RUN
   } mstate_e;
   mstate_e ms_r;
 
@@ -456,12 +455,10 @@ module KL_gptp_ucpu
     rf_waddr_w = wb_rd_r;
     rf_wdata_w = wb_data_r;
     unique case (ms_r)
-      S_PRE2: begin rf_we_w = 1'b1; rf_waddr_w = 4'd15;
-                    rf_wdata_w = disp_ev_i; end
-      S_PRE1: begin rf_we_w = 1'b1; rf_waddr_w = 4'd14;
-                    rf_wdata_w = disp_ts0_i; end
-      S_PRE0: begin rf_we_w = 1'b1; rf_waddr_w = 4'd13;
-                    rf_wdata_w = disp_ts1_i; end
+      S_PRE_EV: begin rf_we_w = 1'b1; rf_waddr_w = 4'd15;
+                      rf_wdata_w = disp_ev_i; end
+      S_PRE_TS0: begin rf_we_w = 1'b1; rf_waddr_w = 4'd14;
+                       rf_wdata_w = disp_ts0_i; end
       default: ;
     endcase
   end
@@ -514,7 +511,7 @@ module KL_gptp_ucpu
           vld_d_r <= 1'b0;
           vld_e_r <= 1'b0;
           if (disp_valid_i) begin
-            ms_r        <= S_PRE2;
+            ms_r        <= S_PRE_EV;
             upc_r       <= disp_upc_i;
             status_r    <= ST_OK_C;
             z_r         <= 1'b0;
@@ -531,9 +528,8 @@ module KL_gptp_ucpu
             md_go_r     <= 1'b0;
           end
         end
-        S_PRE2: ms_r <= S_PRE1;
-        S_PRE1: ms_r <= S_PRE0;
-        S_PRE0: ms_r <= S_RUN;
+        S_PRE_EV:  ms_r <= S_PRE_TS0;
+        S_PRE_TS0: ms_r <= S_RUN;
 
         S_RUN: begin
           // ---------------- F: µcode ROM sync read ----------------------
