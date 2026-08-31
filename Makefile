@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
 
-.PHONY: all contract tb lint ooc clean
+.PHONY: all contract tb lint docs diagrams-check ooc clean
 
-all: contract tb lint
+all: contract tb lint docs
 
 contract:
 	python3 tb/check_phc_contract.py
@@ -22,6 +22,14 @@ lint:
 	  hdl/wire/KL_gptp_rx_parser.sv hdl/wire/KL_gptp_tx_slot.sv \
 	  hdl/common/KL_gptp_timer.sv hdl/top/KL_gptp_engine.sv
 	$(MAKE) -C bench/arty lint
+
+docs: diagrams-check
+	python3 scripts/check_docs.py
+	python3 scripts/check_docs.py --selftest
+
+diagrams-check:
+	python3 scripts/generate_diagrams.py --check
+	python3 scripts/generate_diagrams.py --selftest
 
 ooc:
 	syn/ooc/run.sh
