@@ -2,14 +2,19 @@
   "algorithm": "sha256",
   "files": {
     "gptp_architecture.drawio": "87242ec3fc513ea9fb072a3c93e7e6d08283965156e7f8b9fc8f59f83a84020e",
-    "gptp_architecture.png": "d4461a454645bdeba6faa97fe3abda6bc860ff402e5ab639aab7a2964922c447",
+    "gptp_architecture.png": "944e868b7e7fc218a55c688a5d04634a0d8f29520a00a61cfb22a541b0e6b689",
     "gptp_architecture.svg": "c5e9b2bd7d8c1897154a1d8c59547399ed3f6b2ed2d42b978c563788ecd9af96",
     "wavedrom/rx_accept.json": "9e8699a3f57c3dd428d0f1c3e3b0f5831bc7716b5d2ee1614858168ac0aff29c",
-    "wavedrom/rx_accept.png": "8df686a41ff3adce295d92e7e7091870bb650f734b29eeb3c0940450e5c09c3e",
+    "wavedrom/rx_accept.png": "2eaf1fef493a44e525e6a1626da45919556dcfd4d5c1c3f4886dc70af09b7d02",
     "wavedrom/rx_accept.svg": "f7845d48819fa2c38a1d0ddaac74f013b9d59c98a7b4a846bcab4847e3bafde6",
     "wavedrom/tx_backpressure.json": "23904c5f71395f57ebd931070c07d14f07f099c53547ca5c64322020a43f1fbf",
-    "wavedrom/tx_backpressure.png": "8cac57ab59e3c2122f7cef2f90d66c47fe35970efb22abcd4331e3a3305b257a",
+    "wavedrom/tx_backpressure.png": "2dcaf69bdda54b6809bb7ca65985ff5a50b696f5420538a793794bf0f68424e5",
     "wavedrom/tx_backpressure.svg": "65b5364333ee8ee6ad4f3da29c51cb1f076a95256bd5ff77805cba2994695ee0"
   },
-  "schema": 1
+  "png_sources": {
+    "gptp_architecture.png": "gptp_architecture.drawio",
+    "wavedrom/rx_accept.png": "wavedrom/rx_accept.json",
+    "wavedrom/tx_backpressure.png": "wavedrom/tx_backpressure.json"
+  },
+  "schema": 2
 }

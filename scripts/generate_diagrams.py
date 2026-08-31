@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""Render and verify source-bound documentation diagrams."""
+"""Render and verify documentation diagram sources and previews."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+import zlib
 from pathlib import Path
 
 
@@ -22,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DIAGRAMS = ROOT / "docs" / "diagrams"
 WAVEDROM = DIAGRAMS / "wavedrom"
 MANIFEST = DIAGRAMS / "manifest.json"
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_SOURCE_KEY = b"Source-SHA256"
 
 ASSETS = (
     "gptp_architecture.drawio",
@@ -34,6 +37,12 @@ ASSETS = (
     "wavedrom/tx_backpressure.svg",
     "wavedrom/tx_backpressure.png",
 )
+
+PNG_BINDINGS = {
+    "gptp_architecture.png": "gptp_architecture.drawio",
+    "wavedrom/rx_accept.png": "wavedrom/rx_accept.json",
+    "wavedrom/tx_backpressure.png": "wavedrom/tx_backpressure.json",
+}
 
 EVIDENCE = {
     "hdl/top/KL_gptp_engine.sv": (
@@ -160,10 +169,93 @@ def validate_wave(path: Path, expected: dict[str, str]) -> list[str]:
     ]
 
 
+def display_path(path: Path) -> str:
+    """Return one stable path for diagnostics."""
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.name
+
+
+def png_chunks(data: bytes) -> list[tuple[bytes, bytes]]:
+    """Parse and CRC-check one complete PNG stream."""
+    if not data.startswith(PNG_SIGNATURE):
+        raise ValueError("invalid PNG signature")
+    chunks: list[tuple[bytes, bytes]] = []
+    offset = len(PNG_SIGNATURE)
+    while offset < len(data):
+        if offset + 12 > len(data):
+            raise ValueError("truncated PNG chunk")
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        kind = data[offset + 4 : offset + 8]
+        payload_end = offset + 8 + length
+        chunk_end = payload_end + 4
+        if chunk_end > len(data):
+            raise ValueError("truncated PNG payload")
+        payload = data[offset + 8 : payload_end]
+        recorded_crc = struct.unpack(">I", data[payload_end:chunk_end])[0]
+        actual_crc = zlib.crc32(payload, zlib.crc32(kind)) & 0xFFFFFFFF
+        if recorded_crc != actual_crc:
+            raise ValueError("invalid PNG chunk CRC")
+        chunks.append((kind, payload))
+        offset = chunk_end
+        if kind == b"IEND":
+            if offset != len(data):
+                raise ValueError("data follows PNG end marker")
+            return chunks
+    raise ValueError("missing PNG end marker")
+
+
+def encode_png_chunk(kind: bytes, payload: bytes) -> bytes:
+    """Encode one PNG chunk with its checksum."""
+    crc = zlib.crc32(payload, zlib.crc32(kind)) & 0xFFFFFFFF
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
+
+
+def bind_png(path: Path, source: Path) -> None:
+    """Embed the editable source digest inside one rendered PNG."""
+    chunks = png_chunks(path.read_bytes())
+    marker = PNG_SOURCE_KEY + b"\0"
+    binding = marker + sha256(source).encode("ascii")
+    output = bytearray(PNG_SIGNATURE)
+    for kind, payload in chunks:
+        if kind == b"tEXt" and payload.startswith(marker):
+            continue
+        if kind == b"IEND":
+            output.extend(encode_png_chunk(b"tEXt", binding))
+        output.extend(encode_png_chunk(kind, payload))
+    path.write_bytes(output)
+
+
+def validate_png_binding(path: Path, source: Path) -> list[str]:
+    """Verify one PNG embeds its editable source digest."""
+    marker = PNG_SOURCE_KEY + b"\0"
+    try:
+        values = [
+            payload[len(marker) :].decode("ascii")
+            for kind, payload in png_chunks(path.read_bytes())
+            if kind == b"tEXt" and payload.startswith(marker)
+        ]
+        expected = sha256(source)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        return [f"{display_path(path)}: unreadable source binding: {error}"]
+    if values != [expected]:
+        return [f"{display_path(path)}: PNG source binding differs"]
+    return []
+
+
+def validate_png_bindings(diagrams: Path = DIAGRAMS) -> list[str]:
+    """Verify every generated PNG against its editable source."""
+    problems: list[str] = []
+    for output, source in PNG_BINDINGS.items():
+        problems.extend(validate_png_binding(diagrams / output, diagrams / source))
+    return problems
+
+
 def png_dimensions(path: Path) -> tuple[int, int] | None:
     """Read PNG width and height without external dependencies."""
     data = path.read_bytes()[:24]
-    if len(data) != 24 or data[:8] != b"\x89PNG\r\n\x1a\n":
+    if len(data) != 24 or data[:8] != PNG_SIGNATURE:
         return None
     return struct.unpack(">II", data[16:24])
 
@@ -204,23 +296,27 @@ def validate_svg(path: Path, labels: tuple[str, ...] = ()) -> list[str]:
     return problems
 
 
-def manifest_data() -> dict[str, object]:
+def manifest_data(diagrams: Path = DIAGRAMS) -> dict[str, object]:
     """Build the committed source and artifact digest map."""
     return {
-        "schema": 1,
+        "schema": 2,
         "algorithm": "sha256",
-        "files": {relative: sha256(DIAGRAMS / relative) for relative in ASSETS},
+        "png_sources": PNG_BINDINGS,
+        "files": {relative: sha256(diagrams / relative) for relative in ASSETS},
     }
 
 
-def validate_manifest() -> list[str]:
+def validate_manifest(
+    diagrams: Path = DIAGRAMS, manifest: Path | None = None
+) -> list[str]:
     """Verify every committed asset matches its manifest digest."""
+    manifest = manifest or diagrams / "manifest.json"
     try:
-        recorded = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        recorded = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         return [f"diagram manifest is invalid: {error}"]
     try:
-        current = manifest_data()
+        current = manifest_data(diagrams)
     except OSError as error:
         return [f"diagram asset is missing: {error}"]
     if recorded != current:
@@ -249,6 +345,7 @@ def check() -> list[str]:
     problems.extend(validate_png(DIAGRAMS / "gptp_architecture.png", (1800, 900)))
     problems.extend(validate_png(WAVEDROM / "rx_accept.png", (1200, 300)))
     problems.extend(validate_png(WAVEDROM / "tx_backpressure.png", (1200, 300)))
+    problems.extend(validate_png_bindings())
     problems.extend(validate_manifest())
     return problems
 
@@ -302,6 +399,8 @@ def render(wavedrom: str) -> None:
             str(png_path),
             str(svg_path),
         ])
+    for output, source_path in PNG_BINDINGS.items():
+        bind_png(DIAGRAMS / output, DIAGRAMS / source_path)
     MANIFEST.write_text(
         json.dumps(manifest_data(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -348,24 +447,62 @@ def selftest() -> int:
         print("diagram selftest: valid PNG failed")
         return 1
     arms += 1
-    if not archive_manifest_mutation_detected():
-        print("diagram selftest: manifest mutation escaped")
+    if validate_png_bindings():
+        print("diagram selftest: valid PNG source binding failed")
         return 1
+    with tempfile.TemporaryDirectory() as directory:
+        diagrams = Path(directory) / "diagrams"
+        shutil.copytree(DIAGRAMS, diagrams)
+        manifest = diagrams / "manifest.json"
+        arms += 1
+        if validate_manifest(diagrams, manifest):
+            print("diagram selftest: valid copied manifest failed")
+            return 1
+
+        rx_png = diagrams / "wavedrom/rx_accept.png"
+        tx_png = diagrams / "wavedrom/tx_backpressure.png"
+        original_rx_png = rx_png.read_bytes()
+        rx_png.write_bytes(tx_png.read_bytes())
+        manifest.write_text(
+            json.dumps(manifest_data(diagrams), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        arms += 1
+        if (
+            validate_manifest(diagrams, manifest)
+            or not validate_png_bindings(diagrams)
+        ):
+            print("diagram selftest: refreshed swapped PNG escaped")
+            return 1
+
+        rx_source = diagrams / "wavedrom/rx_accept.json"
+        original_rx_source = rx_source.read_bytes()
+        rx_png.write_bytes(original_rx_png)
+        rx_source.write_bytes(original_rx_source + b"\n")
+        manifest.write_text(
+            json.dumps(manifest_data(diagrams), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        arms += 1
+        if (
+            validate_manifest(diagrams, manifest)
+            or not validate_png_bindings(diagrams)
+        ):
+            print("diagram selftest: refreshed stale PNG escaped")
+            return 1
+
+        rx_source.write_bytes(original_rx_source)
+        recorded = manifest_data(diagrams)
+        recorded["files"][next(iter(recorded["files"]))] = "0" * 64
+        manifest.write_text(
+            json.dumps(recorded, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        arms += 1
+        if not validate_manifest(diagrams, manifest):
+            print("diagram selftest: manifest mutation escaped")
+            return 1
     print(f"diagram selftest: PASS ({arms} arms)")
     return 0
-
-
-def archive_manifest_mutation_detected() -> bool:
-    """Model one changed digest without touching committed assets."""
-    try:
-        recorded = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        current = manifest_data()
-    except (OSError, json.JSONDecodeError):
-        return False
-    changed = json.loads(json.dumps(recorded))
-    first = next(iter(changed["files"]))
-    changed["files"][first] = "0" * 64
-    return changed != current and recorded == current
 
 
 def main() -> int:
@@ -405,7 +542,10 @@ def main() -> int:
         for problem in problems:
             print(f"  {problem}")
         return 1
-    print(f"diagram check: PASS ({len(ASSETS)} source-bound assets)")
+    print(
+        f"diagram check: PASS ({len(ASSETS)} pinned assets, "
+        f"{len(PNG_BINDINGS)} source-bound PNGs)"
+    )
     return 0
 
 

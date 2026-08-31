@@ -33,7 +33,9 @@ Issues record unresolved behavior.
 - [TX timing source](diagrams/wavedrom/tx_backpressure.json)
 - [Generation guide](diagrams/README.md)
 
-Generated images remain source-bound through manifest hashes.
+PNG previews embed their editable-source SHA-256.
+
+The manifest also pins every committed diagram asset.
 
 ## History
 

@@ -5,6 +5,12 @@ Every diagram has an editable source.
 
 Generated artifacts remain committed for convenient reading.
 
+Each PNG embeds its editable source digest.
+
+Embedded digests reject stale or swapped previews.
+
+Visual inspection verifies layout and rendered meaning.
+
 ## Architecture
 
 | Asset | Purpose |
@@ -38,7 +44,7 @@ python3 scripts/generate_diagrams.py \
 
 Draw.io must exist on the command path.
 
-Generated files update their source manifest.
+Generated files update their source bindings and manifest.
 
 ## Check
 
@@ -52,7 +58,8 @@ The checker verifies these properties:
 - RTL evidence tokens still exist.
 - Draw.io labels match instantiated modules.
 - WaveDrom sources match HDL invariants.
-- Artifact hashes match editable sources.
+- Embedded PNG hashes match their editable sources.
+- Manifest hashes pin every committed diagram asset.
 - PNG dimensions remain readable.
 - SVG files retain valid viewboxes.
 

@@ -177,7 +177,8 @@ def prose_units(text: str) -> list[tuple[int, str]]:
             continue
         if LIST_RE.match(line):
             flush()
-            units.append((number, LIST_RE.sub("", line, count=1)))
+            paragraph_line = number
+            paragraph.append(LIST_RE.sub("", line, count=1))
             continue
         if not paragraph:
             paragraph_line = number
@@ -315,6 +316,16 @@ def selftest() -> int:
     arms += 1
     if style_findings(Path("fixture.md"), "One two three four five."):
         print("docs selftest: short sentence failed")
+        return 1
+    arms += 1
+    wrapped = "- One two three four five six\n  seven eight nine ten eleven.\n"
+    if not style_findings(Path("fixture.md"), wrapped):
+        print("docs selftest: wrapped long sentence escaped")
+        return 1
+    arms += 1
+    wrapped_short = "- One two three four five\n  six seven eight nine ten.\n"
+    if style_findings(Path("fixture.md"), wrapped_short):
+        print("docs selftest: wrapped short sentence failed")
         return 1
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
