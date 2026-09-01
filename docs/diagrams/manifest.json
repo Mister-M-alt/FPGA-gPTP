@@ -1,9 +1,9 @@
 {
   "algorithm": "sha256",
   "files": {
-    "gptp_architecture.drawio": "1b52db5f226c3d52b1477695101f64664e0978cc26bc684385182742d23435f9",
-    "gptp_architecture.png": "d6d76eb86cbd6e7da3452871b4ddcb5ee9980c406deeb332e03eccf1a8153b5d",
-    "gptp_architecture.svg": "510cdc0b690c35ce9f794ac3bec9274d2db78e902164ce73e0b773d881465b56",
+    "gptp_architecture.drawio": "ea377e1126afbe05c7421e60402b1858548f3f92737783e9bec498e461bb52bc",
+    "gptp_architecture.png": "6ca124555bed3cfdbf71c974a1bb45ee2d4833a69ac8c1a2e049427e233b6a11",
+    "gptp_architecture.svg": "42fcfd678ad2e95640d71d39543a874b639d8e5fed326ca28644451a04176942",
     "wavedrom/rx_accept.json": "9e8699a3f57c3dd428d0f1c3e3b0f5831bc7716b5d2ee1614858168ac0aff29c",
     "wavedrom/rx_accept.png": "2eaf1fef493a44e525e6a1626da45919556dcfd4d5c1c3f4886dc70af09b7d02",
     "wavedrom/rx_accept.svg": "f7845d48819fa2c38a1d0ddaac74f013b9d59c98a7b4a846bcab4847e3bafde6",
