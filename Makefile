@@ -12,6 +12,8 @@ tb:
 	$(MAKE) -C tb/verilator/ucpu
 	$(MAKE) -C tb/verilator/parser
 	$(MAKE) -C tb/verilator/engine
+	$(MAKE) -C tb/verilator/gaskets
+	$(MAKE) -C tb/tsngen
 	$(MAKE) -C bench/arty test
 
 lint:
