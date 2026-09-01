@@ -30,7 +30,7 @@ static void append_frame(uint8_t type, uint16_t seq) {
 static void drive_fifo(Vbench_mii_tx &dut) {
   const std::size_t left = words.size() - rd_pos;
   dut.f_empty_i = left == 0;
-  dut.f_level_i = static_cast<uint8_t>(std::min<std::size_t>(left, 63));
+  dut.f_level_i = static_cast<uint8_t>(std::min<std::size_t>(left, 127));
   dut.f_data_i = left ? words[rd_pos] : 0;
 }
 

@@ -28,10 +28,15 @@ module bench_mii_tx (
     output logic       mii_en_o,
     output logic [3:0] mii_d_o,
 
-    //! TX FIFO read side (word = {sof, eof, byte})
+    //! TX FIFO read side (word = {sof, eof, byte}); the level is the
+    //! FULL width incl. the all-full MSB — truncating it made a FIFO
+    //! at exactly 64 read as level 0 and wedged S_IDLE forever (caught
+    //! live on the wire: a become-master TX burst parked the FIFO at
+    //! 64 during the previous frame's FCS/IFG and the plane went mute;
+    //! issue #54, pinned by tb/verilator/gaskets)
     input  wire  [9:0] f_data_i,
     input  wire        f_empty_i,
-    input  wire  [5:0] f_level_i,
+    input  wire  [6:0] f_level_i,
     output logic       f_rd_o,
 
     output logic       sfd_toggle_o,
@@ -105,7 +110,7 @@ module bench_mii_tx (
           mii_en_o <= 1'b0;
           crc_r    <= '1;
           pre_r    <= '0;
-          if (!f_empty_i && (f_level_i >= 6'd8)) st_r <= S_PRE;
+          if (!f_empty_i && (f_level_i >= 7'd8)) st_r <= S_PRE;
         end
 
         S_PRE: begin
