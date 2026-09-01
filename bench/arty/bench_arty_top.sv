@@ -182,7 +182,7 @@ module bench_arty_top (
       .mii_d_o       (eth_txd_o),
       .f_data_i      (txf_data_w),
       .f_empty_i     (txf_empty_w),
-      .f_level_i     (txf_lvl_w[5:0]),
+      .f_level_i     (txf_lvl_w),
       .f_rd_o        (txrd_w),
       .sfd_toggle_o  (tx_sfd_tgl_w),
       .done_toggle_o (tx_done_tgl_w),
