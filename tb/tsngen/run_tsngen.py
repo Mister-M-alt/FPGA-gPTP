@@ -4,8 +4,8 @@
 """tsn-gen cross-check of the gPTP engine, both wire directions.
 
 Frames the engine TRANSMITS are decoded by tsn-gen's packet_gen against
-the 802.1AS protocol YAMLs (the same tool that validated the AM65x TI
-board) and every field the standard pins is enforced from the YAML's
+the 802.1AS protocol YAMLs (the same tool that validates the reference
+embedded peer) and every field the standard pins is enforced from the YAML's
 own `expected` values — an independent implementation of the bit
 layout, not this repo's C++ mirror. Frames packet_gen GENERATES (seeded,
 reproducible) are fed into the engine and the published outcome is

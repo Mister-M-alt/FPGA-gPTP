@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: CERN-OHL-W-2.0
 //
 // Bench MII gasket loopback suite — the seam the engine suites do not
-// cover, where the ProfiShark found a real deadlock (TX FIFO level
+// cover, where the wire TAP found a real deadlock (TX FIFO level
 // truncated 7->6 bits: a full FIFO read as level 0 and the gasket never
 // started). Checks, at the bench_arty_top clock ratio (sys 100 MHz,
 // MII 25 MHz):

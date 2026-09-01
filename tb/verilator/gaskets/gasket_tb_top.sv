@@ -10,7 +10,7 @@
 //                engine suites do not cover and where the wire found a
 //                real deadlock (the 7-bit TX FIFO level truncated to 6:
 //                a FIFO at exactly 64 read as level 0 and S_IDLE never
-//                started — docs/BENCH_TAP_WIRETRUTH.md). The chain is the
+//                started — issue #54). The chain is the
 //                bench_arty_top arrangement verbatim: sys-side producer
 //                -> TX afifo -> bench_mii_tx -> MII nibbles looped into
 //                bench_mii_rx -> RX afifo -> sys-side consumer.

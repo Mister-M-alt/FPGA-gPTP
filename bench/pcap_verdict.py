@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""Wire-truth verdict from an in-line TAP capture (ProfiShark shape).
+"""Wire-truth verdict from an in-line TAP capture.
 
 Reads a pcap or pcapng (nanosecond-aware), takes every EtherType 0x88F7
 frame, decodes it through tsn-gen's packet_gen against the 802.1AS
@@ -20,8 +20,8 @@ per-frame bit verdict it derives what only a TAP timebase can show:
       - our FU preciseOrigin deltas between consecutive Syncs  vs  the
         TAP's Sync-to-Sync deltas: our PHC rate against the TAP clock
 
-Reads plain captures and ProfiShark live-mode captures transparently.
-The ProfiShark 1G+ prepends a 28-byte header to every frame (measured
+Reads plain captures and the TAP's live-mode captures transparently.
+The TAP's live mode prepends a 28-byte header to every frame (measured
 on the bench, 2026-08-15): u32 type, u32 length, u32 TAP port (2/3 —
 the direction), then a hardware timestamp as TWO LE u32 words stored
 high-first — ts_ns = (u32le@12 << 32) | u32le@16, nanosecond LSB —
@@ -150,7 +150,7 @@ def yaml_pins():
 
 
 def deframe(ts_ns, raw):
-    """Strip a ProfiShark live-mode header when present; returns
+    """Strip a TAP live-mode header when present; returns
     (best_ts_ns, frame, port_or_None). Detection is STRUCTURAL — type
     word 6 and the duplicated length field — never a payload-byte
     test: the hardware timestamp at offset 12 marches through every
@@ -247,7 +247,7 @@ def main():
               f" ~{expect_ms} ms)")
 
     print(f"\n== capture: {len(frames)} 802.1AS frames, {others} other"
-          f"{', ProfiShark hw timestamps' if hw_used else ''} ==")
+          f"{', TAP hw timestamps' if hw_used else ''} ==")
     for who, get in (("US", ours), ("PEER", theirs)):
         counts = {}
         for ts, s, m, f in frames:
