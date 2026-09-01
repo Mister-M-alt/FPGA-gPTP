@@ -125,7 +125,7 @@ busy switch is normal; `C` (CRC) climbing is not.
 ## 2. `KL_gptp_ucpu` — the sequencer that is the protocol
 
 **2,014 LUT (1,701 standalone) · 731 FF · 1.5 BRAM · 4 DSP** ·
-generated detail
+generated detail: `docs/generated/doc_internal/KL_gptp_ucpu.md`
 
 ![uop encoding](diagrams/uop_encoding.svg)
 
@@ -201,7 +201,7 @@ exactly this reason.
 ## 4. `KL_gptp_timer` — eight deadlines, one millisecond apart
 
 **248 LUT · 321 FF** ·
-generated detail
+generated detail: `docs/generated/doc_internal/KL_gptp_timer.md`
 
 ![timer sweep](diagrams/timer_sweep.svg)
 
@@ -233,7 +233,7 @@ links but never transmits, that is the first thing to check.
 ## 5. `KL_gptp_tx_slot` — the PDU under construction
 
 **72 LUT · 24 LUTRAM · 62 FF** ·
-generated detail
+generated detail: `docs/generated/doc_internal/KL_gptp_tx_slot.md`
 
 ![tx build and send](diagrams/tx_build_send.svg)
 

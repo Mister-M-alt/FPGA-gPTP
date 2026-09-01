@@ -231,7 +231,7 @@ Three ways to verify, best first:
   error in *both* constants still shows up.
 * **An in-line TAP with hardware timestamps** — compare the TAP's
   observed request→response gap against the `t3−t2` your node reports;
-  the difference is your ingress+egress sum. (An in-line TAP adds
+  the difference is your ingress+egress sum. (The bench's in-line TAP measured as adding
   ~730 ns per direction, so raise `--thresh` while it is inserted.)
 * **A known-good peer** (a commercial AVB switch) — if its
   `meanLinkDelay` and yours agree, both timestamp planes agree.
