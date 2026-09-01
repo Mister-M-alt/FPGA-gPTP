@@ -285,10 +285,12 @@ for seed in FU_SEEDS:
     syhex, _ = pg_gen("sync", seed)
     # flags are PDU bytes 6..7; the YAML allows one-step 0x0200 and
     # two-step 0x0208, and one-step reception is deliberately not
-    # implemented, so pin the two-step shape and re-decode. As slave the
-    # engine takes time only from its master: pin the sourcePortIdentity
-    # (PDU bytes 20..29) of both Sync and Follow_Up to the adopted
-    # parent, the identity a conformant master would transmit.
+    # implemented, so pin the two-step shape and re-decode. The engine
+    # pairs a Follow_Up with its pending Sync by sequenceId AND
+    # sourcePortIdentity (11.2.14), and two independently generated
+    # frames carry unrelated random sources, so pin both (PDU bytes
+    # 20..29) to one identity - the adopted parent, the identity a
+    # conformant master would transmit.
     src_hex = f"{bmca.parent:016x}{bmca.parent_port:04x}"
     syhex = patch(patch(syhex, 6, 0x02), 7, 0x08)
     syhex = syhex[:2 * 20] + src_hex + syhex[2 * 30:]
