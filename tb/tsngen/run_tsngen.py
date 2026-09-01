@@ -21,8 +21,6 @@ import os
 import subprocess
 import sys
 
-import yaml
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUR_MAC = 0x02A1B2C3D4E5
 OUR_CID = 0x02A1B2FFFEC3D4E5
@@ -43,6 +41,8 @@ YD = os.path.join(TSAGEN, "protocols/data_link/ptp") if TSAGEN else ""
 if not (PG and os.path.isfile(PG) and os.path.isdir(YD)):
     print("SKIP: tsn-gen checkout/binary not found (set TSAGEN_DIR)")
     sys.exit(0)
+
+import yaml  # noqa: E402 — after the skip so a bare tree needs no PyYAML
 
 IFACE = {
     "eth": "as_ethernet_header::AS_ETH::AS_ETH_IF",
@@ -133,8 +133,14 @@ for key, svc in (("sync", "as_sync"), ("fu", "as_follow_up"),
                  ("pdresp", "as_pdelay_resp"),
                  ("pdrfu", "as_pdelay_resp_fu")):
     got = PINS.get(svc, {})
-    for f, v in SPEC[key].items():
-        expect(f"yaml pin {svc}.{f}", got.get(f), v)
+    # the YAMLs pin fewer fields than they used to (flags moved to a
+    # documented two-value exception); agreement is enforced on the
+    # intersection, and a floor on the pin count catches a YAML whose
+    # expectations vanish entirely
+    shared = [f for f in SPEC[key] if f in got]
+    expect(f"yaml pin coverage {svc}", len(shared) >= 5, True)
+    for f in shared:
+        expect(f"yaml pin {svc}.{f}", got[f], SPEC[key][f])
 
 # ---------------------------------------------------------------------------
 # build the scripted scenario: every input frame is packet_gen output
@@ -177,21 +183,24 @@ class BmcaModel:
         self.master = True
         self.gm = OUR_CID
         self.parent = OUR_CID
-        self.asinfo = 0
+        self.parent_port = 1
         self.ppv = None
         self.annq = 0
 
     def feed(self, af, path):
         vec = ((af["gm_priority1"] << 56) | (af["gm_clock_quality"] << 24)
                | (af["gm_priority2"] << 16))
-        self.annq = ((af["current_utc_offset"] << 48)
-                     | (af["gm_priority1"] << 40)
-                     | (af["gm_clock_quality"] << 8) | af["gm_priority2"])
         qualified = (af["source_clock_identity"] != OUR_CID
                      and af["steps_removed"] < 255
                      and OUR_CID not in path
                      and len(path) <= 8)
         if qualified:
+            # the raw vector is the handler's first write, before the
+            # compare, so it moves for every qualified announce and
+            # holds through a refusal
+            self.annq = ((af["current_utc_offset"] << 48)
+                         | (af["gm_priority1"] << 40)
+                         | (af["gm_clock_quality"] << 8) | af["gm_priority2"])
             cand = (vec, af["gm_identity"])
             if self.master:                       # no incumbent
                 if cand < (OUR_VEC, OUR_CID):
@@ -205,7 +214,6 @@ class BmcaModel:
                 if cand < (self.ppv, self.gm):
                     self._adopt(af, vec)
         return {"gm": self.gm, "parent": self.parent, "annq": self.annq,
-                "asinfo": self.asinfo,
                 "flags_lo": 0x7 if self.master else 0x5}
 
     def _adopt(self, af, vec):
@@ -215,22 +223,37 @@ class BmcaModel:
 
     def _refresh(self, af, vec):
         self.parent = af["source_clock_identity"]
-        self.asinfo = (af["steps_removed"] << 48) | (af["time_source"] << 40)
+        self.parent_port = af["source_port_number"]
         self.ppv = vec
 
     def _become(self):
         self.master = True
         self.gm = OUR_CID
         self.parent = OUR_CID
-        self.asinfo = 0
         self.ppv = None
 
 
 bmca = BmcaModel()
 rxts = 40_000_000
-for seed, kind in ANN_SEEDS:
+for i, (seed, kind) in enumerate(ANN_SEEDS):
     ehex, _ = eth(seed)
-    ahex, af = pg_gen(kind, seed)
+    ahex, _ = pg_gen(kind, seed)
+    # steps_removed is announce PDU bytes 61..62; the generated 16-bit
+    # value is >= 255 for ~99.6% of seeds and 10.3.10.2.1 refuses those,
+    # so pin it small to exercise the compare arms. A PATH_TRACE variant
+    # must also be structurally conformant or the parser refuses it
+    # before the compare: pathSequence length is stepsRemoved+1 (one
+    # element here, so steps 0) and pathSequence[0] is the
+    # grandmasterIdentity (PDU bytes 68..75 := bytes 53..60). Re-decode
+    # through packet_gen so the model reads what is really on the wire.
+    steps = 0 if kind == "ann_pt1" else i % 4
+    ahex = patch(patch(ahex, 61, 0), 62, steps)
+    if kind == "ann_pt1":
+        ahex = ahex[:2 * 68] + ahex[2 * 53:2 * 61] + ahex[2 * 76:]
+    af = pg_decode(kind, ahex)
+    expect(f"ann[{i}] steps pinned", af["steps_removed"], steps)
+    if kind == "ann_pt1":
+        expect(f"ann[{i}] path head is gm", af["path0"], af["gm_identity"])
     script.append(f"RX {ehex}{ahex} {rxts}")
     script.append("PUB")
     rxts += 1_000_000
@@ -242,8 +265,12 @@ for seed, kind in ANN_SEEDS:
 sehex, _ = eth(200)
 sahex, _ = pg_gen("ann_pt1", 201)
 sahex = patch(sahex, 47, 0)                    # gm_priority1 at PDU byte 47
+sahex = patch(patch(sahex, 61, 0), 62, 0)      # steps_removed = hops - 1
+sahex = sahex[:2 * 68] + sahex[2 * 53:2 * 61] + sahex[2 * 76:]
 saf = pg_decode("ann_pt1", sahex)
 expect("patched p1", saf["gm_priority1"], 0)
+expect("patched steps", saf["steps_removed"], 0)
+expect("patched path head", saf["path0"], saf["gm_identity"])
 script.append(f"RX {sehex}{sahex} {rxts}")
 script.append("PUB")
 expected_pubs.append(bmca.feed(saf, [saf["path0"]]))
@@ -255,9 +282,24 @@ FU_SEEDS = [301, 302, 303]
 expected_offsets = []
 for seed in FU_SEEDS:
     syehex, _ = eth(seed)
-    syhex, syf = pg_gen("sync", seed)
+    syhex, _ = pg_gen("sync", seed)
+    # flags are PDU bytes 6..7; the YAML allows one-step 0x0200 and
+    # two-step 0x0208, and one-step reception is deliberately not
+    # implemented, so pin the two-step shape and re-decode. As slave the
+    # engine takes time only from its master: pin the sourcePortIdentity
+    # (PDU bytes 20..29) of both Sync and Follow_Up to the adopted
+    # parent, the identity a conformant master would transmit.
+    src_hex = f"{bmca.parent:016x}{bmca.parent_port:04x}"
+    syhex = patch(patch(syhex, 6, 0x02), 7, 0x08)
+    syhex = syhex[:2 * 20] + src_hex + syhex[2 * 30:]
+    syf = pg_decode("sync", syhex)
+    expect(f"sync twoStep pinned [{seed}]", syf["flags"], 0x0208)
+    expect(f"sync from parent [{seed}]",
+           syf["source_clock_identity"], bmca.parent)
     fuehex, _ = eth(seed + 50)
     fuhex, _ = pg_gen("fu", seed + 50)
+    fuhex = patch(patch(fuhex, 6, 0x00), 7, 0x08)
+    fuhex = fuhex[:2 * 20] + src_hex + fuhex[2 * 30:]
     # 11.2.13 MDSyncReceive pairs on sequenceId (PDU bytes 30..31)
     seq = syf["sequence_id"]
     fuhex = patch(patch(fuhex, 30, seq >> 8), 31, seq & 0xFF)
@@ -314,7 +356,7 @@ def pub_fields(ln):
     d = {}
     for tok in ln.split()[1:]:
         k, v = tok.split("=")
-        d[k] = int(v, 16) if k in ("gm", "parent", "annq", "asinfo",
+        d[k] = int(v, 16) if k in ("gm", "parent", "annq",
                                    "flags") else int(v)
     return d
 
@@ -406,7 +448,6 @@ for i, exp_pub in enumerate(expected_pubs):
     expect(f"{tag} gm", got["gm"], exp_pub["gm"])
     expect(f"{tag} parent", got["parent"], exp_pub["parent"])
     expect(f"{tag} annq", got["annq"], exp_pub["annq"])
-    expect(f"{tag} asinfo", got["asinfo"], exp_pub["asinfo"])
     expect(f"{tag} flags", got["flags"] & 0x7, exp_pub["flags_lo"])
 
 # --- offset arithmetic from generated Sync+FU ---

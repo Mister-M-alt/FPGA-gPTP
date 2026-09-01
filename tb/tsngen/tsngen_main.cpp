@@ -14,9 +14,9 @@
 //   MASTER         pump until the announce receipt timeout elects us
 //   RX <hex> <ts>  inject one frame with the given ingress timestamp
 //   RUN <cycles>   pump
-//   PUB            print the publish bank:
+//   PUB            print the publish bank and drop counters:
 //                  PUB gm=.. parent=.. flags=.. pdelay=.. offset=..
-//                      annq=.. asinfo=..
+//                      annq=.. rxdrop=.. evdrop=..
 //   TXDUMP         print "TX <hex> ts=<egress-ns>" for every frame
 //                  transmitted since the last TXDUMP, then "ENDTX"
 
@@ -34,7 +34,6 @@ static const uint64_t OUR_CID = 0x02A1B2FFFEC3D4E5ull;
 static const uint64_t PD_NS = 700;
 
 static VKL_gptp_engine *dut;
-static uint64_t cyc = 0;
 static std::vector<std::vector<uint8_t>> txf;
 static std::vector<uint64_t> txns;
 static std::vector<uint8_t> cur;
@@ -44,15 +43,22 @@ static size_t dumped = 0;
 
 static void tick() {
   if (auto_pend >= 0 && !dut->txts_valid_i) {
+    // the engine claims egress stamps by {messageType, sequenceId}
+    // (issues #32/#37), so the return carries both, read from the
+    // transmitted frame itself: type at frame byte 14 low nibble,
+    // sequenceId big-endian at frame bytes 44..45
+    const std::vector<uint8_t> &f = txf[auto_pend];
     uint64_t ns = 50000000ull + (uint64_t)auto_pend * 1000000ull;
     dut->txts_valid_i = 1;
     dut->txts_ns_i = ns;
+    dut->txts_seq_i =
+        f.size() > 45 ? (uint16_t)((f[44] << 8) | f[45]) : 0;
+    dut->txts_type_i = f.size() > 14 ? (f[14] & 0xF) : 0;
     txns[auto_pend] = ns;
     auto_pend = -1;
   }
   dut->clk_i = 0; dut->eval();
   dut->clk_i = 1; dut->eval();
-  dut->phc_ns_i = cyc * 500ull;
   if (dut->tx_valid_o) {
     if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
     if (in_tx) cur.push_back(dut->tx_data_o);
@@ -64,7 +70,6 @@ static void tick() {
     }
   }
   dut->txts_valid_i = 0;
-  cyc++;
 }
 
 static void run(uint64_t n) { while (n--) tick(); }
@@ -152,8 +157,7 @@ int main(int argc, char **argv) {
   dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
   dut->tx_ready_i = 1;
   dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
-  dut->phc_ns_i = 0;
-  dut->cfg_asym_i = 0;
+  dut->txts_type_i = 0;
   for (int i = 0; i < 8; i++) tick();
   dut->rst_n = 1;
 
@@ -196,14 +200,14 @@ int main(int argc, char **argv) {
       pump(n);
     } else if (cmd == "PUB") {
       printf("PUB gm=%016llx parent=%016llx flags=%08x pdelay=%u "
-             "offset=%d annq=%016llx asinfo=%016llx\n",
+             "offset=%d annq=%016llx rxdrop=%u evdrop=%u\n",
              (unsigned long long)dut->pub_gm_id_o,
              (unsigned long long)dut->pub_parent_id_o,
              (unsigned)dut->pub_flags_o,
              (unsigned)dut->pub_pdelay_ns_o,
              (int32_t)dut->pub_offset_o,
              (unsigned long long)dut->pub_annq_o,
-             (unsigned long long)dut->pub_asinfo_o);
+             (unsigned)dut->dbg_rx_drop_o, (unsigned)dut->dbg_ev_drop_o);
     } else if (cmd == "TXDUMP") {
       pump(256);                       // let egress stamps land
       for (; dumped < txf.size(); dumped++) {
