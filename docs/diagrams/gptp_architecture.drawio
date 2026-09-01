@@ -1,4 +1,4 @@
-<mxfile host="app.diagrams.net" modified="2026-08-31T00:00:00.000Z" agent="FPGA-gPTP documentation" version="24.7.17">
+<mxfile host="app.diagrams.net" modified="2026-09-01T00:00:00.000Z" agent="FPGA-gPTP documentation" version="24.7.17">
   <diagram id="gptp-architecture" name="Architecture">
     <mxGraphModel dx="1920" dy="1080" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1920" pageHeight="1080" math="0" shadow="0" background="#FFFFFF">
       <root>
@@ -8,111 +8,112 @@
           <mxGeometry x="320" y="20" width="1280" height="50" as="geometry"/>
         </mxCell>
         <mxCell id="engine-boundary" value="KL_gptp_engine · one synchronous clock domain" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingTop=12;spacingLeft=16;fontSize=20;fontStyle=1;fontColor=#17324D;fillColor=#F8FBFD;strokeColor=#50758F;strokeWidth=3;dashed=1;dashPattern=8 6;" vertex="1" parent="1">
-          <mxGeometry x="260" y="90" width="1400" height="780" as="geometry"/>
+          <mxGeometry x="300" y="100" width="1340" height="730" as="geometry"/>
         </mxCell>
         <mxCell id="parent-rx" value="Parent RX service&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;classified 0x88F7 · checked frame · ingress time&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=19;fontStyle=1;fillColor=#DCEBFA;strokeColor=#24557A;strokeWidth=3;fontColor=#17324D;" vertex="1" parent="1">
-          <mxGeometry x="10" y="190" width="240" height="110" as="geometry"/>
+          <mxGeometry x="20" y="190" width="240" height="110" as="geometry"/>
         </mxCell>
         <mxCell id="parser" value="KL_gptp_rx_parser&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;validate · extract · event&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=19;fontStyle=1;fillColor=#E3F4E8;strokeColor=#287A4B;strokeWidth=3;fontColor=#173D2A;" vertex="1" parent="1">
-          <mxGeometry x="330" y="190" width="240" height="110" as="geometry"/>
+          <mxGeometry x="340" y="190" width="240" height="110" as="geometry"/>
         </mxCell>
         <mxCell id="banks" value="Message storage&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;two banks · ingress timestamps&lt;br&gt;frozen Announce context&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=19;fontStyle=1;fillColor=#FFF2CC;strokeColor=#B8860B;strokeWidth=3;fontColor=#513D00;" vertex="1" parent="1">
-          <mxGeometry x="640" y="140" width="250" height="135" as="geometry"/>
+          <mxGeometry x="335" y="430" width="250" height="135" as="geometry"/>
         </mxCell>
         <mxCell id="eventq" value="Event arbitration&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;four-entry queue&lt;br&gt;parser priority · timer waits&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=19;fontStyle=1;fillColor=#ECE5F6;strokeColor=#6B4E9B;strokeWidth=3;fontColor=#3E2B59;" vertex="1" parent="1">
-          <mxGeometry x="950" y="180" width="230" height="125" as="geometry"/>
+          <mxGeometry x="660" y="185" width="230" height="120" as="geometry"/>
         </mxCell>
         <mxCell id="ucpu" value="KL_gptp_ucpu&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;microcode · ALU · servo&lt;br&gt;protocol decisions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=19;fontStyle=1;fillColor=#E3F4E8;strokeColor=#287A4B;strokeWidth=3;fontColor=#173D2A;" vertex="1" parent="1">
-          <mxGeometry x="1250" y="170" width="250" height="145" as="geometry"/>
+          <mxGeometry x="970" y="175" width="250" height="140" as="geometry"/>
         </mxCell>
         <mxCell id="txslot" value="KL_gptp_tx_slot&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;build RAM · byte serializer&lt;br&gt;ready-controlled advance&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=19;fontStyle=1;fillColor=#E3F4E8;strokeColor=#287A4B;strokeWidth=3;fontColor=#173D2A;" vertex="1" parent="1">
-          <mxGeometry x="1390" y="400" width="230" height="130" as="geometry"/>
+          <mxGeometry x="1330" y="180" width="230" height="130" as="geometry"/>
         </mxCell>
         <mxCell id="parent-tx" value="Parent TX service&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;frame merge · MAC boundary&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=19;fontStyle=1;fillColor=#DCEBFA;strokeColor=#24557A;strokeWidth=3;fontColor=#17324D;" vertex="1" parent="1">
-          <mxGeometry x="1690" y="410" width="210" height="110" as="geometry"/>
+          <mxGeometry x="1680" y="190" width="210" height="110" as="geometry"/>
         </mxCell>
         <mxCell id="timer" value="KL_gptp_timer&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;eight millisecond slots&lt;br&gt;valid-ready expiry&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=19;fontStyle=1;fillColor=#E3F4E8;strokeColor=#287A4B;strokeWidth=3;fontColor=#173D2A;" vertex="1" parent="1">
-          <mxGeometry x="650" y="390" width="230" height="125" as="geometry"/>
+          <mxGeometry x="660" y="430" width="230" height="125" as="geometry"/>
         </mxCell>
         <mxCell id="state" value="Engine state regions&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;message · timestamps · scratch&lt;br&gt;publish · PHC · timer arm&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=19;fontStyle=1;fillColor=#FFF2CC;strokeColor=#B8860B;strokeWidth=3;fontColor=#513D00;" vertex="1" parent="1">
-          <mxGeometry x="1010" y="430" width="280" height="140" as="geometry"/>
+          <mxGeometry x="955" y="430" width="280" height="140" as="geometry"/>
         </mxCell>
         <mxCell id="stamp" value="Priority timestamp return&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;time · message type · sequence&lt;br&gt;one pending entry&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=18;fontStyle=1;fillColor=#FDE8E7;strokeColor=#B83A3A;strokeWidth=3;fontColor=#6A2020;" vertex="1" parent="1">
-          <mxGeometry x="1280" y="650" width="340" height="125" as="geometry"/>
+          <mxGeometry x="1330" y="430" width="270" height="125" as="geometry"/>
         </mxCell>
         <mxCell id="parent-stamp" value="MAC timestamp capture&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;exact transmitted header tag&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=18;fontStyle=1;fillColor=#DCEBFA;strokeColor=#24557A;strokeWidth=3;fontColor=#17324D;" vertex="1" parent="1">
-          <mxGeometry x="1680" y="660" width="220" height="105" as="geometry"/>
+          <mxGeometry x="1680" y="440" width="220" height="105" as="geometry"/>
         </mxCell>
         <mxCell id="publish" value="Committed publication&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;identity · flags · delay · offset&lt;br&gt;Announce vector · PathTrace&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=18;fontStyle=1;fillColor=#ECE5F6;strokeColor=#6B4E9B;strokeWidth=3;fontColor=#3E2B59;" vertex="1" parent="1">
-          <mxGeometry x="720" y="670" width="340" height="125" as="geometry"/>
+          <mxGeometry x="925" y="660" width="340" height="125" as="geometry"/>
         </mxCell>
         <mxCell id="parent-publish" value="Parent status consumer&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;samples only on commit&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=18;fontStyle=1;fillColor=#DCEBFA;strokeColor=#24557A;strokeWidth=3;fontColor=#17324D;" vertex="1" parent="1">
-          <mxGeometry x="350" y="680" width="260" height="105" as="geometry"/>
+          <mxGeometry x="20" y="670" width="260" height="105" as="geometry"/>
         </mxCell>
         <mxCell id="phc" value="Parent PHC&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;applies addend and step pulses&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontSize=18;fontStyle=1;fillColor=#DCEBFA;strokeColor=#24557A;strokeWidth=3;fontColor=#17324D;" vertex="1" parent="1">
-          <mxGeometry x="70" y="500" width="220" height="105" as="geometry"/>
+          <mxGeometry x="20" y="530" width="220" height="105" as="geometry"/>
         </mxCell>
         <mxCell id="notes" value="Source evidence: KL_gptp_engine instantiations, state map, queue arbitration, and public ports.&#xa;Red marks bounded risk: issue #31 tracks the one-entry timestamp return." style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=16;fontColor=#384B5C;fillColor=#F6F8FA;strokeColor=#AAB7C4;strokeWidth=2;spacing=14;" vertex="1" parent="1">
           <mxGeometry x="320" y="900" width="1280" height="90" as="geometry"/>
         </mxCell>
 
-        <mxCell id="e-rx-parser" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#24557A;strokeWidth=3;" edge="1" parent="1" source="parent-rx" target="parser">
+        <mxCell id="e-rx-parser" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#24557A;strokeWidth=3;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="parent-rx" target="parser">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e-parser-banks" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#287A4B;strokeWidth=3;" edge="1" parent="1" source="parser" target="banks">
+        <mxCell id="e-parser-banks" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#287A4B;strokeWidth=3;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="parser" target="banks">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e-parser-event" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;" edge="1" parent="1" source="parser" target="eventq">
+        <mxCell id="e-parser-event" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="parser" target="eventq">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e-banks-state" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#B8860B;strokeWidth=3;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.15;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="banks" target="state">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="600" y="340"/>
-              <mxPoint x="1065" y="340"/>
+              <mxPoint x="522" y="595"/>
+              <mxPoint x="997" y="595"/>
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e-banks-state" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#B8860B;strokeWidth=3;" edge="1" parent="1" source="banks" target="state">
+        <mxCell id="e-timer-event" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="timer" target="eventq">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e-event-ucpu" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="eventq" target="ucpu">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e-ucpu-state" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=block;startFill=1;endArrow=block;endFill=1;strokeColor=#B8860B;strokeWidth=3;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ucpu" target="state">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e-state-timer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#B8860B;strokeWidth=3;exitX=0;exitY=0.45;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="state" target="timer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e-ucpu-tx" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#287A4B;strokeWidth=3;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ucpu" target="txslot">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e-tx-parent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=block;startFill=1;endArrow=block;endFill=1;strokeColor=#24557A;strokeWidth=3;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="txslot" target="parent-tx">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e-parent-stamp" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#B83A3A;strokeWidth=3;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="parent-stamp" target="stamp">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e-stamp-ucpu" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#B83A3A;strokeWidth=3;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.75;entryDx=0;entryDy=0;" edge="1" parent="1" source="stamp" target="ucpu">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="765" y="350"/>
-              <mxPoint x="1150" y="350"/>
+              <mxPoint x="1290" y="492"/>
+              <mxPoint x="1290" y="280"/>
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e-timer-event" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;" edge="1" parent="1" source="timer" target="eventq">
+        <mxCell id="e-state-publish" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="state" target="publish">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e-event-ucpu" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;" edge="1" parent="1" source="eventq" target="ucpu">
+        <mxCell id="e-publish-parent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="publish" target="parent-publish">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e-ucpu-state" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=block;startFill=1;endArrow=block;endFill=1;strokeColor=#B8860B;strokeWidth=3;" edge="1" parent="1" source="ucpu" target="state">
-          <mxGeometry relative="1" as="geometry"/>
-        </mxCell>
-        <mxCell id="e-state-timer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#B8860B;strokeWidth=3;" edge="1" parent="1" source="state" target="timer">
-          <mxGeometry relative="1" as="geometry"/>
-        </mxCell>
-        <mxCell id="e-ucpu-tx" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#287A4B;strokeWidth=3;" edge="1" parent="1" source="ucpu" target="txslot">
-          <mxGeometry relative="1" as="geometry"/>
-        </mxCell>
-        <mxCell id="e-tx-parent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=block;startFill=1;endArrow=block;endFill=1;strokeColor=#24557A;strokeWidth=3;" edge="1" parent="1" source="txslot" target="parent-tx">
-          <mxGeometry relative="1" as="geometry"/>
-        </mxCell>
-        <mxCell id="e-parent-stamp" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#B83A3A;strokeWidth=3;" edge="1" parent="1" source="parent-stamp" target="stamp">
-          <mxGeometry relative="1" as="geometry"/>
-        </mxCell>
-        <mxCell id="e-stamp-ucpu" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#B83A3A;strokeWidth=3;" edge="1" parent="1" source="stamp" target="ucpu">
-          <mxGeometry relative="1" as="geometry"/>
-        </mxCell>
-        <mxCell id="e-state-publish" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;" edge="1" parent="1" source="state" target="publish">
-          <mxGeometry relative="1" as="geometry"/>
-        </mxCell>
-        <mxCell id="e-publish-parent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#6B4E9B;strokeWidth=3;" edge="1" parent="1" source="publish" target="parent-publish">
-          <mxGeometry relative="1" as="geometry"/>
-        </mxCell>
-        <mxCell id="e-state-phc" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#24557A;strokeWidth=3;" edge="1" parent="1" source="state" target="phc">
+        <mxCell id="e-state-phc" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#24557A;strokeWidth=3;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="state" target="phc">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="970" y="620"/>
-              <mxPoint x="320" y="620"/>
+              <mxPoint x="1039" y="625"/>
+              <mxPoint x="270" y="625"/>
+              <mxPoint x="270" y="582"/>
             </Array>
           </mxGeometry>
         </mxCell>
