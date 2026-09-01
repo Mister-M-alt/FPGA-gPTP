@@ -91,7 +91,8 @@ REQUIRED_CURRENT = {
 }
 
 TEXT_SUFFIXES = {
-    ".md", ".py", ".sv", ".cpp", ".h", ".sh", ".tcl", ".xdc", ".yml", ".yaml"
+    ".md", ".py", ".sv", ".cpp", ".h", ".sh", ".tcl", ".xdc", ".yml", ".yaml",
+    ".svg",  # rendered diagrams carry visible labels the vocabulary rule owns
 }
 
 
