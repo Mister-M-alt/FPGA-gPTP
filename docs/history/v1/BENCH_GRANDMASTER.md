@@ -1,7 +1,17 @@
+[OBSOLETE + 2026-08-31]
+
+> Status: Historical
+>
+> Original path: `docs/BENCH_GRANDMASTER.md`
+>
+> Archived: 2026-08-31
+>
+> Current successor: [current manager guide](../../MANAGER.md)
+
 <!-- SPDX-License-Identifier: CERN-OHL-W-2.0 -->
 # The grandmaster round on the bench — 2026-08-14, evening
 
-Sequel to `BENCH_FIRSTLIGHT.md`. The peer's missing Sync was diagnosed by
+Sequel to [`BENCH_FIRSTLIGHT.md`](BENCH_FIRSTLIGHT.md). The peer's missing Sync was diagnosed by
 the spec (802.1AS-2011 5.3.1/10.1.2: a node that never transmits Announce
 never enters the best-master contest), so µcode v3 added Grandmaster
 Capability — BTCA, PortAnnounceTransmit with the path trace TLV, two-step

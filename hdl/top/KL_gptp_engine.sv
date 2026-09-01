@@ -35,7 +35,7 @@
 //
 //                The publish bank IS the software contract this plane
 //                retires (GM identity, asCapable/sync verdicts, peer
-//                delay): what a daemon used to poll and mirror into CSRs
+//                delay): previously polled state becomes direct fabric wires
 //                becomes wires, latched by OP_COMMIT.
 //
 //                Parser and timer events dispatch through a 4-deep queue;

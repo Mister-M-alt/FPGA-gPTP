@@ -147,12 +147,12 @@ lands and observe-only retires. On every accepted Sync + Follow_Up as
 slave, the measured offset drives the parent `timestamp_counter`'s two
 knobs through the engine's PHC region:
 
-  * |offset| > 20 us (the linuxptp first_step_threshold default):
+  * |offset| > 20 us (the established step threshold):
     STEP -- one adjtime write of -offset re-bases the clock at once,
     and the addend is rewritten to the bare integrator: the rate
     estimate survives the step while the stale proportional term (moot
     after a re-base) is dropped. This is the DLL policy of the GM-loss
-    design (the parent's GM_LOSS_RECOVERY.md): a running ptp4l slews a
+    design (the parent's GM_LOSS_RECOVERY.md): a prior controller slews a
     60 s cliff for 40 minutes; the fabric servo re-bases in one write.
   * otherwise: SLEW -- a PI controller in Q8.24 addend units. The loop
     gain is CLOCK-AWARE: the generator computes the ns-to-addend factor
@@ -349,7 +349,7 @@ CEASE_MS_C = 300_000            # resume after 5 min (--cease-ms overrides)
                                 # counted down in 1 s cadence beats
 
 # ---- servo constants (clock-aware, set by set_servo_gains) -----------------
-STEP_NS_C = 20000               # linuxptp first_step_threshold default, ns
+STEP_NS_C = 20000               # established step threshold, ns
 GAIN_S_C = 6                    # ns -> addend units: (off * GAIN_M) >> 6
 GAIN_M_C = 86                   # for the 100 MHz default; see set_servo_gains
 ILIM_C = 33554                  # integrator clamp = +-200 ppm at that clock

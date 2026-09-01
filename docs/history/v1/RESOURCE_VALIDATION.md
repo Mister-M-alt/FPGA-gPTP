@@ -1,3 +1,13 @@
+[OBSOLETE + 2026-08-31]
+
+> Status: Historical
+>
+> Original path: `docs/RESOURCE_VALIDATION.md`
+>
+> Archived: 2026-08-31
+>
+> Current successor: [current manager guide](../../MANAGER.md)
+
 <!-- SPDX-License-Identifier: CERN-OHL-W-2.0 -->
 # Resource validation — the gPTP plane, measured 2026-08-14
 

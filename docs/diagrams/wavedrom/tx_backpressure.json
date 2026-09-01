@@ -1,0 +1,14 @@
+{
+  "config": {"hscale": 2},
+  "head": {"text": "Transmit bytes remain stable during stalls"},
+  "signal": [
+    {"name": "clk_i", "wave": "p......"},
+    {"name": "tx_valid_o", "wave": "01....0"},
+    {"name": "tx_ready_i", "wave": "0..1010"},
+    {"name": "tx_data_o", "wave": "x=..=.x", "data": ["byte A", "byte B"]},
+    {"name": "tx_sof_o", "wave": "01..0.."},
+    {"name": "tx_eof_o", "wave": "0...1.0"},
+    {"name": "transfer", "wave": "0..1010"}
+  ],
+  "foot": {"text": "Only ready cycles advance serializer state."}
+}

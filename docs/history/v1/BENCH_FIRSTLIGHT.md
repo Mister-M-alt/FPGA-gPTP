@@ -1,3 +1,13 @@
+[OBSOLETE + 2026-08-31]
+
+> Status: Historical
+>
+> Original path: `docs/BENCH_FIRSTLIGHT.md`
+>
+> Archived: 2026-08-31
+>
+> Current successor: [current manager guide](../../MANAGER.md)
+
 <!-- SPDX-License-Identifier: CERN-OHL-W-2.0 -->
 # First light — Arty A7-100T vs STM32, 2026-08-14
 
