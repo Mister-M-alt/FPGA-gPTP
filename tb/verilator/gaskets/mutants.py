@@ -33,8 +33,6 @@ mutants, and that is a change to sim_main.cpp rather than to this file.
 
 from __future__ import annotations
 
-import os
-import signal
 import subprocess
 import sys
 import tempfile
@@ -45,11 +43,6 @@ BENCH = (HERE / "../../../bench/arty").resolve()
 sys.path.insert(0, str((HERE / "../../").resolve()))
 
 from mutation_verdict import verdict  # noqa: E402
-
-#: The harness runs in well under a second; a mutant still running after this
-#: many seconds is livelocked - which is what a wedged gasket looks like - and
-#: is reported as a hang rather than counted as a catch.
-MUTANT_RUN_TIMEOUT_S = 120
 
 #: the four sources the suite builds, mutated copies and all
 SOURCES = ("bench_afifo.sv", "bench_mii_tx.sv", "bench_mii_rx.sv")
@@ -100,25 +93,15 @@ def build(srcdir, workdir, tag):
 
 
 def run_harness(exe):
-    """(rc, stdout); rc is "TIMEOUT" when the run had to be killed.
+    """(rc, stdout) of one harness run.
 
-    The harness is its own process group, so the kill reaches anything it
-    spawned and nothing outlives the temporary directory.
+    No host deadline: sim_main.cpp bounds its own waits in DUT cycles, so a
+    wedged gasket FAILS the suite rather than hanging it - which is the very
+    property the first mutant below exercises.
     """
-    proc = subprocess.Popen([str(exe)], stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True,
-                            start_new_session=True)
-    try:
-        out, _ = proc.communicate(timeout=MUTANT_RUN_TIMEOUT_S)
-        return proc.returncode, out
-    except subprocess.TimeoutExpired:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        out, _ = proc.communicate()
-        return "TIMEOUT", out
-    finally:
-        if proc.poll() is None:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            proc.wait()
+    out = subprocess.run([str(exe)], capture_output=True, text=True)
+    return out.returncode, out.stdout + out.stderr
+
 
 
 def stage(work, tag, mutate=None):
@@ -136,13 +119,12 @@ def stage(work, tag, mutate=None):
 
 def main():
     passes = fails = 0
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     with tempfile.TemporaryDirectory(prefix="gasket-mutants-") as td:
         work = Path(td)
 
         # -- positive control: the real RTL must still pass -------------------
         exe = build(stage(work, "clean"), work, "clean")
-        answer = verdict(*run_harness(exe), MUTANT_RUN_TIMEOUT_S) \
+        answer = verdict(*run_harness(exe)) \
             if exe else "did not compile"
         if answer == "pass":
             passes += 1
@@ -171,7 +153,7 @@ def main():
                 print(f"[FAIL] mutation {name!r} did not compile; a mutant "
                       f"that cannot build proves nothing about the harness")
                 continue
-            answer = verdict(*run_harness(exe), MUTANT_RUN_TIMEOUT_S)
+            answer = verdict(*run_harness(exe))
             if answer == "caught":
                 passes += 1
                 print(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")
