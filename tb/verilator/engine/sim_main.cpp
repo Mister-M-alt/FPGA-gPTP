@@ -101,20 +101,23 @@
 // integer arithmetic (Q2.30 ratio, arithmetic shift for /2), never the
 // DUT's internals.
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 #include <verilated.h>
 #include "VKL_gptp_engine.h"
+#include "../../common/verilator_harness.hpp"
 
-static const uint64_t OUR_MAC = 0x02A1B2C3D4E5ull;
-static const uint64_t OUR_CID = 0x02A1B2FFFEC3D4E5ull;
-static const uint64_t PEER_CID = 0x0080E1FFFE112233ull;
+constexpr uint64_t OUR_MAC = 0x02A1B2C3D4E5ull;
+constexpr uint64_t OUR_CID = 0x02A1B2FFFEC3D4E5ull;
+constexpr uint64_t PEER_CID = 0x0080E1FFFE112233ull;
 // thisPort: the portNumber of our own portIdentity, and so the only
 // requestingPortIdentity.portNumber a Pdelay message addressed to us
 // can carry (802.1AS-2011 11.2.15.3, Figure 11-8). FOREIGN_PN is another
 // port of this same clock -- the identity half that used to be unchecked
-static const uint16_t OUR_PN = 1, FOREIGN_PN = 99;
+constexpr uint16_t OUR_PN = 1;
+constexpr uint16_t FOREIGN_PN = 99;
 //! an identity that shares OUR clockIdentity's low 32 bits and differs
 //! above them, used by two rounds: as the second responder of the Milan
 //! 4.2.6.2.5 probes, which the 1588-2008 9.5.2.2 compare must admit
@@ -128,11 +131,11 @@ static const uint16_t OUR_PN = 1, FOREIGN_PN = 99;
 //! narrowing mutation escapes silently at 340/340, where the derived form
 //! gives 336/340. The static_asserts below are the second lock, so the
 //! shared halves cannot drift without the build saying so
-static const uint64_t NEAR_CID =
+constexpr uint64_t NEAR_CID =
     0x0077770000000000ull | (OUR_CID & 0xFFFFFFFFull);
 //! its mirror: a requester sharing our HIGH 32 bits and differing below,
 //! so a compare narrowed to the high half refuses this one instead (#26)
-static const uint64_t REQ_HI_CID =
+constexpr uint64_t REQ_HI_CID =
     (OUR_CID & 0xFFFFFFFF00000000ull) | 0x00112233ull;
 static_assert((NEAR_CID & 0xFFFFFFFFull) == (OUR_CID & 0xFFFFFFFFull),
               "NEAR_CID must share OUR_CID's low half");
@@ -142,521 +145,677 @@ static_assert((REQ_HI_CID >> 32) == (OUR_CID >> 32),
               "REQ_HI_CID must share OUR_CID's high half");
 static_assert((REQ_HI_CID & 0xFFFFFFFFull) != (OUR_CID & 0xFFFFFFFFull),
               "REQ_HI_CID must differ from OUR_CID below the halfway line");
-static const uint32_t OUR_CQ = 0xF8FE436A;
+constexpr uint32_t OUR_CQ = 0xF8FE436A;
 
 // publish flags bits (the retired software contract)
-static const uint32_t FL_PRESENT = 1, FL_AMGM = 2, FL_ASCAP = 4,
-                      FL_SYNCOK = 8;
+constexpr uint32_t FL_PRESENT = 1;
+constexpr uint32_t FL_AMGM = 2;
+constexpr uint32_t FL_ASCAP = 4;
+constexpr uint32_t FL_SYNCOK = 8;
 
-static int checks = 0, fails = 0;
-static void expect(const char *what, uint64_t got, uint64_t exp) {
-  checks++;
-  if (got != exp) {
-    fails++;
-    printf("FAIL %-28s got %016llx exp %016llx\n", what,
-           (unsigned long long)got, (unsigned long long)exp);
+namespace {
+
+//! The whole KL_gptp_engine round-trip: the Verilated model, the wire and
+//! PHC models that drive it, the independent spec mirrors that grade it, and
+//! the phases named in the file header, in the order they run.
+//!
+//! Every piece of state a phase leaves behind for a later phase is a member
+//! here rather than a file-scope variable (C++ Core Guidelines I.2), so a
+//! reader can see the whole of what one phase can disturb by reading one
+//! class rather than the whole translation unit.
+class GptpEngineHarness {
+ public:
+  //! Runs every phase in file order and prints the one tally line the sweep
+  //! parses. Returns the process exit status: 0 pass, 1 fail.
+  int run_suite() {
+    bring_the_engine_out_of_reset();
+    check_the_boot_pdelay_request();
+    ignore_a_self_sourced_pdelay_request();
+    answer_peer_requests_across_our_pending_stamp();
+    separate_claims_differing_only_in_the_sequence_high_byte();
+    separate_equal_sequence_request_and_response_claims();
+    ignore_a_follow_up_for_the_boot_request();
+    compute_the_first_exchange_delay();
+    ignore_a_self_sourced_pdelay_response();
+    answer_a_peer_initiated_exchange();
+    answer_a_requester_whose_identity_nearly_matches_ours();
+    refuse_a_foreign_domain_pdelay_request();
+    refuse_a_truncated_pdelay_request();
+    refuse_an_unlisted_message_type();
+    raise_ascapable_on_the_second_exchange();
+    become_master_on_announce_receipt_timeout();
+    check_our_announce();
+    check_our_sync_and_follow_up();
+    pair_a_follow_up_only_with_the_outstanding_resp();
+    stay_master_against_a_worse_announce();
+    refuse_a_better_announce_in_a_foreign_domain();
+    refuse_unqualified_announces_and_admit_the_controls();
+    adopt_a_better_announce_and_hold_its_path();
+    clamp_a_deep_path_and_take_a_parent_refresh();
+    walk_past_an_unknown_tlv_to_a_later_path_trace();
+    refuse_a_malformed_announce_suffix();
+    refuse_a_path_trace_whose_head_is_not_the_announced_gm();
+    hold_the_frozen_announce_context_under_overload();
+    stop_sync_transmission_after_adoption();
+    steer_on_the_first_peer_sync();
+    pair_nothing_with_a_late_follow_up();
+    never_steer_from_a_foreign_domain_sync_pair();
+    never_steer_from_a_follow_up_without_its_tlv();
+    pair_a_padded_sync();
+    drop_sync_ok_at_the_receipt_timeout();
+    step_the_phc_on_a_one_millisecond_offset();
+    slew_on_a_five_microsecond_offset();
+    converge_the_closed_loop_on_a_fast_master();
+    pair_nothing_with_a_wrong_sequence_follow_up();
+    pair_nothing_with_a_follow_up_from_the_wrong_source();
+    break_btca_ties_on_steps_then_source();
+    read_a_complete_frozen_epoch_in_a_delayed_dispatch();
+    take_mastership_when_the_parent_degrades();
+    keep_the_two_step_sync_body_zero();
+    stop_consuming_sync_when_ascapable_falls();
+    reset_the_best_record_on_become();
+    outrank_the_identity_with_the_priority_vector();
+    process_a_better_delayed_announce_from_its_epoch();
+    accept_a_negative_delay_inside_the_milan_floor();
+    drop_ascapable_over_the_threshold();
+    recover_ascapable_in_two_good_exchanges();
+    clear_ascapable_at_the_fourth_lost_response();
+    hold_the_ratio_across_a_stale_window();
+    refuse_to_complete_an_exchange_twice();
+    cease_on_multiple_responders_and_re_earn();
+    cease_on_a_late_second_identity();
+    resume_after_a_warm_reset_during_a_cease();
+    refuse_a_chasing_follow_up_the_resp_arrival();
+    refuse_a_runt_chaser_the_predecessor_stamp();
+    recover_the_request_cadence_across_reset();
+    recover_the_response_claim_across_reset();
+    recover_the_sync_cadence_across_reset();
+    hold_two_response_claims_under_backpressure();
+
+    printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
+    return fails ? 1 : 0;
   }
-}
 
-struct Frame {
-  std::vector<uint8_t> b;
-  void u8(uint8_t v) { b.push_back(v); }
-  void u16(uint16_t v) { u8(v >> 8); u8(v & 0xFF); }
-  void u32(uint32_t v) { u16(v >> 16); u16(v & 0xFFFF); }
-  void u48(uint64_t v) { u16((v >> 32) & 0xFFFF); u32(v & 0xFFFFFFFF); }
-  void u64(uint64_t v) { u32(v >> 32); u32(v & 0xFFFFFFFF); }
-  void ts(uint64_t ns) { u48(ns / 1000000000ull); u32(ns % 1000000000ull); }
-};
+ private:
 
-static Frame ptp(uint8_t mtype, uint16_t seq, uint64_t corr,
-                 uint16_t flags, uint16_t body_len,
-                 uint64_t src = PEER_CID) {
-  Frame f;
-  f.u48(0x0180C200000Eull);
-  f.u48(0x0080E1112233ull);
-  f.u16(0x88F7);
-  f.u8(0x10 | mtype); f.u8(0x02);
-  f.u16(34 + body_len);
-  f.u8(0); f.u8(0);
-  f.u16(flags);
-  f.u64(corr);
-  f.u32(0);
-  f.u64(src); f.u16(1);
-  f.u16(seq);
-  f.u8(0x05); f.u8(0x7F);
-  return f;
-}
-
-// a Follow_Up: header, preciseOriginTimestamp and the information TLV
-// (802.1AS-2011 Table 11-9: 76 octets; 11.4.4.3 / Table 11-10: tlvType
-// 0x3, lengthField 28, organizationId 00-80-C2, organizationSubType 1,
-// then cumulativeScaledRateOffset, gmTimeBaseIndicator, lastGmPhaseChange
-// and scaledLastGmFreqChange). Until #11 every Follow_Up this suite sent
-// stopped after the timestamp: the shape the parser wrongly accepted was
-// the shape the bench called valid
-static Frame follow_up(uint16_t seq, uint64_t corr, uint64_t origin,
-                       uint64_t src = PEER_CID) {
-  Frame g = ptp(0x8, seq, corr, 0x0000, 42, src);
-  g.ts(origin);
-  g.u16(0x0003); g.u16(28);
-  g.u8(0x00); g.u8(0x80); g.u8(0xC2);
-  g.u8(0x00); g.u8(0x00); g.u8(0x01);
-  g.u32(0);                                    // cumulativeScaledRateOffset
-  g.u16(0);                                    // gmTimeBaseIndicator
-  for (int i = 0; i < 12; i++) g.u8(0);        // lastGmPhaseChange
-  g.u32(0);                                    // scaledLastGmFreqChange
-  return g;
-}
-
-
-static VKL_gptp_engine *dut;
-//! the sequenceId a boundary stamper reads out of the frame it stamps
-//! (PTP header offset 30, frame offset 44)
-static uint16_t seq_of(const std::vector<uint8_t> &f) {
-  return f.size() > 45 ? (uint16_t)((f[44] << 8) | f[45]) : 0;
-}
-//! the messageType nibble the parent boundary stamper returns beside it
-static uint8_t type_of(const std::vector<uint8_t> &f) {
-  return f.size() > 14 ? (uint8_t)(f[14] & 0xF) : 0;
-}
-
-static uint64_t cyc = 0;
-static uint64_t commits_seen = 0;
-struct PubSnap {
-  uint64_t gm, parent;
-  uint8_t count;
-  uint64_t tail[7];
-};
-static std::vector<PubSnap> commit_snaps;
-
-// ---- TX backpressure ------------------------------------------------------
-static std::vector<std::vector<uint8_t>> txf;
-static std::vector<uint64_t> txns;               // egress ts fed per frame
-static std::vector<uint8_t> cur;
-static bool in_tx = false;
-static bool auto_txts = false;
-static int auto_pend = -1;
-
-// ---- the PHC: a live timestamp_counter model the servo can steer ----------
-// Q24 accumulator, 500 ns nominal per tick (2 MHz); adjfine addend and
-// adjtime steps applied exactly as the parent counter would
-static unsigned __int128 phc_acc = 0;
-static int32_t phc_adj = 0;
-static std::vector<uint64_t> steps_seen;         // every adjtime write
-static std::vector<uint32_t> adj_seen;           // every adjfine write
-
-static uint64_t phc() { return (uint64_t)(phc_acc >> 24); }
-
-static void tick() {
-  if (auto_pend >= 0 && !dut->txts_valid_i) {
-    uint64_t ns = phc() + 200;                   // MAC pipeline latency
-    dut->txts_valid_i = 1;
-    dut->txts_ns_i = ns;
-    dut->txts_seq_i = seq_of(txf[auto_pend]);
-    dut->txts_type_i = type_of(txf[auto_pend]);
-    txns[auto_pend] = ns;
-    auto_pend = -1;
-  }
-  dut->clk_i = 0; dut->eval();
-  const bool tx_fire = dut->tx_valid_o && dut->tx_ready_i;
-  const uint8_t tx_data = dut->tx_data_o;
-  const bool tx_sof = dut->tx_sof_o;
-  const bool tx_eof = dut->tx_eof_o;
-  dut->clk_i = 1; dut->eval();
-  if (dut->pub_commit_o) {
-    commits_seen++;
-    PubSnap s{};
-    s.gm = dut->pub_gm_id_o;
-    s.parent = dut->pub_parent_id_o;
-    s.count = dut->pub_path_count_o;
-    for (unsigned k = 0; k < 7; k++)
-      s.tail[k] = (uint64_t)dut->pub_path_o[2 * k]
-                | ((uint64_t)dut->pub_path_o[2 * k + 1] << 32);
-    commit_snaps.push_back(s);
-  }
-  if (dut->phc_addend_we_o) {
-    phc_adj = (int32_t)dut->phc_addend_o;
-    adj_seen.push_back(dut->phc_addend_o);
-  }
-  if (dut->phc_step_we_o) {
-    steps_seen.push_back(dut->phc_step_o);
-    phc_acc += (unsigned __int128)(
-        (__int128)(int64_t)dut->phc_step_o << 24);
-  }
-  phc_acc += (unsigned __int128)(uint64_t)((500ll << 24) + phc_adj);
-  if (tx_fire) {
-    if (tx_sof) { cur.clear(); in_tx = true; }
-    if (in_tx) cur.push_back(tx_data);
-    if (tx_eof && in_tx) {
-      txf.push_back(cur);
-      txns.push_back(0);
-      if (auto_txts) auto_pend = (int)txf.size() - 1;
-      in_tx = false;
+  int checks = 0;
+  int fails = 0;
+  void expect(const char *what, uint64_t got, uint64_t exp) {
+    checks++;
+    if (got != exp) {
+      fails++;
+      printf("FAIL %-28s got %016llx exp %016llx\n", what,
+             static_cast<unsigned long long>(got),
+             static_cast<unsigned long long>(exp));
     }
   }
-  dut->txts_valid_i = 0;                 // a pulse lasts exactly one edge
-  cyc++;
-}
 
-static void run(uint64_t n) { while (n--) tick(); }
+  struct Frame {
+    std::vector<uint8_t> b;
+    void u8(uint8_t v) { b.push_back(v); }
+    void u16(uint16_t v) { u8(v >> 8); u8(v & 0xFF); }
+    void u32(uint32_t v) { u16(v >> 16); u16(v & 0xFFFF); }
+    void u48(uint64_t v) { u16((v >> 32) & 0xFFFF); u32(v & 0xFFFFFFFF); }
+    void u64(uint64_t v) { u32(v >> 32); u32(v & 0xFFFFFFFF); }
+    void ts(uint64_t ns) { u48(ns / 1000000000ull); u32(ns % 1000000000ull); }
+  };
 
-static void send_frame(const std::vector<uint8_t> &bytes, uint64_t rx_ts) {
-  dut->rx_ts_i = rx_ts;
-  for (size_t i = 0; i < bytes.size(); i++) {
-    dut->rx_valid_i = 1;
-    dut->rx_data_i = bytes[i];
-    dut->rx_sof_i = (i == 0);
-    dut->rx_eof_i = (i + 1 == bytes.size());
-    dut->rx_err_i = 0;
-    tick();
+  Frame ptp(uint8_t mtype, uint16_t seq, uint64_t corr,
+            uint16_t flags, uint16_t body_len,
+            uint64_t src = PEER_CID) {
+    Frame f;
+    f.u48(0x0180C200000Eull);
+    f.u48(0x0080E1112233ull);
+    f.u16(0x88F7);
+    f.u8(0x10 | mtype); f.u8(0x02);
+    f.u16(34 + body_len);
+    f.u8(0); f.u8(0);
+    f.u16(flags);
+    f.u64(corr);
+    f.u32(0);
+    f.u64(src); f.u16(1);
+    f.u16(seq);
+    f.u8(0x05); f.u8(0x7F);
+    return f;
   }
-  dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
-}
 
-//! stamp one CHOSEN transmitted frame, reporting its own header identity
-//! the way KL_gptp_txstamp does
-static void txts_idx(size_t idx, uint64_t ns) {
-  dut->txts_valid_i = 1; dut->txts_ns_i = ns;
-  dut->txts_seq_i = idx < txf.size() ? seq_of(txf[idx]) : 0;
-  dut->txts_type_i = idx < txf.size() ? type_of(txf[idx]) : 0;
-  tick();
-  dut->txts_valid_i = 0;
-}
-
-//! stamp the frame last sent, the common case
-static void txts(uint64_t ns) {
-  txts_idx(txf.empty() ? 0 : txf.size() - 1, ns);
-}
-
-// ---- pdelay model: the spec formula in the ROM's exact integer forms ------
-// nrr = ((t3-t3')<<30)/(t4-t4') when the window fits 32 bits;
-// D = (((nrr*(t4-t1))>>30) - (t3-t2)) >>arith 1, uncorrected before the
-// first ratio. Mirrors 802.1AS-2011 11.2.15.3 / Milan 4.2.6, not the DUT.
-static struct {
-  uint64_t nr3 = 0, nr4 = 0, nrr = 0;
-  int64_t d = 0;
-  int count = 0;
-  bool stale_skip = false;       // last window rejected as > 2^32 ns
-} pdm;
-
-static void model_exchange(uint64_t t1, uint64_t t2, uint64_t t3,
-                           uint64_t t4) {
-  pdm.stale_skip = false;
-  if (pdm.nr3 != 0) {
-    uint64_t num = t3 - pdm.nr3, den = t4 - pdm.nr4;
-    if ((den >> 32) == 0 && (den & 0xFFFFFFFFull) != 0)
-      pdm.nrr = (num << 30) / (den & 0xFFFFFFFFull);
-    else
-      pdm.stale_skip = true;
+  // a Follow_Up: header, preciseOriginTimestamp and the information TLV
+  // (802.1AS-2011 Table 11-9: 76 octets; 11.4.4.3 / Table 11-10: tlvType
+  // 0x3, lengthField 28, organizationId 00-80-C2, organizationSubType 1,
+  // then cumulativeScaledRateOffset, gmTimeBaseIndicator, lastGmPhaseChange
+  // and scaledLastGmFreqChange). Until #11 every Follow_Up this suite sent
+  // stopped after the timestamp: the shape the parser wrongly accepted was
+  // the shape the bench called valid
+  Frame follow_up(uint16_t seq, uint64_t corr, uint64_t origin,
+                  uint64_t src = PEER_CID) {
+    Frame g = ptp(0x8, seq, corr, 0x0000, 42, src);
+    g.ts(origin);
+    g.u16(0x0003); g.u16(28);
+    g.u8(0x00); g.u8(0x80); g.u8(0xC2);
+    g.u8(0x00); g.u8(0x00); g.u8(0x01);
+    g.u32(0);                                    // cumulativeScaledRateOffset
+    g.u16(0);                                    // gmTimeBaseIndicator
+    for (int i = 0; i < 12; i++) g.u8(0);        // lastGmPhaseChange
+    g.u32(0);                                    // scaledLastGmFreqChange
+    return g;
   }
-  pdm.nr3 = t3; pdm.nr4 = t4;
-  uint64_t turn = t4 - t1;
-  uint64_t corr = turn;
-  if (pdm.nrr != 0) {
-    int64_t prod = (int64_t)(int32_t)(pdm.nrr & 0xFFFFFFFFull) *
-                   (int64_t)(int32_t)(turn & 0xFFFFFFFFull);
-    corr = ((uint64_t)prod) >> 30;
+
+
+  //! Owns the Verilated model for this harness's lifetime;
+  //! `final()` runs on every path out (Core Guidelines R.11).
+  const milan::tb::Model<VKL_gptp_engine> model;
+  VKL_gptp_engine *dut = model.get();   // the file's own observing pointer
+  //! the sequenceId a boundary stamper reads out of the frame it stamps
+  //! (PTP header offset 30, frame offset 44)
+  uint16_t seq_of(const std::vector<uint8_t> &f) {
+    return f.size() > 45 ? static_cast<uint16_t>((f[44] << 8) | f[45]) : 0;
   }
-  pdm.d = ((int64_t)(corr - (t3 - t2))) >> 1;
-  pdm.count++;
-}
-
-// ---- servo mirror: the ROM's step-vs-slew in exact integer form -----------
-// constants match gen_gptp_ucode.py at --clk-hz 2000000
-static const int64_t SV_STEP_NS = 20000;
-static const int64_t SV_GAIN_M = 4295, SV_GAIN_S = 6;
-static const int64_t SV_ILIM = 1677722;          // 200 ppm at 2 MHz
-static struct {
-  int64_t intg = 0;
-  bool stepped = false;                          // last sample stepped
-  uint64_t step_val = 0;
-  int64_t addend = 0;
-} svm;
-
-static void servo_mirror(int64_t off) {
-  uint64_t mag = (uint64_t)(off + SV_STEP_NS);
-  if (mag > (uint64_t)(2 * SV_STEP_NS)) {
-    svm.stepped = true;
-    svm.step_val = (uint64_t)(-off);
-    svm.addend = -svm.intg;      // the surviving rate estimate, alone
-    return;
+  //! the messageType nibble the parent boundary stamper returns beside it
+  uint8_t type_of(const std::vector<uint8_t> &f) {
+    return f.size() > 14 ? static_cast<uint8_t>(f[14] & 0xF) : 0;
   }
-  svm.stepped = false;
-  int64_t t = (off * SV_GAIN_M) >> SV_GAIN_S;
-  svm.intg += (t >> 2);
-  if (svm.intg > SV_ILIM) svm.intg = SV_ILIM;
-  if (svm.intg < -SV_ILIM) svm.intg = -SV_ILIM;
-  svm.addend = -((t - (t >> 2)) + svm.intg);
-}
 
-// ---- auto peer: answers every Pdelay_Req the DUT transmits ----------------
-// peer clock runs at +2^-13 (~122 ppm) against ours; turnaround fields are
-// constants of the mode, the ingress stamp is t1 + wire turnaround.
-enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_SELF, PD_DUAL,
-              PD_DUP, PD_DUAL_LATE };
-static PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
-static size_t pd_seen = 0;
-static int pd_self_sent = 0;             // PD_SELF pairs actually sent
+  uint64_t cyc = 0;
+  uint64_t commits_seen = 0;
+  //! the width of the published PathTrace tail: pub_path_o carries seven
+  //! clockIdentities behind the separately published grandmaster, flattened
+  //! into 7x2 little-endian 32-bit words (see pub_path_tail below)
+  static constexpr unsigned PATH_TAIL_SLOTS = 7;
+  struct PubSnap {
+    uint64_t gm;
+    uint64_t parent;
+    uint8_t count;
+    uint64_t tail[PATH_TAIL_SLOTS];
+  };
+  std::vector<PubSnap> commit_snaps;
 
-static uint64_t peer_ns(uint64_t ours) {
-  return 5000000ull + ours + (ours >> 13);
-}
+  // ---- TX backpressure ------------------------------------------------------
+  std::vector<std::vector<uint8_t>> txf;
+  std::vector<uint64_t> txns;               // egress ts fed per frame
+  std::vector<uint8_t> cur;
+  bool in_tx = false;
+  bool auto_txts = false;
+  int auto_pend = -1;
 
-static void service_pdelay() {
-  while (pd_seen < txf.size()) {
-    size_t i = pd_seen;
-    if ((txf[i].size() <= 14) || ((txf[i][14] & 0xF) != 0x2)) {
-      pd_seen++;
-      continue;
+  // ---- the PHC: a live timestamp_counter model the servo can steer ----------
+  // Q24 accumulator, 500 ns nominal per tick (2 MHz); adjfine addend and
+  // adjtime steps applied exactly as the parent counter would
+  unsigned __int128 phc_acc = 0;
+  int32_t phc_adj = 0;
+  std::vector<uint64_t> steps_seen;         // every adjtime write
+  std::vector<uint32_t> adj_seen;           // every adjfine write
+
+  uint64_t phc() { return static_cast<uint64_t>(phc_acc >> 24); }
+
+  void tick() {
+    if (auto_pend >= 0 && !dut->txts_valid_i) {
+      uint64_t ns = phc() + 200;                   // MAC pipeline latency
+      dut->txts_valid_i = 1;
+      dut->txts_ns_i = ns;
+      dut->txts_seq_i = seq_of(txf[auto_pend]);
+      dut->txts_type_i = type_of(txf[auto_pend]);
+      txns[auto_pend] = ns;
+      auto_pend = -1;
     }
-    if (txns[i] == 0) return;            // egress ts not fed yet
-    pd_seen++;
-    if (pd_mode == PD_OFF) continue;     // lost response
-    if (pd_mode == PD_SKIP) continue;    // pre-enable housekeeping
-    uint16_t seq = (uint16_t)((txf[i][44] << 8) | txf[i][45]);
-    uint64_t t1 = txns[i];
-    uint64_t t2 = peer_ns(t1 + 300);
-    if (pd_mode == PD_SELF) {
-      // our own request reflected back at us: the pair answers the
-      // outstanding sequenceId with our requestingPortIdentity, so every
-      // other gate admits it and only the sourcePortIdentity compare can
-      // refuse it. Its residency is 19,800, a delay near 700 rather than
-      // the 600 of a genuine exchange, so an accepted pair MOVES the
-      // published delay (still under the 800 ns threshold, which must
-      // not be what refuses it). No model_exchange: it never happened
-      Frame f = ptp(0x3, seq, 0, 0x0200, 20, OUR_CID);
-      f.ts(t2); f.u64(OUR_CID); f.u16(1);
-      send_frame(f.b, t1 + 21200);
-      run(400);
-      Frame g = ptp(0xA, seq, 0, 0x0000, 20, OUR_CID);
-      g.ts(t2 + 19800); g.u64(OUR_CID); g.u16(1);
-      send_frame(g.b, t1 + 21200 + 1000);
-      run(400);
-      pd_self_sent++;
-      continue;
+    dut->clk_i = 0; dut->eval();
+    const bool tx_fire = dut->tx_valid_o && dut->tx_ready_i;
+    const uint8_t tx_data = dut->tx_data_o;
+    const bool tx_sof = dut->tx_sof_o;
+    const bool tx_eof = dut->tx_eof_o;
+    dut->clk_i = 1; dut->eval();
+    if (dut->pub_commit_o) {
+      commits_seen++;
+      PubSnap s{};
+      s.gm = dut->pub_gm_id_o;
+      s.parent = dut->pub_parent_id_o;
+      s.count = dut->pub_path_count_o;
+      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++)
+        s.tail[k] = static_cast<uint64_t>(dut->pub_path_o[2 * k])
+                  | (static_cast<uint64_t>(dut->pub_path_o[2 * k + 1]) << 32);
+      commit_snaps.push_back(s);
     }
-    uint64_t resid = 20000;              // D = +600 after correction
-    if (pd_mode == PD_NEG) resid = 21300;   // D ~ -49: the Milan floor
-    if (pd_mode == PD_FAR) resid = 19200;   // D ~ +1001: over threshold
-    uint64_t t3 = t2 + resid;
-    uint64_t t4 = t1 + 21200;
-    Frame f = ptp(0x3, seq, 0, 0x0200, 20);
-    f.ts(t2); f.u64(OUR_CID); f.u16(1);
-    send_frame(f.b, t4);
-    run(400);
-    if (pd_mode == PD_DUAL || pd_mode == PD_DUP) {
-      uint64_t src2 = (pd_mode == PD_DUAL) ? NEAR_CID
-                                           : PEER_CID;
-      Frame d = ptp(0x3, seq, 0, 0x0200, 20, src2);
-      d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
-      send_frame(d.b, t4 + 80);
-      run(400);
+    if (dut->phc_addend_we_o) {
+      phc_adj = static_cast<int32_t>(dut->phc_addend_o);
+      adj_seen.push_back(dut->phc_addend_o);
     }
-    Frame g = ptp(0xA, seq, 0, 0x0000, 20);
-    g.ts(t3); g.u64(OUR_CID); g.u16(1);
-    send_frame(g.b, t4 + 1000);
-    run(400);
-    if (pd_mode == PD_DUAL_LATE) {
-      // the second identity answers AFTER the first responder's
-      // Follow_Up: the exchange has completed, so this response takes
-      // the handler's post-completion path, which must still reach the
-      // Milan 4.2.6.2.5 identity bookkeeping
-      Frame d = ptp(0x3, seq, 0, 0x0200, 20, NEAR_CID);
-      d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
-      send_frame(d.b, t4 + 2000);
-      run(400);
+    if (dut->phc_step_we_o) {
+      steps_seen.push_back(dut->phc_step_o);
+      phc_acc += static_cast<unsigned __int128>(
+          static_cast<__int128>(static_cast<int64_t>(dut->phc_step_o)) << 24);
     }
-    model_exchange(t1, t2, t3, t4);
-  }
-}
-
-static void run_svc(uint64_t n) {
-  while (n--) { tick(); if ((n & 255) == 0) service_pdelay(); }
-}
-
-static bool wait_flags(uint32_t mask, uint32_t want, uint64_t max_ticks) {
-  for (uint64_t n = 0; n < max_ticks; n++) {
-    if ((dut->pub_flags_o & mask) == want) return true;
-    tick();
-    if ((n & 255) == 0) service_pdelay();
-  }
-  return false;
-}
-
-static bool wait_exchanges(int count, uint64_t max_ticks) {
-  for (uint64_t n = 0; n < max_ticks; n++) {
-    if (pdm.count >= count) return true;
-    tick();
-    if ((n & 255) == 0) service_pdelay();
-  }
-  return false;
-}
-
-static size_t tx_seen = 0;
-static std::vector<uint8_t> wait_tx(int mtype, uint64_t max_cycles,
-                                    size_t *idx_out = nullptr) {
-  for (uint64_t n = 0; n < max_cycles; n++) {
-    while (tx_seen < txf.size()) {
-      size_t i = tx_seen++;
-      if (mtype < 0 || (txf[i].size() > 14 && (txf[i][14] & 0xF) == mtype)) {
-        if (idx_out) *idx_out = i;
-        return txf[i];
+    phc_acc += static_cast<unsigned __int128>(
+        static_cast<uint64_t>((500ll << 24) + phc_adj));
+    if (tx_fire) {
+      if (tx_sof) { cur.clear(); in_tx = true; }
+      if (in_tx) cur.push_back(tx_data);
+      if (tx_eof && in_tx) {
+        txf.push_back(cur);
+        txns.push_back(0);
+        if (auto_txts) auto_pend = static_cast<int>(txf.size()) - 1;
+        in_tx = false;
       }
     }
+    dut->txts_valid_i = 0;                 // a pulse lasts exactly one edge
+    cyc++;
+  }
+
+  void run(uint64_t n) { while (n--) tick(); }
+
+  void send_frame(const std::vector<uint8_t> &bytes, uint64_t rx_ts) {
+    dut->rx_ts_i = rx_ts;
+    for (size_t i = 0; i < bytes.size(); i++) {
+      dut->rx_valid_i = 1;
+      dut->rx_data_i = bytes[i];
+      dut->rx_sof_i = (i == 0);
+      dut->rx_eof_i = (i + 1 == bytes.size());
+      dut->rx_err_i = 0;
+      tick();
+    }
+    dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+  }
+
+  //! stamp one CHOSEN transmitted frame, reporting its own header identity
+  //! the way KL_gptp_txstamp does
+  void txts_idx(size_t idx, uint64_t ns) {
+    dut->txts_valid_i = 1; dut->txts_ns_i = ns;
+    dut->txts_seq_i = idx < txf.size() ? seq_of(txf[idx]) : 0;
+    dut->txts_type_i = idx < txf.size() ? type_of(txf[idx]) : 0;
     tick();
-    if ((n & 255) == 0) service_pdelay();
+    dut->txts_valid_i = 0;
   }
-  printf("FAIL wait_tx type %d: timeout\n", mtype);
-  fails++; checks++;
-  return {};
-}
 
-// a sync+FU pair from `src`; returns the offset the plane should see
-static void sync_pair(uint16_t seq, uint64_t local_rx, uint64_t origin,
-                      uint64_t src = PEER_CID) {
-  Frame f = ptp(0x0, seq, 0, 0x0208, 10, src);
-  f.ts(0);
-  send_frame(f.b, local_rx);
-  run(2000);
-  Frame g = follow_up(seq, 0, origin, src);
-  send_frame(g.b, local_rx + 500);
-  run(6000);
-}
+  //! stamp the frame last sent, the common case
+  void txts(uint64_t ns) {
+    txts_idx(txf.empty() ? 0 : txf.size() - 1, ns);
+  }
 
-// an announce carrying {p1, gmid, steps} from `src`
-static void announce(uint16_t seq, uint8_t p1, uint64_t gmid,
-                     uint16_t steps, uint64_t src) {
-  // 802.1AS-2011 10.5.3.3.4: N=stepsRemoved+1. These BTCA helpers use a
-  // canonical path headed by GM and ending at the announcing source.
-  std::vector<uint64_t> path;
-  path.push_back(gmid);
-  for (uint16_t i = 1; i < steps; i++)
-    path.push_back(0x00A000FFFE000000ull + i);
-  if (steps != 0) path.push_back(src);
-  const uint16_t tlv = (uint16_t)(4 + 8 * path.size());
-  Frame a = ptp(0xB, seq, 0, 0x0008, (uint16_t)(30 + tlv), src);
-  for (int i = 0; i < 10; i++) a.u8(0);
-  a.u16(0xFFC4); a.u8(0);
-  a.u8(p1); a.u32(OUR_CQ); a.u8(248);
-  a.u64(gmid);
-  a.u16(steps); a.u8(0xA0);
-  a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
-  for (uint64_t hop : path) a.u64(hop);
-  send_frame(a.b, 5000000);
-  run(6000);
-}
+  // ---- pdelay model: the spec formula in the ROM's exact integer forms ------
+  // nrr = ((t3-t3')<<30)/(t4-t4') when the window fits 32 bits;
+  // D = (((nrr*(t4-t1))>>30) - (t3-t2)) >>arith 1, uncorrected before the
+  // first ratio. Mirrors 802.1AS-2011 11.2.15.3 / Milan 4.2.6, not the DUT.
+  struct PdelayModelState {
+    uint64_t nr3 = 0;
+    uint64_t nr4 = 0;
+    uint64_t nrr = 0;
+    int64_t d = 0;
+    int count = 0;
+    bool stale_skip = false;       // last window rejected as > 2^32 ns
+  };
+  PdelayModelState pdm;
 
-// an announce carrying {p1, gmid, steps} from `src` with a path trace TLV
-// (802.1AS-2011 10.5.3.3: tlvType 0x0008, one clockIdentity per hop);
-// an empty path omits the TLV
-static void send_announce(uint16_t seq, uint8_t p1, uint64_t gmid,
-                          uint16_t steps, uint64_t src,
-                          const std::vector<uint64_t> &path, uint64_t rx_ts) {
-  uint16_t tlv = path.empty() ? 0 : (uint16_t)(4 + 8 * path.size());
-  Frame a = ptp(0xB, seq, 0, 0x0008, (uint16_t)(30 + tlv), src);
-  for (int i = 0; i < 10; i++) a.u8(0);
-  a.u16(0xFFC4); a.u8(0);
-  a.u8(p1); a.u32(OUR_CQ); a.u8(248);
-  a.u64(gmid);
-  a.u16(steps); a.u8(0xA0);
-  if (!path.empty()) {
-    a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
+  void model_exchange(uint64_t t1, uint64_t t2, uint64_t t3,
+                      uint64_t t4) {
+    pdm.stale_skip = false;
+    if (pdm.nr3 != 0) {
+      uint64_t num = t3 - pdm.nr3;
+      uint64_t den = t4 - pdm.nr4;
+      if ((den >> 32) == 0 && (den & 0xFFFFFFFFull) != 0)
+        pdm.nrr = (num << 30) / (den & 0xFFFFFFFFull);
+      else
+        pdm.stale_skip = true;
+    }
+    pdm.nr3 = t3; pdm.nr4 = t4;
+    uint64_t turn = t4 - t1;
+    uint64_t corr = turn;
+    if (pdm.nrr != 0) {
+      int64_t prod =
+          static_cast<int64_t>(static_cast<int32_t>(pdm.nrr & 0xFFFFFFFFull)) *
+          static_cast<int64_t>(static_cast<int32_t>(turn & 0xFFFFFFFFull));
+      corr = static_cast<uint64_t>(prod) >> 30;
+    }
+    pdm.d = static_cast<int64_t>(corr - (t3 - t2)) >> 1;
+    pdm.count++;
+  }
+
+  // ---- servo mirror: the ROM's step-vs-slew in exact integer form -----------
+  // constants match gen_gptp_ucode.py at --clk-hz 2000000
+  static constexpr int64_t SV_STEP_NS = 20000;
+  static constexpr int64_t SV_GAIN_M = 4295;
+  static constexpr int64_t SV_GAIN_S = 6;
+  static constexpr int64_t SV_ILIM = 1677722;              // 200 ppm at 2 MHz
+  struct ServoModelState {
+    int64_t intg = 0;
+    bool stepped = false;                          // last sample stepped
+    uint64_t step_val = 0;
+    int64_t addend = 0;
+  };
+  ServoModelState svm;
+
+  void servo_mirror(int64_t off) {
+    uint64_t mag = static_cast<uint64_t>(off + SV_STEP_NS);
+    if (mag > static_cast<uint64_t>(2 * SV_STEP_NS)) {
+      svm.stepped = true;
+      svm.step_val = static_cast<uint64_t>(-off);
+      svm.addend = -svm.intg;      // the surviving rate estimate, alone
+      return;
+    }
+    svm.stepped = false;
+    int64_t t = (off * SV_GAIN_M) >> SV_GAIN_S;
+    svm.intg += (t >> 2);
+    if (svm.intg > SV_ILIM) svm.intg = SV_ILIM;
+    if (svm.intg < -SV_ILIM) svm.intg = -SV_ILIM;
+    svm.addend = -((t - (t >> 2)) + svm.intg);
+  }
+
+  // ---- auto peer: answers every Pdelay_Req the DUT transmits ----------------
+  // peer clock runs at +2^-13 (~122 ppm) against ours; turnaround fields are
+  // constants of the mode, the ingress stamp is t1 + wire turnaround.
+  enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_SELF, PD_DUAL,
+                PD_DUP, PD_DUAL_LATE };
+  PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
+  size_t pd_seen = 0;
+  int pd_self_sent = 0;             // PD_SELF pairs actually sent
+
+  uint64_t peer_ns(uint64_t ours) {
+    return 5000000ull + ours + (ours >> 13);
+  }
+
+  void service_pdelay() {
+    while (pd_seen < txf.size()) {
+      size_t i = pd_seen;
+      if ((txf[i].size() <= 14) || ((txf[i][14] & 0xF) != 0x2)) {
+        pd_seen++;
+        continue;
+      }
+      if (txns[i] == 0) return;            // egress ts not fed yet
+      pd_seen++;
+      if (pd_mode == PD_OFF) continue;     // lost response
+      if (pd_mode == PD_SKIP) continue;    // pre-enable housekeeping
+      uint16_t seq = static_cast<uint16_t>((txf[i][44] << 8) | txf[i][45]);
+      uint64_t t1 = txns[i];
+      uint64_t t2 = peer_ns(t1 + 300);
+      if (pd_mode == PD_SELF) {
+        // our own request reflected back at us: the pair answers the
+        // outstanding sequenceId with our requestingPortIdentity, so every
+        // other gate admits it and only the sourcePortIdentity compare can
+        // refuse it. Its residency is 19,800, a delay near 700 rather than
+        // the 600 of a genuine exchange, so an accepted pair MOVES the
+        // published delay (still under the 800 ns threshold, which must
+        // not be what refuses it). No model_exchange: it never happened
+        Frame f = ptp(0x3, seq, 0, 0x0200, 20, OUR_CID);
+        f.ts(t2); f.u64(OUR_CID); f.u16(1);
+        send_frame(f.b, t1 + 21200);
+        run(400);
+        Frame g = ptp(0xA, seq, 0, 0x0000, 20, OUR_CID);
+        g.ts(t2 + 19800); g.u64(OUR_CID); g.u16(1);
+        send_frame(g.b, t1 + 21200 + 1000);
+        run(400);
+        pd_self_sent++;
+        continue;
+      }
+      uint64_t resid = 20000;              // D = +600 after correction
+      if (pd_mode == PD_NEG) resid = 21300;   // D ~ -49: the Milan floor
+      if (pd_mode == PD_FAR) resid = 19200;   // D ~ +1001: over threshold
+      uint64_t t3 = t2 + resid;
+      uint64_t t4 = t1 + 21200;
+      Frame f = ptp(0x3, seq, 0, 0x0200, 20);
+      f.ts(t2); f.u64(OUR_CID); f.u16(1);
+      send_frame(f.b, t4);
+      run(400);
+      if (pd_mode == PD_DUAL || pd_mode == PD_DUP) {
+        uint64_t src2 = (pd_mode == PD_DUAL) ? NEAR_CID
+                                             : PEER_CID;
+        Frame d = ptp(0x3, seq, 0, 0x0200, 20, src2);
+        d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
+        send_frame(d.b, t4 + 80);
+        run(400);
+      }
+      Frame g = ptp(0xA, seq, 0, 0x0000, 20);
+      g.ts(t3); g.u64(OUR_CID); g.u16(1);
+      send_frame(g.b, t4 + 1000);
+      run(400);
+      if (pd_mode == PD_DUAL_LATE) {
+        // the second identity answers AFTER the first responder's
+        // Follow_Up: the exchange has completed, so this response takes
+        // the handler's post-completion path, which must still reach the
+        // Milan 4.2.6.2.5 identity bookkeeping
+        Frame d = ptp(0x3, seq, 0, 0x0200, 20, NEAR_CID);
+        d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
+        send_frame(d.b, t4 + 2000);
+        run(400);
+      }
+      model_exchange(t1, t2, t3, t4);
+    }
+  }
+
+  void run_svc(uint64_t n) {
+    while (n--) { tick(); if ((n & 255) == 0) service_pdelay(); }
+  }
+
+  bool wait_flags(uint32_t mask, uint32_t want, uint64_t max_ticks) {
+    for (uint64_t n = 0; n < max_ticks; n++) {
+      if ((dut->pub_flags_o & mask) == want) return true;
+      tick();
+      if ((n & 255) == 0) service_pdelay();
+    }
+    return false;
+  }
+
+  bool wait_exchanges(int count, uint64_t max_ticks) {
+    for (uint64_t n = 0; n < max_ticks; n++) {
+      if (pdm.count >= count) return true;
+      tick();
+      if ((n & 255) == 0) service_pdelay();
+    }
+    return false;
+  }
+
+  size_t tx_seen = 0;
+  std::vector<uint8_t> wait_tx(int mtype, uint64_t max_cycles,
+                               size_t *idx_out = nullptr) {
+    for (uint64_t n = 0; n < max_cycles; n++) {
+      while (tx_seen < txf.size()) {
+        size_t i = tx_seen++;
+        if (mtype < 0 || (txf[i].size() > 14 && (txf[i][14] & 0xF) == mtype)) {
+          if (idx_out) *idx_out = i;
+          return txf[i];
+        }
+      }
+      tick();
+      if ((n & 255) == 0) service_pdelay();
+    }
+    printf("FAIL wait_tx type %d: timeout\n", mtype);
+    fails++; checks++;
+    return {};
+  }
+
+  // a sync+FU pair from `src`; returns the offset the plane should see
+  void sync_pair(uint16_t seq, uint64_t local_rx, uint64_t origin,
+                 uint64_t src = PEER_CID) {
+    Frame f = ptp(0x0, seq, 0, 0x0208, 10, src);
+    f.ts(0);
+    send_frame(f.b, local_rx);
+    run(2000);
+    Frame g = follow_up(seq, 0, origin, src);
+    send_frame(g.b, local_rx + 500);
+    run(6000);
+  }
+
+  // an announce carrying {p1, gmid, steps} from `src`
+  void announce(uint16_t seq, uint8_t p1, uint64_t gmid,
+                uint16_t steps, uint64_t src) {
+    // 802.1AS-2011 10.5.3.3.4: N=stepsRemoved+1. These BTCA helpers use a
+    // canonical path headed by GM and ending at the announcing source.
+    std::vector<uint64_t> path;
+    path.push_back(gmid);
+    for (uint16_t i = 1; i < steps; i++)
+      path.push_back(0x00A000FFFE000000ull + i);
+    if (steps != 0) path.push_back(src);
+    const uint16_t tlv = static_cast<uint16_t>(4 + 8 * path.size());
+    Frame a = ptp(0xB, seq, 0, 0x0008, static_cast<uint16_t>(30 + tlv), src);
+    for (int i = 0; i < 10; i++) a.u8(0);
+    a.u16(0xFFC4); a.u8(0);
+    a.u8(p1); a.u32(OUR_CQ); a.u8(248);
+    a.u64(gmid);
+    a.u16(steps); a.u8(0xA0);
+    a.u16(0x0008); a.u16(static_cast<uint16_t>(8 * path.size()));
     for (uint64_t hop : path) a.u64(hop);
+    send_frame(a.b, 5000000);
+    run(6000);
   }
-  send_frame(a.b, rx_ts);
-  run_svc(6000);
-}
 
-static uint64_t fld48(const std::vector<uint8_t> &f, size_t o) {
-  uint64_t v = 0; for (int i = 0; i < 6; i++) v = (v << 8) | f[o + i];
-  return v;
-}
-static uint64_t fld64(const std::vector<uint8_t> &f, size_t o) {
-  uint64_t v = 0; for (int i = 0; i < 8; i++) v = (v << 8) | f[o + i];
-  return v;
-}
-static uint32_t fld32(const std::vector<uint8_t> &f, size_t o) {
-  return (f[o] << 24) | (f[o + 1] << 16) | (f[o + 2] << 8) | f[o + 3];
-}
-static uint16_t fld16(const std::vector<uint8_t> &f, size_t o) {
-  return (uint16_t)((f[o] << 8) | f[o + 1]);
-}
-
-//! Verilator exposes the 7x64 flattened publication as little-endian
-//! 32-bit words. Keep this oracle outside the RTL's indexing expression.
-static uint64_t pub_path_tail(unsigned slot) {
-  return (uint64_t)dut->pub_path_o[2 * slot]
-       | ((uint64_t)dut->pub_path_o[2 * slot + 1] << 32);
-}
-
-static void check_common(const char *tag, const std::vector<uint8_t> &f,
-                         uint8_t mtype, uint16_t flags, int msglen,
-                         uint8_t logint) {
-  char n[64];
-  // 802.1AS-2011 Table 11-7: Sync and Follow_Up have their own control
-  // values; Announce and every Pdelay message use the delay-management
-  // value. Keep this oracle independent from the µcode header builder.
-  uint8_t control = 0x05;
-  if (mtype == 0x0) control = 0x00;
-  if (mtype == 0x8) control = 0x02;
-  if ((int)f.size() != 14 + msglen) {
-    snprintf(n, 64, "%s size", tag);
-    expect(n, f.size(), (uint64_t)(14 + msglen));
-    return;
+  // an announce carrying {p1, gmid, steps} from `src` with a path trace TLV
+  // (802.1AS-2011 10.5.3.3: tlvType 0x0008, one clockIdentity per hop);
+  // an empty path omits the TLV
+  void send_announce(uint16_t seq, uint8_t p1, uint64_t gmid,
+                     uint16_t steps, uint64_t src,
+                     const std::vector<uint64_t> &path, uint64_t rx_ts) {
+    uint16_t tlv = path.empty() ? 0 : static_cast<uint16_t>(4 + 8 * path.size());
+    Frame a = ptp(0xB, seq, 0, 0x0008, static_cast<uint16_t>(30 + tlv), src);
+    for (int i = 0; i < 10; i++) a.u8(0);
+    a.u16(0xFFC4); a.u8(0);
+    a.u8(p1); a.u32(OUR_CQ); a.u8(248);
+    a.u64(gmid);
+    a.u16(steps); a.u8(0xA0);
+    if (!path.empty()) {
+      a.u16(0x0008); a.u16(static_cast<uint16_t>(8 * path.size()));
+      for (uint64_t hop : path) a.u64(hop);
+    }
+    send_frame(a.b, rx_ts);
+    run_svc(6000);
   }
-  snprintf(n, 64, "%s DA", tag);     expect(n, fld48(f, 0), 0x0180C200000Eull);
-  snprintf(n, 64, "%s SA", tag);     expect(n, fld48(f, 6), OUR_MAC);
-  snprintf(n, 64, "%s type", tag);   expect(n, f[14], 0x10 | mtype);
-  snprintf(n, 64, "%s len", tag);    expect(n, fld16(f, 16), msglen);
-  snprintf(n, 64, "%s flags", tag);  expect(n, fld16(f, 20), flags);
-  snprintf(n, 64, "%s srcCID", tag); expect(n, fld64(f, 34), OUR_CID);
-  snprintf(n, 64, "%s srcPN", tag);  expect(n, fld16(f, 42), 1);
-  snprintf(n, 64, "%s control", tag); expect(n, f[46], control);
-  snprintf(n, 64, "%s logint", tag); expect(n, f[47], logint);
-}
 
-int main(int argc, char **argv) {
-  Verilated::commandArgs(argc, argv);
-  dut = new VKL_gptp_engine;
+  uint64_t fld48(const std::vector<uint8_t> &f, size_t o) {
+    uint64_t v = 0; for (int i = 0; i < 6; i++) v = (v << 8) | f[o + i];
+    return v;
+  }
+  uint64_t fld64(const std::vector<uint8_t> &f, size_t o) {
+    uint64_t v = 0; for (int i = 0; i < 8; i++) v = (v << 8) | f[o + i];
+    return v;
+  }
+  uint32_t fld32(const std::vector<uint8_t> &f, size_t o) {
+    return (f[o] << 24) | (f[o + 1] << 16) | (f[o + 2] << 8) | f[o + 3];
+  }
+  uint16_t fld16(const std::vector<uint8_t> &f, size_t o) {
+    return static_cast<uint16_t>((f[o] << 8) | f[o + 1]);
+  }
 
-  dut->rst_n = 0;
-  dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
-  dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
-  dut->tx_ready_i = 1;
-  dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
-  dut->txts_type_i = 0;
-  for (int i = 0; i < 8; i++) tick();
-  dut->rst_n = 1;
+  //! Verilator exposes the 7x64 flattened publication as little-endian
+  //! 32-bit words. Keep this oracle outside the RTL's indexing expression.
+  uint64_t pub_path_tail(unsigned slot) {
+    return static_cast<uint64_t>(dut->pub_path_o[2 * slot])
+         | (static_cast<uint64_t>(dut->pub_path_o[2 * slot + 1]) << 32);
+  }
 
-  // Before the ROM init leg has written S_CID, no complete all-hop loop
-  // comparison is possible. A first-event over-cap Announce with our identity
-  // only beyond the retained public window must therefore be refused, not
-  // queued in hope that the mirror appears before dispatch.
-  {
-    const uint16_t d0 = dut->dbg_rx_drop_o;
-    const size_t c0 = commit_snaps.size();
-    std::vector<uint64_t> path = {0x00C001FFFE000001ull};
-    for (unsigned i = 1; i < 8; i++)
-      path.push_back(0x00C0010000000000ull + i);
-    path.push_back(OUR_CID);
-    send_announce(0xC001, 1, path[0], 8, PEER_CID, path, 1000);
-    expect("pre-init deep Announce: no commit", commit_snaps.size(), c0);
-    expect("pre-init deep Announce: parser refusal", dut->dbg_rx_drop_o,
-           (uint16_t)(d0 + 1));
-    expect("pre-init deep Announce: GM stays empty", dut->pub_gm_id_o, 0);
+  void check_common(const char *tag, const std::vector<uint8_t> &f,
+                    uint8_t mtype, uint16_t flags, int msglen,
+                    uint8_t logint) {
+    char n[64];
+    // 802.1AS-2011 Table 11-7: Sync and Follow_Up have their own control
+    // values; Announce and every Pdelay message use the delay-management
+    // value. Keep this oracle independent from the µcode header builder.
+    uint8_t control = 0x05;
+    if (mtype == 0x0) control = 0x00;
+    if (mtype == 0x8) control = 0x02;
+    if (static_cast<int>(f.size()) != 14 + msglen) {
+      snprintf(n, 64, "%s size", tag);
+      expect(n, f.size(), static_cast<uint64_t>(14 + msglen));
+      return;
+    }
+    snprintf(n, 64, "%s DA", tag);     expect(n, fld48(f, 0), 0x0180C200000Eull);
+    snprintf(n, 64, "%s SA", tag);     expect(n, fld48(f, 6), OUR_MAC);
+    snprintf(n, 64, "%s type", tag);   expect(n, f[14], 0x10 | mtype);
+    snprintf(n, 64, "%s len", tag);    expect(n, fld16(f, 16), msglen);
+    snprintf(n, 64, "%s flags", tag);  expect(n, fld16(f, 20), flags);
+    snprintf(n, 64, "%s srcCID", tag); expect(n, fld64(f, 34), OUR_CID);
+    snprintf(n, 64, "%s srcPN", tag);  expect(n, fld16(f, 42), 1);
+    snprintf(n, 64, "%s control", tag); expect(n, f[46], control);
+    snprintf(n, 64, "%s logint", tag); expect(n, f[47], logint);
+  }
+
+
+
+  // ---- what one phase records for a later phase to read --------------------
+  //! phase 1's boot Pdelay_Req: the transmit slot whose egress timestamp is
+  //! still outstanding through phase 1c, and the stamp finally returned for it
+  size_t our_req_idx = 0;
+  uint64_t T1 = 0;
+  //! phase 3's peer-initiated exchange: its ingress and turnaround stamps,
+  //! the time base phases 3a..3d keep sending against
+  uint64_t T2R = 0;
+  uint64_t T3R = 0;
+  //! phase 7b's pinned publication, refreshed once the paired Follow_Up
+  //! computes, so the probes after it compare against the new baseline
+  uint32_t pd0 = 0;
+  uint32_t fl0 = 0;
+  //! phase 8's published raw announce vector, re-read by phase 8b
+  uint64_t ANNQ8 = 0;
+  //! phase 9's adopted grandmaster and the announcer that loses to it: both
+  //! are still named by the BTCA, overload and cease phases that follow
+  uint64_t GMID = 0;
+  uint64_t WORSE_GM = 0;
+  uint64_t WORSE_SRC = 0;
+  uint64_t PATH_B1 = 0;
+  uint64_t PATH_C1 = 0;
+  uint64_t Q_C1 = 0;
+  std::vector<uint64_t> Q_PATH_C;
+  //! phases 10..14's sync fixture: the ingress and origin stamps, the
+  //! correctionField they carry, and the offsets they must produce
+  uint64_t TRX = 0;
+  uint64_t ORIGIN = 0;
+  uint64_t CORR_NS = 0;
+  uint64_t OFF = 0;
+  uint64_t TRX2 = 0;
+  uint64_t ORIGIN2 = 0;
+  uint64_t OFF2 = 0;
+  //! phase 16's ingress stamp, still the time base of phases 17 and 21
+  uint64_t TRX6 = 0;
+  //! phase 21b's newcomer, re-checked by 21c and 21d
+  uint64_t NEWGM = 0;
+  uint64_t NEWSRC = 0;
+  //! phase 32's two held peer requests: the sequenceIds, the requesting
+  //! clockIdentities and portNumbers, and the boundary stamps returned
+  static constexpr uint16_t Q1 = 0x1111;
+  static constexpr uint16_t Q2 = 0x2222;
+  static constexpr uint64_t C1 = PEER_CID;
+  static constexpr uint64_t C2 = NEAR_CID;
+  static constexpr uint16_t P1 = 1;
+  static constexpr uint16_t P2 = 2;
+  static constexpr uint64_t TS1 = 8100111ull;
+  static constexpr uint64_t TS2 = 8200222ull;
+
+  void bring_the_engine_out_of_reset() {
+    dut->rst_n = 0;
+    dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+    dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
+    dut->tx_ready_i = 1;
+    dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
+    dut->txts_type_i = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->rst_n = 1;
+
+    // Before the ROM init leg has written S_CID, no complete all-hop loop
+    // comparison is possible. A first-event over-cap Announce with our identity
+    // only beyond the retained public window must therefore be refused, not
+    // queued in hope that the mirror appears before dispatch.
+    {
+      const uint16_t d0 = dut->dbg_rx_drop_o;
+      const size_t c0 = commit_snaps.size();
+      std::vector<uint64_t> path = {0x00C001FFFE000001ull};
+      for (unsigned i = 1; i < 8; i++)
+        path.push_back(0x00C0010000000000ull + i);
+      path.push_back(OUR_CID);
+      send_announce(0xC001, 1, path[0], 8, PEER_CID, path, 1000);
+      expect("pre-init deep Announce: no commit", commit_snaps.size(), c0);
+      expect("pre-init deep Announce: parser refusal", dut->dbg_rx_drop_o,
+             static_cast<uint16_t>(d0 + 1));
+      expect("pre-init deep Announce: GM stays empty", dut->pub_gm_id_o, 0);
+    }
   }
 
   // ---- 1: our Pdelay_Req; asCapable must start low ----------------------
-  std::vector<uint8_t> req = wait_tx(0x2, 3200000);
-  const size_t our_req_idx = txf.empty() ? 0 : txf.size() - 1;
-  if (!req.empty()) {
-    check_common("pdreq", req, 0x2, 0x0000, 54, 0x00);
-    uint64_t z = 0;
-    for (int i = 48; i < 68; i++) z |= req[i];
-    expect("pdreq body zero", z, 0);
+  void check_the_boot_pdelay_request() {
+    std::vector<uint8_t> req = wait_tx(0x2, 3200000);
+    our_req_idx = txf.empty() ? 0 : txf.size() - 1;
+    if (!req.empty()) {
+      check_common("pdreq", req, 0x2, 0x0000, 54, 0x00);
+      uint64_t z = 0;
+      for (int i = 48; i < 68; i++) z |= req[i];
+      expect("pdreq body zero", z, 0);
+    }
+    expect("asCapable low at boot", dut->pub_flags_o & FL_ASCAP, 0);
+    T1 = 1000000ull;
   }
-  expect("asCapable low at boot", dut->pub_flags_o & FL_ASCAP, 0);
-  const uint64_t T1 = 1000000ull;
 
   // ---- 1a: a self-sourced Pdelay_Req draws nothing -----------------------
   // IEEE 1588-2008 9.5.2.2: "A message received at the same port that
@@ -671,7 +830,7 @@ int main(int argc, char **argv) {
   // oracle: 600 if the request was ignored, 500,600 if it was answered.
   // No counter moves, because the refusal is in the ucode and
   // dbg_rx_drop_o counts what the parser refused
-  {
+  void ignore_a_self_sourced_pdelay_request() {
     size_t mark = txf.size();
     uint16_t drops = dut->dbg_rx_drop_o;
     uint32_t flags0 = dut->pub_flags_o;
@@ -689,6 +848,7 @@ int main(int argc, char **argv) {
            drops);
     expect("self-sourced request: flags unmoved", dut->pub_flags_o, flags0);
   }
+
   // ---- 1c: peer requests inside our own request's outstanding interval --
   // Our Pdelay_Req is out and its egress timestamp has not come back, so
   // the plane owes itself a stamp for the whole of this interval. A peer
@@ -705,78 +865,84 @@ int main(int argc, char **argv) {
   // stamps in hand-over order, gives that stamp to our request and this
   // phase goes red. Matching by the sequenceId the stamper reports does
   // not care what order they arrive in.
-  uint16_t drops_1c = 0;
-  const uint64_t P3_TS = 850000ull, P4_TS = 870000ull, P5_TS = 890000ull;
-  size_t p3_idx = 0, p4_idx = 0, p5_idx = 0;
-  uint16_t p3_seq = 0;
-  {
-    const long leads[] = {10, 2000, 200000};
-    const uint64_t response_ts[] = {810000ull, 830000ull, P3_TS};
-    size_t mark = txf.size();
-    drops_1c = dut->dbg_rx_drop_o;
-    int n = 0;
-    for (long lead : leads) {
-      run((uint64_t)lead);
-      p3_seq = (uint16_t)(0x9900 + n);
-      size_t response_mark = txf.size();
-      Frame q = ptp(0x2, p3_seq, 0, 0x0000, 20, PEER_CID);
-      q.u64(0); q.u16(0); q.ts(0);
-      q.b.resize(68);
-      send_frame(q.b, 900000 + 1000 * n);
-      run(4000);
-      bool seen = false;
-      for (size_t i = response_mark; i < txf.size(); i++)
-        if (type_of(txf[i]) == 0x3 && seq_of(txf[i]) == p3_seq) {
-          p3_idx = i;
-          seen = true;
+  void answer_peer_requests_across_our_pending_stamp() {
+    uint16_t drops_1c = 0;
+    const uint64_t P3_TS = 850000ull;
+    size_t p3_idx = 0;
+    uint16_t p3_seq = 0;
+    {
+      const std::array<long, 3> leads = {10, 2000, 200000};
+      const std::array<uint64_t, 3> response_ts =
+          {810000ull, 830000ull, P3_TS};
+      size_t mark = txf.size();
+      drops_1c = dut->dbg_rx_drop_o;
+      int n = 0;
+      for (long lead : leads) {
+        run(static_cast<uint64_t>(lead));
+        p3_seq = static_cast<uint16_t>(0x9900 + n);
+        size_t response_mark = txf.size();
+        Frame q = ptp(0x2, p3_seq, 0, 0x0000, 20, PEER_CID);
+        q.u64(0); q.u16(0); q.ts(0);
+        q.b.resize(68);
+        send_frame(q.b, 900000 + 1000 * n);
+        run(4000);
+        bool seen = false;
+        for (size_t i = response_mark; i < txf.size(); i++)
+          if (type_of(txf[i]) == 0x3 && seq_of(txf[i]) == p3_seq) {
+            p3_idx = i;
+            seen = true;
+          }
+        expect("peer request across our window: response sent",
+               seen ? 1 : 0, 1);
+        // One response context is intentionally live at a time. Retire the
+        // first two before presenting the next request; the third remains
+        // outstanding for the response-before-request-stamp ordering below.
+        if (seen && n < 2) {
+          size_t fu_mark = txf.size();
+          txts_idx(p3_idx, response_ts[n]);
+          run(8000);
+          bool fu_seen = false;
+          for (size_t i = fu_mark; i < txf.size(); i++)
+            if (type_of(txf[i]) == 0xA && seq_of(txf[i]) == p3_seq)
+              fu_seen = true;
+          expect("peer request across our window: Follow_Up sent",
+                 fu_seen ? 1 : 0, 1);
         }
-      expect("peer request across our window: response sent",
-             seen ? 1 : 0, 1);
-      // One response context is intentionally live at a time. Retire the
-      // first two before presenting the next request; the third remains
-      // outstanding for the response-before-request-stamp ordering below.
-      if (seen && n < 2) {
-        size_t fu_mark = txf.size();
-        txts_idx(p3_idx, response_ts[n]);
-        run(8000);
-        bool fu_seen = false;
-        for (size_t i = fu_mark; i < txf.size(); i++)
-          if (type_of(txf[i]) == 0xA && seq_of(txf[i]) == p3_seq)
-            fu_seen = true;
-        expect("peer request across our window: Follow_Up sent",
-               fu_seen ? 1 : 0, 1);
+        n++;
       }
-      n++;
+      int resps = 0;
+      for (size_t i = mark; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) {
+          resps++;
+          p3_idx = i;
+        }
+      // Three requests still draw three Pdelay_Resps, but a later request is
+      // not allowed to overwrite live response context: the first two claims
+      // are retired above and the last remains pending for the ordering probe.
+      expect("peer requests across our window: three Pdelay_Resps", resps, 3);
+      expect("peer requests across our window: none was a parser drop",
+             dut->dbg_rx_drop_o, drops_1c);
     }
-    int resps = 0;
-    for (size_t i = mark; i < txf.size(); i++)
-      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) {
-        resps++;
-        p3_idx = i;
+    {
+      size_t mark = txf.size();
+      txts_idx(p3_idx, P3_TS);            // the RESPONSE's stamp, returned
+      run(8000);                          // before our own request's
+      std::vector<uint8_t> u;
+      for (size_t i = mark; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0xA) u = txf[i];
+      expect("out-of-order stamp: the Resp_FU is built", u.empty() ? 0 : 1, 1);
+      if (!u.empty()) {
+        expect("out-of-order stamp: it pairs its own request",
+               fld16(u, 44), p3_seq);
+        expect("out-of-order stamp: it carries its own timestamp",
+               fld48(u, 48) * 1000000000ull + fld32(u, 54), P3_TS);
       }
-    // Three requests still draw three Pdelay_Resps, but a later request is
-    // not allowed to overwrite live response context: the first two claims
-    // are retired above and the last remains pending for the ordering probe.
-    expect("peer requests across our window: three Pdelay_Resps", resps, 3);
-    expect("peer requests across our window: none was a parser drop",
-           dut->dbg_rx_drop_o, drops_1c);
-  }
-  {
-    size_t mark = txf.size();
-    txts_idx(p3_idx, P3_TS);            // the RESPONSE's stamp, returned
-    run(8000);                          // before our own request's
-    std::vector<uint8_t> u;
-    for (size_t i = mark; i < txf.size(); i++)
-      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0xA) u = txf[i];
-    expect("out-of-order stamp: the Resp_FU is built", u.empty() ? 0 : 1, 1);
-    if (!u.empty()) {
-      expect("out-of-order stamp: it pairs its own request",
-             fld16(u, 44), p3_seq);
-      expect("out-of-order stamp: it carries its own timestamp",
-             fld48(u, 48) * 1000000000ull + fld32(u, 54), P3_TS);
     }
   }
-  {
+
+  void separate_claims_differing_only_in_the_sequence_high_byte() {
+    const uint64_t P5_TS = 890000ull;
+    size_t p5_idx = 0;
     // two claims outstanding whose tags differ ONLY in the high byte of
     // the sequenceId: ours is 0 and this request's is 0x0100. A compare
     // narrowed to the low 8 bits reads them as equal, gives this
@@ -808,58 +974,63 @@ int main(int argc, char **argv) {
              fld48(u, 48) * 1000000000ull + fld32(u, 54), P5_TS);
     }
   }
-  size_t p4_rfu_idx = 0;
-  bool p4_rfu_seen = false;
-  {
-    // Both ends start their independent request counters at zero, so the
-    // peer's request and our outstanding request have the SAME sequenceId.
-    // Return the response's stamp first: sequenceId-only credit gives it
-    // to our request, while {messageType, sequenceId} must build this
-    // response's own Follow_Up and leave our request claim intact (#28).
-    size_t mark = txf.size();
-    Frame q = ptp(0x2, 0, 0, 0x0000, 20, PEER_CID);
-    q.u64(0); q.u16(0); q.ts(0);
-    q.b.resize(68);
-    send_frame(q.b, 906000);
-    run(4000);
-    bool p4_seen = false;
-    for (size_t i = mark; i < txf.size(); i++)
-      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) {
-        p4_idx = i;
-        p4_seen = true;
+
+  void separate_equal_sequence_request_and_response_claims() {
+    const uint64_t P4_TS = 870000ull;
+    size_t p4_idx = 0;
+    size_t p4_rfu_idx = 0;
+    bool p4_rfu_seen = false;
+    {
+      // Both ends start their independent request counters at zero, so the
+      // peer's request and our outstanding request have the SAME sequenceId.
+      // Return the response's stamp first: sequenceId-only credit gives it
+      // to our request, while {messageType, sequenceId} must build this
+      // response's own Follow_Up and leave our request claim intact (#28).
+      size_t mark = txf.size();
+      Frame q = ptp(0x2, 0, 0, 0x0000, 20, PEER_CID);
+      q.u64(0); q.u16(0); q.ts(0);
+      q.b.resize(68);
+      send_frame(q.b, 906000);
+      run(4000);
+      bool p4_seen = false;
+      for (size_t i = mark; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) {
+          p4_idx = i;
+          p4_seen = true;
+        }
+      expect("equal sequences: the request is still answered",
+             p4_seen ? 1 : 0, 1);
+      if (p4_seen)
+        expect("equal sequences: its response carries our own sequence",
+               fld16(txf[p4_idx], 44), 0);
+      if (p4_seen) txts_idx(p4_idx, P4_TS);
+      run(8000);
+      std::vector<uint8_t> u;
+      for (size_t i = mark; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0xA) {
+          u = txf[i];
+          p4_rfu_idx = i;
+          p4_rfu_seen = true;
+        }
+      expect("equal sequences: response-first stamp builds the Resp_FU",
+             u.empty() ? 0 : 1, 1);
+      if (!u.empty()) {
+        expect("equal sequences: Resp_FU carries the response stamp",
+               fld48(u, 48) * 1000000000ull + fld32(u, 54), P4_TS);
       }
-    expect("equal sequences: the request is still answered",
-           p4_seen ? 1 : 0, 1);
-    if (p4_seen)
-      expect("equal sequences: its response carries our own sequence",
-             fld16(txf[p4_idx], 44), 0);
-    if (p4_seen) txts_idx(p4_idx, P4_TS);
-    run(8000);
-    std::vector<uint8_t> u;
-    for (size_t i = mark; i < txf.size(); i++)
-      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0xA) {
-        u = txf[i];
-        p4_rfu_idx = i;
-        p4_rfu_seen = true;
-      }
-    expect("equal sequences: response-first stamp builds the Resp_FU",
-           u.empty() ? 0 : 1, 1);
-    if (!u.empty()) {
-      expect("equal sequences: Resp_FU carries the response stamp",
-             fld48(u, 48) * 1000000000ull + fld32(u, 54), P4_TS);
     }
+    // A Resp_FU itself leaves no claim, but the boundary still stamps it.
+    // Its sequence is also zero. That unclaimed type must not consume the
+    // still-outstanding request claim. Phase 2's 600 ns result below is the
+    // end-to-end oracle: sequence-only credit moves it far from 600 ns.
+    if (p4_rfu_seen) {
+      txts_idx(p4_rfu_idx, T1 + 110000);
+      run(2000);                         // separate this from open #31
+    }
+    txts_idx(our_req_idx, T1);
+    run(2000);
+    tx_seen = txf.size();          // this phase's frames are accounted for
   }
-  // A Resp_FU itself leaves no claim, but the boundary still stamps it.
-  // Its sequence is also zero. That unclaimed type must not consume the
-  // still-outstanding request claim. Phase 2's 600 ns result below is the
-  // end-to-end oracle: sequence-only credit moves it far from 600 ns.
-  if (p4_rfu_seen) {
-    txts_idx(p4_rfu_idx, T1 + 110000);
-    run(2000);                         // separate this from open #31
-  }
-  txts_idx(our_req_idx, T1);
-  run(2000);
-  tx_seen = txf.size();          // this phase's frames are accounted for
 
   // ---- 1b: a Follow_Up for the boot request ahead of any Resp ----------
   // sequence 0 is the first request the plane sends (and recurs every
@@ -867,7 +1038,7 @@ int main(int argc, char **argv) {
   // armed". A never-armed pairing holds a zero responder identity, so
   // the forged frame carries exactly that identity: only the armed bit
   // can refuse it (FPGA-gPTP #8)
-  {
+  void ignore_a_follow_up_for_the_boot_request() {
     Frame g = ptp(0xA, 0, 0, 0x0000, 20, 0);
     g.ts(T1 + 20000); g.u64(OUR_CID); g.u16(1);
     send_frame(g.b, T1 + 22200);
@@ -879,21 +1050,24 @@ int main(int argc, char **argv) {
   }
 
   // ---- 2: one good exchange (D = 600); not capable yet ------------------
-  const uint64_t T2 = peer_ns(T1 + 300), T3 = T2 + 20000,
-                 T4 = T1 + 21200;
-  {
-    Frame f = ptp(0x3, 0, 0, 0x0200, 20);
-    f.ts(T2); f.u64(OUR_CID); f.u16(1);
-    send_frame(f.b, T4);
-    run(4000);
-    Frame g = ptp(0xA, 0, 0, 0x0000, 20);
-    g.ts(T3); g.u64(OUR_CID); g.u16(1);
-    send_frame(g.b, T4 + 1000);
-    run(6000);
-    model_exchange(T1, T2, T3, T4);
+  void compute_the_first_exchange_delay() {
+    const uint64_t T2 = peer_ns(T1 + 300);
+    const uint64_t T3 = T2 + 20000;
+    const uint64_t T4 = T1 + 21200;
+    {
+      Frame f = ptp(0x3, 0, 0, 0x0200, 20);
+      f.ts(T2); f.u64(OUR_CID); f.u16(1);
+      send_frame(f.b, T4);
+      run(4000);
+      Frame g = ptp(0xA, 0, 0, 0x0000, 20);
+      g.ts(T3); g.u64(OUR_CID); g.u16(1);
+      send_frame(g.b, T4 + 1000);
+      run(6000);
+      model_exchange(T1, T2, T3, T4);
+    }
+    expect("pub pdelay ex1", dut->pub_pdelay_ns_o, static_cast<uint32_t>(pdm.d));
+    expect("one exchange not capable", dut->pub_flags_o & FL_ASCAP, 0);
   }
-  expect("pub pdelay ex1", dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
-  expect("one exchange not capable", dut->pub_flags_o & FL_ASCAP, 0);
 
   // ---- 2b: a Pdelay_Resp sourced from OUR clockIdentity is ignored ------
   // IEEE 1588-2008 9.5.2.2: "A message received at the same port that
@@ -908,8 +1082,9 @@ int main(int argc, char **argv) {
   // (FPGA-gPTP #23). The pair is refused by nothing else: it answers the
   // outstanding sequenceId, carries our requestingPortIdentity, and its
   // delay lands near 700 ns, under the threshold
-  {
-    uint32_t fl0 = dut->pub_flags_o, d0 = dut->pub_pdelay_ns_o;
+  void ignore_a_self_sourced_pdelay_response() {
+    uint32_t fl0 = dut->pub_flags_o;
+    uint32_t d0 = dut->pub_pdelay_ns_o;
     int c0 = pdm.count;
     uint16_t dr0 = dut->dbg_rx_drop_o;
     pd_seen = txf.size();
@@ -934,29 +1109,32 @@ int main(int argc, char **argv) {
   }
 
   // ---- 3: peer initiates -> our Resp + Resp_FU --------------------------
-  const uint64_t T2R = 2000000ull, T3R = 2050000ull;
-  {
-    Frame f = ptp(0x2, 0x55AA, 0, 0x0000, 20);
-    f.u64(0); f.u16(0); f.ts(0);
-    f.b.resize(68);
-    send_frame(f.b, T2R);
-  }
-  std::vector<uint8_t> resp = wait_tx(0x3, 400000);
-  if (!resp.empty()) {
-    check_common("pdresp", resp, 0x3, 0x0200, 54, 0x7F);
-    expect("pdresp seq", fld16(resp, 44), 0x55AA);
-    expect("pdresp t2", fld48(resp, 48) * 1000000000ull + fld32(resp, 54),
-           T2R);
-    expect("pdresp reqCID", fld64(resp, 58), PEER_CID);
-  }
-  txts(T3R);
-  std::vector<uint8_t> rfu = wait_tx(0xA, 400000);
-  if (!rfu.empty()) {
-    check_common("pdrfu", rfu, 0xA, 0x0000, 54, 0x7F);
-    expect("pdrfu seq", fld16(rfu, 44), 0x55AA);
-    expect("pdrfu t3", fld48(rfu, 48) * 1000000000ull + fld32(rfu, 54),
-           T3R);
-    expect("pdrfu reqCID", fld64(rfu, 58), PEER_CID);
+  void answer_a_peer_initiated_exchange() {
+    T2R = 2000000ull;
+    T3R = 2050000ull;
+    {
+      Frame f = ptp(0x2, 0x55AA, 0, 0x0000, 20);
+      f.u64(0); f.u16(0); f.ts(0);
+      f.b.resize(68);
+      send_frame(f.b, T2R);
+    }
+    std::vector<uint8_t> resp = wait_tx(0x3, 400000);
+    if (!resp.empty()) {
+      check_common("pdresp", resp, 0x3, 0x0200, 54, 0x7F);
+      expect("pdresp seq", fld16(resp, 44), 0x55AA);
+      expect("pdresp t2", fld48(resp, 48) * 1000000000ull + fld32(resp, 54),
+             T2R);
+      expect("pdresp reqCID", fld64(resp, 58), PEER_CID);
+    }
+    txts(T3R);
+    std::vector<uint8_t> rfu = wait_tx(0xA, 400000);
+    if (!rfu.empty()) {
+      check_common("pdrfu", rfu, 0xA, 0x0000, 54, 0x7F);
+      expect("pdrfu seq", fld16(rfu, 44), 0x55AA);
+      expect("pdrfu t3", fld48(rfu, 48) * 1000000000ull + fld32(rfu, 54),
+             T3R);
+      expect("pdrfu reqCID", fld64(rfu, 58), PEER_CID);
+    }
   }
 
   // ---- 3a: a requester whose identity nearly matches ours is answered ---
@@ -971,8 +1149,14 @@ int main(int argc, char **argv) {
   // FMT_W and FMT_B make the compare unsatisfiable rather than narrow:
   // nothing is ever refused, this phase stays green, and the loss shows
   // in phase 1a instead, where the self-sourced request is answered
-  {
-    struct Near { const char *tag; uint64_t cid; uint16_t seq; uint64_t rx, tx; };
+  void answer_a_requester_whose_identity_nearly_matches_ours() {
+    struct Near {
+      const char *tag;
+      uint64_t cid;
+      uint16_t seq;
+      uint64_t rx;
+      uint64_t tx;
+    };
     const Near near[] = {
       {"low-half", NEAR_CID, 0x55B1, T2R + 20000, T3R + 20000},
       {"high-half", REQ_HI_CID, 0x55B2, T2R + 40000, T3R + 40000},
@@ -995,7 +1179,7 @@ int main(int argc, char **argv) {
       txts(n.tx);
       std::vector<uint8_t> u = wait_tx(0xA, 400000);
       snprintf(nm, sizeof nm, "%s requester: Resp_FU pairs", n.tag);
-      expect(nm, u.empty() ? 0 : (uint64_t)fld16(u, 44), n.seq);
+      expect(nm, u.empty() ? 0 : static_cast<uint64_t>(fld16(u, 44)), n.seq);
     }
   }
 
@@ -1006,7 +1190,7 @@ int main(int argc, char **argv) {
   // arm: a gate that dropped the frame but still dispatched the event
   // would answer from the STALE bank. Domain 0x10 has a zero low nibble,
   // so a compare narrowed to four bits would admit it (FPGA-gPTP #6)
-  {
+  void refuse_a_foreign_domain_pdelay_request() {
     uint16_t drops = dut->dbg_rx_drop_o;
     size_t mark = txf.size();
     Frame f = ptp(0x2, 0x55AB, 0, 0x0000, 20);
@@ -1020,7 +1204,7 @@ int main(int argc, char **argv) {
       if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) resps++;
     expect("foreign-domain request: no Pdelay_Resp", resps, 0);
     expect("foreign-domain request: dropped and counted",
-           dut->dbg_rx_drop_o, (uint16_t)(drops + 1));
+           dut->dbg_rx_drop_o, static_cast<uint16_t>(drops + 1));
     tx_seen = txf.size();
     Frame g = ptp(0x2, 0x55AC, 0, 0x0000, 20);   // domain 0, right after
     g.u64(0); g.u16(0); g.ts(0);
@@ -1049,7 +1233,7 @@ int main(int argc, char **argv) {
   // the complete request. The first two draw no Pdelay_Resp over the
   // window and count one drop each; the third is answered with its own
   // sequence and its Resp_FU, so the refusals left the responder intact
-  {
+  void refuse_a_truncated_pdelay_request() {
     uint16_t drops = dut->dbg_rx_drop_o;
     size_t mark = txf.size();
     Frame f = ptp(0x2, 0x55AD, 0, 0x0000, 0);      // 34 octets: header only
@@ -1065,7 +1249,7 @@ int main(int argc, char **argv) {
       if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x3) resps++;
     expect("truncated requests: no Pdelay_Resp", resps, 0);
     expect("truncated requests: dropped and counted", dut->dbg_rx_drop_o,
-           (uint16_t)(drops + 2));
+           static_cast<uint16_t>(drops + 2));
     tx_seen = txf.size();
     Frame k = ptp(0x2, 0x55AF, 0, 0x0000, 20);     // the complete request
     k.u64(0); k.u16(0); k.ts(0);
@@ -1099,146 +1283,184 @@ int main(int argc, char **argv) {
   // frame at all leaves the lane after them, each counts one drop, and
   // the flags do not move. Phase 4 then earns asCapable as before, so
   // the refusals cannot pass by having deafened the plane.
-  {
+  void refuse_an_unlisted_message_type() {
     size_t pre = txf.size();
     run(4000);
     expect("unlisted types: the window starts quiet", txf.size(), pre);
     size_t mark = txf.size();
     uint16_t drops = dut->dbg_rx_drop_o;
     uint32_t flags0 = dut->pub_flags_o;
-    const uint8_t unlisted[] = {0x1, 0xD, 0xF};
+    const std::array<uint8_t, 3> unlisted = {0x1, 0xD, 0xF};
     for (uint8_t mt : unlisted) {
-      Frame f = ptp(mt, (uint16_t)(0x56A0 + mt), 0, 0x0000, 10);
+      Frame f = ptp(mt, static_cast<uint16_t>(0x56A0 + mt), 0, 0x0000, 10);
       f.ts(0);
       send_frame(f.b, T2R + 450000);
       run(4000);
     }
     expect("unlisted types: no frame transmitted", txf.size(), mark);
     expect("unlisted types: dropped and counted", dut->dbg_rx_drop_o,
-           (uint16_t)(drops + 3));
+           static_cast<uint16_t>(drops + 3));
     expect("unlisted types: flags unmoved", dut->pub_flags_o, flags0);
   }
 
   // ---- 4: the live peer raises asCapable on the SECOND exchange ---------
-  auto_txts = true;
-  pd_seen = txf.size();                  // answer only fresh requests
-  pd_mode = PD_NORMAL;
-  expect("second exchange -> capable",
-         wait_flags(FL_ASCAP, FL_ASCAP, 6000000ull), 1);
-  expect("capable at two exchanges", pdm.count, 2);
-  expect("pub pdelay corrected", dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
+  void raise_ascapable_on_the_second_exchange() {
+    auto_txts = true;
+    pd_seen = txf.size();                  // answer only fresh requests
+    pd_mode = PD_NORMAL;
+    expect("second exchange -> capable",
+           wait_flags(FL_ASCAP, FL_ASCAP, 6000000ull), 1);
+    expect("capable at two exchanges", pdm.count, 2);
+    expect("pub pdelay corrected", dut->pub_pdelay_ns_o,
+           static_cast<uint32_t>(pdm.d));
+  }
 
   // ---- 5: announce receipt timeout -> become master ---------------------
-  expect("became master",
-         wait_flags(FL_AMGM, FL_AMGM, 12000000ull), 1);
-  run(200);  // raw words move before COMMIT; grade the complete transaction
-  expect("master flags", dut->pub_flags_o & 7,
-         FL_PRESENT | FL_AMGM | FL_ASCAP);
-  expect("gm is us", dut->pub_gm_id_o, OUR_CID);
-  expect("self path has one entry", dut->pub_path_count_o, 1);
-  for (unsigned k = 0; k < 7; k++) {
-    char n[64]; snprintf(n, sizeof(n), "self path tail %u is zero", k);
-    expect(n, pub_path_tail(k), 0);
+  void become_master_on_announce_receipt_timeout() {
+    expect("became master",
+           wait_flags(FL_AMGM, FL_AMGM, 12000000ull), 1);
+    run(200);  // raw words move before COMMIT; grade the complete transaction
+    expect("master flags", dut->pub_flags_o & 7,
+           FL_PRESENT | FL_AMGM | FL_ASCAP);
+    expect("gm is us", dut->pub_gm_id_o, OUR_CID);
+    expect("self path has one entry", dut->pub_path_count_o, 1);
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+      char n[64]; snprintf(n, sizeof(n), "self path tail %u is zero", k);
+      expect(n, pub_path_tail(k), 0);
+    }
   }
 
   // ---- 6: our Announce ---------------------------------------------------
-  tx_seen = txf.size();
-  std::vector<uint8_t> ann = wait_tx(0xB, 400000);
-  if (!ann.empty()) {
-    check_common("ann", ann, 0xB, 0x0008, 76, 0x00);
-    expect("ann utc", fld16(ann, 58), 37);
-    expect("ann p1", ann[61], 248);
-    expect("ann cq", fld32(ann, 62), OUR_CQ);
-    expect("ann p2", ann[66], 248);
-    expect("ann gmid", fld64(ann, 67), OUR_CID);
-    expect("ann steps", fld16(ann, 75), 0);
-    expect("ann tsrc", ann[77], 0xA0);
-    expect("ann tlv", fld32(ann, 78), 0x00080008);
-    expect("ann path0", fld64(ann, 82), OUR_CID);
+  void check_our_announce() {
+    tx_seen = txf.size();
+    std::vector<uint8_t> ann = wait_tx(0xB, 400000);
+    if (!ann.empty()) {
+      check_common("ann", ann, 0xB, 0x0008, 76, 0x00);
+      expect("ann utc", fld16(ann, 58), 37);
+      expect("ann p1", ann[61], 248);
+      expect("ann cq", fld32(ann, 62), OUR_CQ);
+      expect("ann p2", ann[66], 248);
+      expect("ann gmid", fld64(ann, 67), OUR_CID);
+      expect("ann steps", fld16(ann, 75), 0);
+      expect("ann tsrc", ann[77], 0xA0);
+      expect("ann tlv", fld32(ann, 78), 0x00080008);
+      expect("ann path0", fld64(ann, 82), OUR_CID);
+    }
   }
 
   // ---- 7: our Sync + Follow_Up ------------------------------------------
-  size_t sidx = 0;
-  std::vector<uint8_t> sy = wait_tx(0x0, 800000, &sidx);
-  uint16_t sseq = 0;
-  if (!sy.empty()) {
-    check_common("sync", sy, 0x0, 0x0208, 44, 0xFD);
-    uint8_t reserved = 0;
-    for (int i = 48; i < 58; i++) reserved |= sy[i];
-    expect("sync reserved body zero", reserved, 0);
-    sseq = fld16(sy, 44);
-  }
-  // wait_tx returns on the frame's EOF, one tick before the automatic
-  // boundary-stamp helper would return its stamp. Hold this Sync claim,
-  // then make a peer request with the SAME sequenceId. The response's
-  // stamp arrives first and must build a Resp_FU, not a Sync Follow_Up.
-  expect("sync collision: stamp is pending", auto_pend, (int)sidx);
-  auto_txts = false;
-  auto_pend = -1;
-  size_t collision_mark = txf.size();
-  Frame same = ptp(0x2, sseq, 0, 0x0000, 20, PEER_CID);
-  same.u64(0); same.u16(0); same.ts(0);
-  same.b.resize(68);
-  send_frame(same.b, phc() + 1000);
-  run(8000);
-  size_t collision_resp_idx = 0;
-  bool collision_resp_seen = false;
-  for (size_t i = collision_mark; i < txf.size(); i++)
-    if (type_of(txf[i]) == 0x3) {
-      collision_resp_idx = i;
-      collision_resp_seen = true;
+  void check_our_sync_and_follow_up() {
+    size_t sidx = 0;
+    std::vector<uint8_t> sy = wait_tx(0x0, 800000, &sidx);
+    uint16_t sseq = 0;
+    if (!sy.empty()) {
+      check_common("sync", sy, 0x0, 0x0208, 44, 0xFD);
+      uint8_t reserved = 0;
+      for (int i = 48; i < 58; i++) reserved |= sy[i];
+      expect("sync reserved body zero", reserved, 0);
+      sseq = fld16(sy, 44);
     }
-  expect("sync collision: equal-sequence request answered",
-         collision_resp_seen ? 1 : 0, 1);
+    // wait_tx returns on the frame's EOF, one tick before the automatic
+    // boundary-stamp helper would return its stamp. Hold this Sync claim,
+    // then make a peer request with the SAME sequenceId. The response's
+    // stamp arrives first and must build a Resp_FU, not a Sync Follow_Up.
+    expect("sync collision: stamp is pending", auto_pend, static_cast<int>(sidx));
+    auto_txts = false;
+    auto_pend = -1;
+    size_t collision_mark = txf.size();
+    Frame same = ptp(0x2, sseq, 0, 0x0000, 20, PEER_CID);
+    same.u64(0); same.u16(0); same.ts(0);
+    same.b.resize(68);
+    send_frame(same.b, phc() + 1000);
+    run(8000);
+    size_t collision_resp_idx = 0;
+    bool collision_resp_seen = false;
+    for (size_t i = collision_mark; i < txf.size(); i++)
+      if (type_of(txf[i]) == 0x3) {
+        collision_resp_idx = i;
+        collision_resp_seen = true;
+      }
+    expect("sync collision: equal-sequence request answered",
+           collision_resp_seen ? 1 : 0, 1);
 
-  const uint64_t RESP_COLLISION_TS = 7110000ull;
-  size_t response_stamp_mark = txf.size();
-  if (collision_resp_seen)
-    txts_idx(collision_resp_idx, RESP_COLLISION_TS);
-  run(8000);
-  size_t collision_rfu_idx = 0;
-  bool collision_rfu_seen = false;
-  int premature_sync_fu = 0;
-  for (size_t i = response_stamp_mark; i < txf.size(); i++) {
-    if (type_of(txf[i]) == 0xA) {
-      collision_rfu_idx = i;
-      collision_rfu_seen = true;
-      expect("sync collision: Resp_FU carries response stamp",
-             fld48(txf[i], 48) * 1000000000ull + fld32(txf[i], 54),
-             RESP_COLLISION_TS);
+    const uint64_t RESP_COLLISION_TS = 7110000ull;
+    size_t response_stamp_mark = txf.size();
+    if (collision_resp_seen)
+      txts_idx(collision_resp_idx, RESP_COLLISION_TS);
+    run(8000);
+    size_t collision_rfu_idx = 0;
+    bool collision_rfu_seen = false;
+    int premature_sync_fu = 0;
+    for (size_t i = response_stamp_mark; i < txf.size(); i++) {
+      if (type_of(txf[i]) == 0xA) {
+        collision_rfu_idx = i;
+        collision_rfu_seen = true;
+        expect("sync collision: Resp_FU carries response stamp",
+               fld48(txf[i], 48) * 1000000000ull + fld32(txf[i], 54),
+               RESP_COLLISION_TS);
+      }
+      if (type_of(txf[i]) == 0x8) premature_sync_fu++;
     }
-    if (type_of(txf[i]) == 0x8) premature_sync_fu++;
-  }
-  expect("sync collision: response stamp builds Resp_FU",
-         collision_rfu_seen ? 1 : 0, 1);
-  expect("sync collision: response stamp does not build Sync FU",
-         premature_sync_fu, 0);
+    expect("sync collision: response stamp builds Resp_FU",
+           collision_rfu_seen ? 1 : 0, 1);
+    expect("sync collision: response stamp does not build Sync FU",
+           premature_sync_fu, 0);
 
-  // The emitted Resp_FU is stamped too, but leaves no claim. Its type-A
-  // stamp shares the sequenceId and must not consume the pending Sync.
-  if (collision_rfu_seen) {
-    txts_idx(collision_rfu_idx, RESP_COLLISION_TS + 1000);
-    run(2000);                                // avoid open buffering #31
+    // The emitted Resp_FU is stamped too, but leaves no claim. Its type-A
+    // stamp shares the sequenceId and must not consume the pending Sync.
+    if (collision_rfu_seen) {
+      txts_idx(collision_rfu_idx, RESP_COLLISION_TS + 1000);
+      run(2000);                                // avoid open buffering #31
+    }
+    const uint64_t SYNC_COLLISION_TS = 7220000ull;
+    size_t sync_stamp_mark = txf.size();
+    if (!sy.empty()) txts_idx(sidx, SYNC_COLLISION_TS);
+    run(8000);
+    std::vector<uint8_t> fu;
+    for (size_t i = sync_stamp_mark; i < txf.size(); i++)
+      if (type_of(txf[i]) == 0x8) fu = txf[i];
+    expect("sync collision: own stamp still builds Sync FU",
+           fu.empty() ? 0 : 1, 1);
+    if (!fu.empty()) {
+      check_common("syncfu", fu, 0x8, 0x0008, 76, 0xFD);
+      expect("syncfu seq", fld16(fu, 44), sseq);
+      expect("syncfu origin", fld48(fu, 48) * 1000000000ull + fld32(fu, 54),
+             SYNC_COLLISION_TS);
+      expect("syncfu tlv", fld32(fu, 58), 0x0003001C);
+      expect("syncfu org", fld48(fu, 62), 0x0080C2000001ull);
+    }
+    auto_txts = true;
+    pd_seen = txf.size();
   }
-  const uint64_t SYNC_COLLISION_TS = 7220000ull;
-  size_t sync_stamp_mark = txf.size();
-  if (!sy.empty()) txts_idx(sidx, SYNC_COLLISION_TS);
-  run(8000);
-  std::vector<uint8_t> fu;
-  for (size_t i = sync_stamp_mark; i < txf.size(); i++)
-    if (type_of(txf[i]) == 0x8) fu = txf[i];
-  expect("sync collision: own stamp still builds Sync FU",
-         fu.empty() ? 0 : 1, 1);
-  if (!fu.empty()) {
-    check_common("syncfu", fu, 0x8, 0x0008, 76, 0xFD);
-    expect("syncfu seq", fld16(fu, 44), sseq);
-    expect("syncfu origin", fld48(fu, 48) * 1000000000ull + fld32(fu, 54),
-           SYNC_COLLISION_TS);
-    expect("syncfu tlv", fld32(fu, 58), 0x0003001C);
-    expect("syncfu org", fld48(fu, 62), 0x0080C2000001ull);
+
+  // the last argument is requestingPortIdentity.portNumber: ours
+  // unless a probe addresses the frame to another port of this clock
+  void resp(uint16_t s, uint64_t src, uint64_t t2v, uint64_t rx,
+            uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID) {
+    Frame f = ptp(0x3, s, 0, 0x0200, 20, src);
+    f.ts(t2v); f.u64(rcid); f.u16(rpn);
+    send_frame(f.b, rx);
+    run(2000);
   }
-  auto_txts = true;
-  pd_seen = txf.size();
+
+  void rfu(uint16_t s, uint64_t src, uint64_t t3v, uint64_t rx,
+           uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID) {
+    Frame g = ptp(0xA, s, 0, 0x0000, 20, src);
+    g.ts(t3v); g.u64(rcid); g.u16(rpn);
+    send_frame(g.b, rx);
+    run(6000);
+  }
+
+  // the completion path can only touch asCapable (the ladder and the
+  // threshold verdict), so that is the bit pinned; the role bits are
+  // the announce machinery's and move on their own cadence
+  void unmoved(const char *tag) {
+    char n[96];
+    snprintf(n, 96, "%s: pdelay unmoved", tag);
+    expect(n, dut->pub_pdelay_ns_o, pd0);
+    snprintf(n, 96, "%s: asCapable unmoved", tag);
+    expect(n, dut->pub_flags_o & FL_ASCAP, fl0 & FL_ASCAP);
+  }
 
   // ---- 7b: a Pdelay_Resp_Follow_Up pairs with one Pdelay_Resp only ------
   // 802.1AS-2011 11.2.15.3 (Figure 11-8): a Pdelay_Resp is taken only
@@ -1250,7 +1472,7 @@ int main(int argc, char **argv) {
   // DUT's own request; a wrongly consumed Follow_Up carries a t3 skewed
   // +2 us, so the published delay would move by -1 us and the verdict
   // would fall below the Milan floor (FPGA-gPTP #8)
-  {
+  void pair_a_follow_up_only_with_the_outstanding_resp() {
     const uint64_t STRANGER = 0x00BAD0FFFE000002ull;
     pd_mode = PD_SKIP;
     tx_seen = txf.size();
@@ -1261,34 +1483,8 @@ int main(int argc, char **argv) {
     for (int k = 0; k < 400 && txns[rqi] == 0; k++) tick();
     uint64_t t1 = txns[rqi];
     uint64_t t2 = peer_ns(t1 + 300), t3 = t2 + 20000, t4 = t1 + 21200;
-    uint32_t pd0 = dut->pub_pdelay_ns_o;
-    uint32_t fl0 = dut->pub_flags_o;
-    // the last argument is requestingPortIdentity.portNumber: ours
-    // unless a probe addresses the frame to another port of this clock
-    auto resp = [&](uint16_t s, uint64_t src, uint64_t t2v, uint64_t rx,
-                    uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID) {
-      Frame f = ptp(0x3, s, 0, 0x0200, 20, src);
-      f.ts(t2v); f.u64(rcid); f.u16(rpn);
-      send_frame(f.b, rx);
-      run(2000);
-    };
-    auto rfu = [&](uint16_t s, uint64_t src, uint64_t t3v, uint64_t rx,
-                   uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID) {
-      Frame g = ptp(0xA, s, 0, 0x0000, 20, src);
-      g.ts(t3v); g.u64(rcid); g.u16(rpn);
-      send_frame(g.b, rx);
-      run(6000);
-    };
-    // the completion path can only touch asCapable (the ladder and the
-    // threshold verdict), so that is the bit pinned; the role bits are
-    // the announce machinery's and move on their own cadence
-    auto unmoved = [&](const char *tag) {
-      char n[96];
-      snprintf(n, 96, "%s: pdelay unmoved", tag);
-      expect(n, dut->pub_pdelay_ns_o, pd0);
-      snprintf(n, 96, "%s: asCapable unmoved", tag);
-      expect(n, dut->pub_flags_o & FL_ASCAP, fl0 & FL_ASCAP);
-    };
+    pd0 = dut->pub_pdelay_ns_o;
+    fl0 = dut->pub_flags_o;
     // (i) a Follow_Up before any Pdelay_Resp: nothing is armed
     rfu(seq, PEER_CID, t3 + 2000, t4 + 1000);
     unmoved("Follow_Up before any Resp");
@@ -1302,8 +1498,8 @@ int main(int argc, char **argv) {
     unmoved("stale-sequence Resp + Follow_Up pair");
     // (iii-b) a stale pair whose sequenceId differs from the outstanding
     // one in the HIGH byte only: a byte-wide sequence compare would arm
-    resp((uint16_t)(seq ^ 0x0100), PEER_CID, t2, t4);
-    rfu((uint16_t)(seq ^ 0x0100), PEER_CID, t3 + 2000, t4 + 1250);
+    resp(static_cast<uint16_t>(seq ^ 0x0100), PEER_CID, t2, t4);
+    rfu(static_cast<uint16_t>(seq ^ 0x0100), PEER_CID, t3 + 2000, t4 + 1250);
     unmoved("high-byte-stale Resp + Follow_Up pair");
     // (iii-b2) the other half of the same identity, and the direction
     // FPGA-gPTP #30 found unpinned: a Pdelay_Resp addressed to a
@@ -1353,11 +1549,16 @@ int main(int argc, char **argv) {
     rfu(seq, PEER_CID, t3, t4 + 1400);
     model_exchange(t1, t2, t3, t4);
     expect("the paired Follow_Up computes", dut->pub_pdelay_ns_o,
-           (uint32_t)pdm.d);
+           static_cast<uint32_t>(pdm.d));
     expect("the paired Follow_Up keeps capable",
            dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     pd0 = dut->pub_pdelay_ns_o;
     fl0 = dut->pub_flags_o;
+    refuse_duplicate_and_superseded_follow_ups(seq, t3, t4);
+  }
+
+  void refuse_duplicate_and_superseded_follow_ups(
+      uint16_t seq, uint64_t t3, uint64_t t4) {
     // (vi) a duplicate Follow_Up: the pairing was consumed, one per Resp
     rfu(seq, PEER_CID, t3 + 2000, t4 + 1500);
     unmoved("duplicate Follow_Up");
@@ -1387,7 +1588,7 @@ int main(int argc, char **argv) {
     rfu(seq3, PEER_CID, t3c, t4c + 1100);
     model_exchange(t1c, t2c, t3c, t4c);
     expect("the next exchange computes", dut->pub_pdelay_ns_o,
-           (uint32_t)pdm.d);
+           static_cast<uint32_t>(pdm.d));
     expect("still capable after the probes",
            dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     pd_seen = txf.size();                  // the peer answers fresh ones only
@@ -1395,22 +1596,25 @@ int main(int argc, char **argv) {
   }
 
   // ---- 8: worse announce -> stay master ---------------------------------
-  {
-    Frame f = ptp(0xB, 9, 0, 0x0008, 42);
-    for (int i = 0; i < 10; i++) f.u8(0);
-    f.u16(0xFFC4); f.u8(0);
-    f.u8(250); f.u32(OUR_CQ); f.u8(248);
-    f.u64(0xAABBCCFFFE010203ull);
-    f.u16(0); f.u8(0xA0);
-    f.u16(0x0008); f.u16(8); f.u64(0xAABBCCFFFE010203ull);
-    send_frame(f.b, 5000000);
-    run_svc(6000);
+  void stay_master_against_a_worse_announce() {
+    {
+      Frame f = ptp(0xB, 9, 0, 0x0008, 42);
+      for (int i = 0; i < 10; i++) f.u8(0);
+      f.u16(0xFFC4); f.u8(0);
+      f.u8(250); f.u32(OUR_CQ); f.u8(248);
+      f.u64(0xAABBCCFFFE010203ull);
+      f.u16(0); f.u8(0xA0);
+      f.u16(0x0008); f.u16(8); f.u64(0xAABBCCFFFE010203ull);
+      send_frame(f.b, 5000000);
+      run_svc(6000);
+    }
+    expect("still master", dut->pub_flags_o & FL_AMGM, FL_AMGM);
+    expect("gm still us", dut->pub_gm_id_o, OUR_CID);
+    ANNQ8 =
+        (0xFFC4ull << 48) | (250ull << 40)
+        | (static_cast<uint64_t>(OUR_CQ) << 8) | 248ull;
+    expect("annq published", dut->pub_annq_o, ANNQ8);
   }
-  expect("still master", dut->pub_flags_o & FL_AMGM, FL_AMGM);
-  expect("gm still us", dut->pub_gm_id_o, OUR_CID);
-  const uint64_t ANNQ8 =
-      (0xFFC4ull << 48) | (250ull << 40) | ((uint64_t)OUR_CQ << 8) | 248ull;
-  expect("annq published", dut->pub_annq_o, ANNQ8);
 
   // ---- 8b: a BETTER announce in a foreign domain cannot move the GM ----
   // 802.1AS-2011 8.1: the gPTP domain number is 0; IEEE 1588-2008 9.5.1:
@@ -1419,7 +1623,7 @@ int main(int argc, char **argv) {
   // reach the announce handler, whose FIRST act is publishing the raw
   // vector -- so pub_annq_o still holding phase 8's vector proves the
   // frame was refused before any state moved (FPGA-gPTP #6)
-  {
+  void refuse_a_better_announce_in_a_foreign_domain() {
     uint16_t drops = dut->dbg_rx_drop_o;
     uint32_t flags = dut->pub_flags_o;
     Frame f = ptp(0xB, 11, 0, 0x0008, 30, 0x00A5A5FFFE000005ull);
@@ -1441,7 +1645,64 @@ int main(int argc, char **argv) {
     expect("foreign-domain announce: raw vector never published",
            dut->pub_annq_o, ANNQ8);
     expect("foreign-domain announce: dropped and counted",
-           dut->dbg_rx_drop_o, (uint16_t)(drops + 1));
+           dut->dbg_rx_drop_o, static_cast<uint16_t>(drops + 1));
+  }
+
+  void refuse_probe(const char *tag, uint16_t seq, uint64_t gm,
+                    uint16_t steps, uint64_t src,
+                    const std::vector<uint64_t> &path, uint64_t rx) {
+    uint32_t flags0 = dut->pub_flags_o;
+    uint64_t annq0 = dut->pub_annq_o;
+    uint16_t drops0 = dut->dbg_rx_drop_o;
+    send_announce(seq, 1, gm, steps, src, path, rx);
+    char n[96];
+    snprintf(n, 96, "%s: still master", tag);
+    expect(n, dut->pub_flags_o & FL_AMGM, FL_AMGM);
+    snprintf(n, 96, "%s: gm still us", tag);
+    expect(n, dut->pub_gm_id_o, OUR_CID);
+    snprintf(n, 96, "%s: parent still us", tag);
+    expect(n, dut->pub_parent_id_o, OUR_CID);
+    snprintf(n, 96, "%s: flags untouched", tag);
+    expect(n, dut->pub_flags_o, flags0);
+    snprintf(n, 96, "%s: raw vector never published", tag);
+    expect(n, dut->pub_annq_o, annq0);
+    snprintf(n, 96, "%s: parser-drop policy", tag);
+    expect(n, dut->dbg_rx_drop_o, drops0);
+  }
+
+  // an adopt-control: a priority1-1 announce that MUST be adopted, then
+  // the same announcer degrades below us, a parent update our own
+  // vector then wins (10.3.5), and mastership returns at once
+  void adopt_control(const char *tag, uint16_t seq, uint64_t gm,
+                     uint16_t steps, uint64_t src,
+                     const std::vector<uint64_t> &path, uint64_t rx) {
+    char n[96];
+    const uint16_t drops0 = dut->dbg_rx_drop_o;
+    send_announce(seq, 1, gm, steps, src, path, rx);
+    snprintf(n, 96, "%s: adopted", tag);
+    expect(n, dut->pub_gm_id_o, gm);
+    snprintf(n, 96, "%s: announcer is the parent", tag);
+    expect(n, dut->pub_parent_id_o, src);
+    snprintf(n, 96, "%s: no longer master", tag);
+    expect(n, dut->pub_flags_o & FL_AMGM, 0);
+    const unsigned served = path.size() > 8 ? 8 : path.size();
+    snprintf(n, 96, "%s: raw path count", tag);
+    expect(n, dut->pub_path_count_o, served);
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+      const uint64_t want = (k + 1 < served) ? path[k + 1] : 0;
+      snprintf(n, 96, "%s: raw path tail %u", tag, k + 1);
+      expect(n, pub_path_tail(k), want);
+    }
+    snprintf(n, 96, "%s: parser accepts", tag);
+    expect(n, dut->dbg_rx_drop_o, drops0);
+    send_announce(static_cast<uint16_t>(seq + 1), 250, gm, steps, src, path,
+                  rx + 100000);
+    snprintf(n, 96, "%s: degraded parent yields", tag);
+    expect(n, dut->pub_flags_o & 3, FL_PRESENT | FL_AMGM);
+    snprintf(n, 96, "%s: gm is us again", tag);
+    expect(n, dut->pub_gm_id_o, OUR_CID);
+    snprintf(n, 96, "%s: degraded frame parser accepts", tag);
+    expect(n, dut->dbg_rx_drop_o, drops0);
   }
 
   // ---- 8c..8m: 802.1AS-2011 10.3.10.2.1 qualifyAnnounce -----------------
@@ -1455,63 +1716,8 @@ int main(int argc, char **argv) {
   // lands two frames after the [foreign, OUR_CID] probe, in the bank
   // whose word 17 still holds our identity: only a walk reading past
   // the hop count can see it (FPGA-gPTP #7)
-  {
+  void refuse_unqualified_announces_and_admit_the_controls() {
     const uint64_t PEER2 = 0x0080E1FFFE445566ull;
-    auto refuse_probe = [&](const char *tag, uint16_t seq, uint64_t gm,
-                            uint16_t steps, uint64_t src,
-                            const std::vector<uint64_t> &path, uint64_t rx) {
-      uint32_t flags0 = dut->pub_flags_o;
-      uint64_t annq0 = dut->pub_annq_o;
-      uint16_t drops0 = dut->dbg_rx_drop_o;
-      send_announce(seq, 1, gm, steps, src, path, rx);
-      char n[96];
-      snprintf(n, 96, "%s: still master", tag);
-      expect(n, dut->pub_flags_o & FL_AMGM, FL_AMGM);
-      snprintf(n, 96, "%s: gm still us", tag);
-      expect(n, dut->pub_gm_id_o, OUR_CID);
-      snprintf(n, 96, "%s: parent still us", tag);
-      expect(n, dut->pub_parent_id_o, OUR_CID);
-      snprintf(n, 96, "%s: flags untouched", tag);
-      expect(n, dut->pub_flags_o, flags0);
-      snprintf(n, 96, "%s: raw vector never published", tag);
-      expect(n, dut->pub_annq_o, annq0);
-      snprintf(n, 96, "%s: parser-drop policy", tag);
-      expect(n, dut->dbg_rx_drop_o, drops0);
-    };
-    // an adopt-control: a priority1-1 announce that MUST be adopted, then
-    // the same announcer degrades below us, a parent update our own
-    // vector then wins (10.3.5), and mastership returns at once
-    auto adopt_control = [&](const char *tag, uint16_t seq, uint64_t gm,
-                             uint16_t steps, uint64_t src,
-                             const std::vector<uint64_t> &path, uint64_t rx) {
-      char n[96];
-      const uint16_t drops0 = dut->dbg_rx_drop_o;
-      send_announce(seq, 1, gm, steps, src, path, rx);
-      snprintf(n, 96, "%s: adopted", tag);
-      expect(n, dut->pub_gm_id_o, gm);
-      snprintf(n, 96, "%s: announcer is the parent", tag);
-      expect(n, dut->pub_parent_id_o, src);
-      snprintf(n, 96, "%s: no longer master", tag);
-      expect(n, dut->pub_flags_o & FL_AMGM, 0);
-      const unsigned served = path.size() > 8 ? 8 : path.size();
-      snprintf(n, 96, "%s: raw path count", tag);
-      expect(n, dut->pub_path_count_o, served);
-      for (unsigned k = 0; k < 7; k++) {
-        const uint64_t want = (k + 1 < served) ? path[k + 1] : 0;
-        snprintf(n, 96, "%s: raw path tail %u", tag, k + 1);
-        expect(n, pub_path_tail(k), want);
-      }
-      snprintf(n, 96, "%s: parser accepts", tag);
-      expect(n, dut->dbg_rx_drop_o, drops0);
-      send_announce((uint16_t)(seq + 1), 250, gm, steps, src, path,
-                    rx + 100000);
-      snprintf(n, 96, "%s: degraded parent yields", tag);
-      expect(n, dut->pub_flags_o & 3, FL_PRESENT | FL_AMGM);
-      snprintf(n, 96, "%s: gm is us again", tag);
-      expect(n, dut->pub_gm_id_o, OUR_CID);
-      snprintf(n, 96, "%s: degraded frame parser accepts", tag);
-      expect(n, dut->dbg_rx_drop_o, drops0);
-    };
     // 8c: (a) sent by this time-aware system: our own clockIdentity as
     // the source, a foreign MAC (a reflected or forged frame)
     refuse_probe("own-source announce", 12, 0x0000000000002222ull, 0,
@@ -1560,7 +1766,8 @@ int main(int argc, char **argv) {
     // 8h: the largest PathTrace that fits the declared untagged Ethernet
     // payload (messageLength 1500) remains valid. Publication clamps to
     // eight, but qualification has examined all 179 identities.
-    const uint64_t GMQ = 0x00D1D1FFFE000004ull, SRCQ = 0x00D1D1FFFE000005ull;
+    const uint64_t GMQ = 0x00D1D1FFFE000004ull;
+    const uint64_t SRCQ = 0x00D1D1FFFE000005ull;
     std::vector<uint64_t> max_path = {GMQ};
     for (unsigned i = 1; i < 178; i++)
       max_path.push_back(0x00D1000000000000ull + i);
@@ -1593,143 +1800,144 @@ int main(int argc, char **argv) {
   // ---- 9: better announce -> adopt, sync stops --------------------------
   // a rogue Sync heard while still master would leave a stale ingress
   // stamp; adopt must void it so it cannot pair with a post-adopt FU
-  {
-    Frame f = ptp(0x0, 0x0101, 0, 0x0208, 10);
-    f.ts(0);
-    send_frame(f.b, 19000000000ull);
-    run(2000);
-  }
-  const uint64_t GMID = 0x00AACCFFFE010203ull;
-  const uint64_t PATH_A1 = 0x001122FFFE000011ull;
-  const uint64_t PATH_A2 = 0x001122FFFE000022ull;
-  const std::vector<uint64_t> PATH_A = {GMID, PATH_A1, PATH_A2, PEER_CID};
-  send_announce(10, 100, GMID, 3, PEER_CID, PATH_A, 6000000);
-  expect("adopted", dut->pub_flags_o & 3, FL_PRESENT);
-  expect("adopt keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
-  expect("gm is theirs", dut->pub_gm_id_o, GMID);
-  expect("adopt publishes complete path count", dut->pub_path_count_o, 4);
-  expect("adopt publishes path tail 1", pub_path_tail(0), PATH_A1);
-  expect("adopt publishes path tail 2", pub_path_tail(1), PATH_A2);
-  expect("adopt publishes path tail 3", pub_path_tail(2), PEER_CID);
-  for (unsigned k = 3; k < 7; k++) {
-    char n[64]; snprintf(n, sizeof(n), "adopt clears inactive tail %u", k);
-    expect(n, pub_path_tail(k), 0);
-  }
+  void adopt_a_better_announce_and_hold_its_path() {
+    {
+      Frame f = ptp(0x0, 0x0101, 0, 0x0208, 10);
+      f.ts(0);
+      send_frame(f.b, 19000000000ull);
+      run(2000);
+    }
+    GMID = 0x00AACCFFFE010203ull;
+    const uint64_t PATH_A1 = 0x001122FFFE000011ull;
+    const uint64_t PATH_A2 = 0x001122FFFE000022ull;
+    const std::vector<uint64_t> PATH_A = {GMID, PATH_A1, PATH_A2, PEER_CID};
+    send_announce(10, 100, GMID, 3, PEER_CID, PATH_A, 6000000);
+    expect("adopted", dut->pub_flags_o & 3, FL_PRESENT);
+    expect("adopt keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    expect("gm is theirs", dut->pub_gm_id_o, GMID);
+    expect("adopt publishes complete path count", dut->pub_path_count_o, 4);
+    expect("adopt publishes path tail 1", pub_path_tail(0), PATH_A1);
+    expect("adopt publishes path tail 2", pub_path_tail(1), PATH_A2);
+    expect("adopt publishes path tail 3", pub_path_tail(2), PEER_CID);
+    for (unsigned k = 3; k < PATH_TAIL_SLOTS; k++) {
+      char n[64]; snprintf(n, sizeof(n), "adopt clears inactive tail %u", k);
+      expect(n, pub_path_tail(k), 0);
+    }
 
-  // `they_win` is reachable even when this current Announce loses to the
-  // already-selected best. Its path B must not replace path A merely because
-  // the handler re-commits the retained best GM/parent publication.
-  const uint64_t WORSE_GM = 0x00BBCCFFFE000099ull;
-  const uint64_t WORSE_SRC = 0x00BBCCFFFE000088ull;
-  const uint64_t PATH_B1 = 0x00BBCCFFFE000077ull;
-  const uint64_t commits_before_worse = commits_seen;
-  send_announce(11, 200, WORSE_GM, 1, WORSE_SRC,
-                {WORSE_GM, PATH_B1}, 6100000);
-  expect("worse announce retains selected GM", dut->pub_gm_id_o, GMID);
-  expect("worse announce retains selected parent", dut->pub_parent_id_o,
-         PEER_CID);
-  expect("worse announce reaches a commit", commits_seen,
-         commits_before_worse + 1);
-  expect("worse announce retains path A count", dut->pub_path_count_o, 4);
-  expect("worse announce retains path A tail 1", pub_path_tail(0), PATH_A1);
-  expect("worse announce retains path A tail 2", pub_path_tail(1), PATH_A2);
-  expect("worse announce retains path A tail 3", pub_path_tail(2), PEER_CID);
+    // `they_win` is reachable even when this current Announce loses to the
+    // already-selected best. Its path B must not replace path A merely because
+    // the handler re-commits the retained best GM/parent publication.
+    WORSE_GM = 0x00BBCCFFFE000099ull;
+    WORSE_SRC = 0x00BBCCFFFE000088ull;
+    PATH_B1 = 0x00BBCCFFFE000077ull;
+    const uint64_t commits_before_worse = commits_seen;
+    send_announce(11, 200, WORSE_GM, 1, WORSE_SRC,
+                  {WORSE_GM, PATH_B1}, 6100000);
+    expect("worse announce retains selected GM", dut->pub_gm_id_o, GMID);
+    expect("worse announce retains selected parent", dut->pub_parent_id_o,
+           PEER_CID);
+    expect("worse announce reaches a commit", commits_seen,
+           commits_before_worse + 1);
+    expect("worse announce retains path A count", dut->pub_path_count_o, 4);
+    expect("worse announce retains path A tail 1", pub_path_tail(0), PATH_A1);
+    expect("worse announce retains path A tail 2", pub_path_tail(1), PATH_A2);
+    expect("worse announce retains path A tail 3", pub_path_tail(2), PEER_CID);
 
-  // The same losing contest with no PathTrace reports raw count zero for the
-  // current frame, but never executes BTCA `take`. The common `they_win`
-  // COMMIT must therefore republish the complete already-selected nonzero
-  // tuple, not stage zero or clear any tail from the unrelated candidate.
-  const uint64_t commits_before_worse_tlvless = commits_seen;
-  const uint16_t drops_before_worse_tlvless = dut->dbg_rx_drop_o;
-  send_announce(0xA090, 200, WORSE_GM, 0, WORSE_SRC, {}, 6150000);
-  expect("worse TLV-less announce reaches one retained-state commit",
-         commits_seen, commits_before_worse_tlvless + 1);
-  expect("worse TLV-less announce retains selected GM",
-         dut->pub_gm_id_o, GMID);
-  expect("worse TLV-less announce retains selected parent",
-         dut->pub_parent_id_o, PEER_CID);
-  expect("worse TLV-less announce retains path A count",
-         dut->pub_path_count_o, 4);
-  expect("worse TLV-less announce retains path A tail 1",
-         pub_path_tail(0), PATH_A1);
-  expect("worse TLV-less announce retains path A tail 2",
-         pub_path_tail(1), PATH_A2);
-  expect("worse TLV-less announce retains path A tail 3",
-         pub_path_tail(2), PEER_CID);
-  for (unsigned k = 3; k < 7; k++) {
-    char n[88]; snprintf(n, sizeof n,
-                         "worse TLV-less announce retains zero tail %u", k + 1);
-    expect(n, pub_path_tail(k), 0);
-  }
-  expect("worse TLV-less announce parser accepts", dut->dbg_rx_drop_o,
-         drops_before_worse_tlvless);
-
-  // The parser retains only eight identities but reports the true deeper
-  // count. The public contract is explicitly bounded: preserve the first
-  // eight entries, expose count eight, and never leak the unretained suffix.
-  std::vector<uint64_t> PATH_DEEP = {GMID};
-  for (unsigned k = 1; k < 11; k++)
-    PATH_DEEP.push_back(0x00D000FFFE000000ull + k);
-  PATH_DEEP.push_back(PEER_CID);
-  send_announce(12, 100, GMID, 11, PEER_CID, PATH_DEEP, 6200000);
-  expect("deep parent path clamps to eight", dut->pub_path_count_o, 8);
-  for (unsigned k = 0; k < 7; k++) {
-    char n[72]; snprintf(n, sizeof(n), "deep path retains tail %u", k + 1);
-    expect(n, pub_path_tail(k), PATH_DEEP[k + 1]);
+    // The same losing contest with no PathTrace reports raw count zero for the
+    // current frame, but never executes BTCA `take`. The common `they_win`
+    // COMMIT must therefore republish the complete already-selected nonzero
+    // tuple, not stage zero or clear any tail from the unrelated candidate.
+    const uint64_t commits_before_worse_tlvless = commits_seen;
+    const uint16_t drops_before_worse_tlvless = dut->dbg_rx_drop_o;
+    send_announce(0xA090, 200, WORSE_GM, 0, WORSE_SRC, {}, 6150000);
+    expect("worse TLV-less announce reaches one retained-state commit",
+           commits_seen, commits_before_worse_tlvless + 1);
+    expect("worse TLV-less announce retains selected GM",
+           dut->pub_gm_id_o, GMID);
+    expect("worse TLV-less announce retains selected parent",
+           dut->pub_parent_id_o, PEER_CID);
+    expect("worse TLV-less announce retains path A count",
+           dut->pub_path_count_o, 4);
+    expect("worse TLV-less announce retains path A tail 1",
+           pub_path_tail(0), PATH_A1);
+    expect("worse TLV-less announce retains path A tail 2",
+           pub_path_tail(1), PATH_A2);
+    expect("worse TLV-less announce retains path A tail 3",
+           pub_path_tail(2), PEER_CID);
+    for (unsigned k = 3; k < PATH_TAIL_SLOTS; k++) {
+      char n[88]; snprintf(n, sizeof n,
+                           "worse TLV-less announce retains zero tail %u", k + 1);
+      expect(n, pub_path_tail(k), 0);
+    }
+    expect("worse TLV-less announce parser accepts", dut->dbg_rx_drop_o,
+           drops_before_worse_tlvless);
   }
 
-  // A current-parent refresh is an unconditional BTCA take. Its shorter path
-  // becomes the new selected snapshot and clears every inactive deep slot.
-  const uint64_t PATH_C1 = 0x00CCD0FFFE000033ull;
-  const std::vector<uint64_t> PATH_C = {GMID, PATH_C1, PEER_CID};
-  send_announce(13, 100, GMID, 2, PEER_CID, PATH_C, 6300000);
-  expect("parent refresh publishes path C count", dut->pub_path_count_o, 3);
-  expect("parent refresh publishes path C tail 1", pub_path_tail(0), PATH_C1);
-  expect("parent refresh publishes path C tail 2", pub_path_tail(1), PEER_CID);
-  for (unsigned k = 2; k < 7; k++) {
-    char n[72]; snprintf(n, sizeof(n), "parent refresh clears old tail %u", k);
-    expect(n, pub_path_tail(k), 0);
+  void clamp_a_deep_path_and_take_a_parent_refresh() {
+    // The parser retains only eight identities but reports the true deeper
+    // count. The public contract is explicitly bounded: preserve the first
+    // eight entries, expose count eight, and never leak the unretained suffix.
+    std::vector<uint64_t> PATH_DEEP = {GMID};
+    for (unsigned k = 1; k < 11; k++)
+      PATH_DEEP.push_back(0x00D000FFFE000000ull + k);
+    PATH_DEEP.push_back(PEER_CID);
+    send_announce(12, 100, GMID, 11, PEER_CID, PATH_DEEP, 6200000);
+    expect("deep parent path clamps to eight", dut->pub_path_count_o, 8);
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+      char n[72]; snprintf(n, sizeof(n), "deep path retains tail %u", k + 1);
+      expect(n, pub_path_tail(k), PATH_DEEP[k + 1]);
+    }
+
+    // A current-parent refresh is an unconditional BTCA take. Its shorter path
+    // becomes the new selected snapshot and clears every inactive deep slot.
+    PATH_C1 = 0x00CCD0FFFE000033ull;
+    const std::vector<uint64_t> PATH_C = {GMID, PATH_C1, PEER_CID};
+    send_announce(13, 100, GMID, 2, PEER_CID, PATH_C, 6300000);
+    expect("parent refresh publishes path C count", dut->pub_path_count_o, 3);
+    expect("parent refresh publishes path C tail 1", pub_path_tail(0), PATH_C1);
+    expect("parent refresh publishes path C tail 2", pub_path_tail(1), PEER_CID);
+    for (unsigned k = 2; k < PATH_TAIL_SLOTS; k++) {
+      char n[72]; snprintf(n, sizeof(n), "parent refresh clears old tail %u", k);
+      expect(n, pub_path_tail(k), 0);
+    }
   }
 
-  // The selected-state boundary is the declared PTP message, not whatever
-  // bytes happen to follow physically. A fixed Announce without PathTrace is
-  // valid and replaces the current parent's selected raw path with count zero
-  // and zero tails. A declared suffix must instead contain one complete,
-  // identity-aligned PathTrace with N=stepsRemoved+1. Every malformed shape
-  // below targets the current parent, so accepting it would unconditionally
-  // run BTCA `take`; no-commit plus a counted parser refusal are the oracles.
-  auto ann_wire = [&](uint16_t seq, uint16_t steps,
-                      const std::vector<uint64_t> &path) {
+  Frame ann_wire(uint16_t seq, uint16_t steps,
+                 const std::vector<uint64_t> &path) {
     const uint16_t suffix = path.empty() ? 0 :
-                            (uint16_t)(4 + 8 * path.size());
-    Frame a = ptp(0xB, seq, 0, 0x0008, (uint16_t)(30 + suffix), PEER_CID);
+                            static_cast<uint16_t>(4 + 8 * path.size());
+    Frame a = ptp(0xB, seq, 0, 0x0008,
+                  static_cast<uint16_t>(30 + suffix), PEER_CID);
     for (int i = 0; i < 10; i++) a.u8(0);
     a.u16(0xFFC4); a.u8(0);
     a.u8(100); a.u32(OUR_CQ); a.u8(248);
     a.u64(GMID); a.u16(steps); a.u8(0xA0);
     if (!path.empty()) {
-      a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
+      a.u16(0x0008); a.u16(static_cast<uint16_t>(8 * path.size()));
       for (uint64_t hop : path) a.u64(hop);
     }
     return a;
-  };
-  auto seal_ann_wire = [](Frame &a) {
-    const uint16_t n = (uint16_t)(a.b.size() - 14);
-    a.b[16] = (uint8_t)(n >> 8); a.b[17] = (uint8_t)n;
-  };
-  auto append_ann_tlv = [&](Frame &a, uint16_t type,
-                            const std::vector<uint8_t> &value) {
-    a.u16(type); a.u16((uint16_t)value.size());
+  }
+
+  void seal_ann_wire(Frame &a) {
+    const uint16_t n = static_cast<uint16_t>(a.b.size() - 14);
+    a.b[16] = static_cast<uint8_t>(n >> 8); a.b[17] = static_cast<uint8_t>(n);
+  }
+
+  void append_ann_tlv(Frame &a, uint16_t type,
+                      const std::vector<uint8_t> &value) {
+    a.u16(type); a.u16(static_cast<uint16_t>(value.size()));
     for (uint8_t b : value) a.u8(b);
     seal_ann_wire(a);
-  };
-  auto append_ann_path = [&](Frame &a,
-                             const std::vector<uint64_t> &path) {
-    a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
+  }
+
+  void append_ann_path(Frame &a, const std::vector<uint64_t> &path) {
+    a.u16(0x0008); a.u16(static_cast<uint16_t>(8 * path.size()));
     for (uint64_t hop : path) a.u64(hop);
     seal_ann_wire(a);
-  };
-  auto malformed_ann = [&](const char *tag, Frame a, uint64_t rx) {
+  }
+
+  void malformed_ann(const char *tag, Frame a, uint64_t rx) {
     const size_t c0 = commit_snaps.size();
     const uint16_t d0 = dut->dbg_rx_drop_o;
     const uint64_t gm0 = dut->pub_gm_id_o;
@@ -1741,7 +1949,7 @@ int main(int argc, char **argv) {
     snprintf(n, sizeof n, "%s: no commit", tag);
     expect(n, commit_snaps.size(), c0);
     snprintf(n, sizeof n, "%s: one parser drop", tag);
-    expect(n, dut->dbg_rx_drop_o, (uint16_t)(d0 + 1));
+    expect(n, dut->dbg_rx_drop_o, static_cast<uint16_t>(d0 + 1));
     snprintf(n, sizeof n, "%s: GM unchanged", tag);
     expect(n, dut->pub_gm_id_o, gm0);
     snprintf(n, sizeof n, "%s: parent unchanged", tag);
@@ -1750,169 +1958,180 @@ int main(int argc, char **argv) {
     expect(n, dut->pub_path_count_o, count0);
     snprintf(n, sizeof n, "%s: tail unchanged", tag);
     expect(n, pub_path_tail(0), tail0);
-  };
-  // A complete unknown TLV is ignored, but the walker must continue to a
-  // later PathTrace. Both shapes target the current parent and therefore bind
-  // the selected raw publication, not merely parser event generation.
-  {
-    const size_t c0 = commit_snaps.size();
-    const uint16_t d0 = dut->dbg_rx_drop_o;
-    Frame a = ann_wire(0xA0E0, 0, {});
-    append_ann_tlv(a, 0x1234, {0xAA, 0x55});
-    send_frame(a.b, 6330000); run_svc(6000);
-    expect("unknown-only current parent: one commit",
-           commit_snaps.size(), c0 + 1);
-    expect("unknown-only current parent: raw count zero",
-           dut->pub_path_count_o, 0);
-    for (unsigned k = 0; k < 7; k++) {
-      char n[80]; snprintf(n, sizeof n,
-                           "unknown-only current parent: tail %u zero", k + 1);
-      expect(n, pub_path_tail(k), 0);
-    }
-    expect("unknown-only current parent: parser accepts",
-           dut->dbg_rx_drop_o, d0);
   }
-  const uint64_t PATH_U1 = 0x00CCDDFFFE000044ull;
-  {
-    const size_t c0 = commit_snaps.size();
-    const uint16_t d0 = dut->dbg_rx_drop_o;
-    Frame a = ann_wire(0xA0E1, 2, {});
-    append_ann_tlv(a, 0x1234, {0x11, 0x22});
-    append_ann_path(a, {GMID, PATH_U1, PEER_CID});
-    send_frame(a.b, 6335000); run_svc(6000);
-    expect("unknown before path current parent: one commit",
-           commit_snaps.size(), c0 + 1);
-    expect("unknown before path current parent: count",
-           dut->pub_path_count_o, 3);
-    expect("unknown before path current parent: tail 1",
-           pub_path_tail(0), PATH_U1);
-    expect("unknown before path current parent: tail 2",
-           pub_path_tail(1), PEER_CID);
-    expect("unknown before path current parent: parser accepts",
-           dut->dbg_rx_drop_o, d0);
-  }
-  // Refill every retained slot immediately before the raw-empty transition.
-  // This makes count-zero canonicalization prove all seven tail writes rather
-  // than only the first two left active by the preceding short path.
-  const std::vector<uint64_t> PATH_FULL = {
-      GMID, 0x00F800FFFE000001ull, 0x00F800FFFE000002ull,
-      0x00F800FFFE000003ull, 0x00F800FFFE000004ull,
-      0x00F800FFFE000005ull, 0x00F800FFFE000006ull, PEER_CID};
-  send_announce(0xA0E2, 100, GMID, 7, PEER_CID, PATH_FULL, 6340000);
-  expect("full path before raw empty: count eight", dut->pub_path_count_o, 8);
-  for (unsigned k = 0; k < 7; k++) {
-    char n[80]; snprintf(n, sizeof n,
-                         "full path before raw empty: tail %u", k + 1);
-    expect(n, pub_path_tail(k), PATH_FULL[k + 1]);
-  }
-  {
-    const size_t c0 = commit_snaps.size();
-    const uint16_t d0 = dut->dbg_rx_drop_o;
-    send_frame(ann_wire(0xA100, 0, {}).b, 6350000); run_svc(6000);
-    expect("TLV-less current parent: one commit", commit_snaps.size(), c0 + 1);
-    expect("TLV-less current parent: GM retained", dut->pub_gm_id_o, GMID);
-    expect("TLV-less current parent: parent retained", dut->pub_parent_id_o,
-           PEER_CID);
-    expect("TLV-less current parent: raw count zero",
-           dut->pub_path_count_o, 0);
-    for (unsigned k = 0; k < 7; k++) {
-      char n[80]; snprintf(n, sizeof n,
-                           "TLV-less current parent: tail %u zero", k + 1);
-      expect(n, pub_path_tail(k), 0);
-    }
-    expect("TLV-less current parent: parser accepts",
-           dut->dbg_rx_drop_o, d0);
-  }
-  {
-    const size_t c0 = commit_snaps.size();
-    const uint16_t d0 = dut->dbg_rx_drop_o;
-    Frame a = ann_wire(0xA101, 1, {});              // messageLength stays 64
-    a.u16(0x0008); a.u16(16); a.u64(GMID); a.u64(OUR_CID);
-    send_frame(a.b, 6360000); run_svc(6000);
-    expect("out-of-message fake PathTrace: one commit",
-           commit_snaps.size(), c0 + 1);
-    expect("out-of-message fake PathTrace: raw count zero",
-           dut->pub_path_count_o, 0);
-    for (unsigned k = 0; k < 7; k++) {
-      char n[80]; snprintf(n, sizeof n,
-                           "out-of-message fake PathTrace: tail %u zero", k + 1);
-      expect(n, pub_path_tail(k), 0);
-    }
-    expect("out-of-message fake PathTrace: parser accepts",
-           dut->dbg_rx_drop_o, d0);
-  }
-  {
-    Frame a = ann_wire(0xA106, 0, {});
-    a.b[16] = 0; a.b[17] = 68;                     // header only, value absent
-    a.u16(0x1234); a.u16(4);
-    malformed_ann("unknown TLV crosses declaration", a, 6365000);
-  }
-  {
-    Frame a = ann_wire(0xA107, 0, {});
-    append_ann_tlv(a, 0x1234, {0xEE});              // generic length must be even
-    malformed_ann("odd-length unknown TLV", a, 6367000);
-  }
-  {
-    Frame a = ann_wire(0xA108, 0, {});
-    append_ann_path(a, {GMID});
-    a.u16(0x1234);                                  // incomplete next header
-    seal_ann_wire(a);
-    malformed_ann("partial TLV after valid PathTrace", a, 6369000);
-  }
-  {
-    Frame a = ann_wire(0xA109, 0, {});
-    append_ann_path(a, {GMID});
-    append_ann_path(a, {GMID});
-    malformed_ann("duplicate PathTrace", a, 6370000);
-  }
-  {
-    Frame a = ann_wire(0xA102, 1, {GMID, PEER_CID});
-    a.b[16] = 0; a.b[17] = 76;                      // second hop is padding
-    malformed_ann("PathTrace crosses messageLength", a, 6370000);
-  }
-  {
-    Frame a = ann_wire(0xA103, 1, {GMID, PEER_CID});
-    a.b.resize(a.b.size() - 8);                     // declared 2, received 1
-    malformed_ann("physically truncated PathTrace", a, 6380000);
-  }
-  {
-    Frame a = ann_wire(0xA104, 0, {GMID});
-    a.b[81] = 9;                                    // lengthField 9
-    a.b[16] = 0; a.b[17] = 77;
-    a.u8(0xEE);
-    malformed_ann("non-identity-aligned PathTrace", a, 6390000);
-  }
-  malformed_ann("PathTrace count differs from stepsRemoved",
-                ann_wire(0xA105, 2, {GMID, PEER_CID}), 6395000);
 
-  // A nonempty PathTrace must name the announced GM at pathSequence[0].
-  // Replacing a forged first hop with the separate GM output would create a
-  // synthetic sequence that no peer sent, so reject the complete Announce.
-  const uint64_t commits_before_bad_head = commits_seen;
-  send_announce(14, 100, GMID, 2, PEER_CID,
-                {0x00BAD0FFFE000001ull, PATH_C1, PEER_CID}, 6400000);
-  expect("mismatched path head produces no commit", commits_seen,
-         commits_before_bad_head);
-  expect("mismatched path head retains count", dut->pub_path_count_o, 0);
-  expect("mismatched path head retains zero tail", pub_path_tail(0), 0);
+  // The selected-state boundary is the declared PTP message, not whatever
+  // bytes happen to follow physically. A fixed Announce without PathTrace is
+  // valid and replaces the current parent's selected raw path with count zero
+  // and zero tails. A declared suffix must instead contain one complete,
+  // identity-aligned PathTrace with N=stepsRemoved+1. Every malformed shape
+  // below targets the current parent, so accepting it would unconditionally
+  // run BTCA `take`; no-commit plus a counted parser refusal are the oracles.
+  void walk_past_an_unknown_tlv_to_a_later_path_trace() {
+    // A complete unknown TLV is ignored, but the walker must continue to a
+    // later PathTrace. Both shapes target the current parent and therefore bind
+    // the selected raw publication, not merely parser event generation.
+    {
+      const size_t c0 = commit_snaps.size();
+      const uint16_t d0 = dut->dbg_rx_drop_o;
+      Frame a = ann_wire(0xA0E0, 0, {});
+      append_ann_tlv(a, 0x1234, {0xAA, 0x55});
+      send_frame(a.b, 6330000); run_svc(6000);
+      expect("unknown-only current parent: one commit",
+             commit_snaps.size(), c0 + 1);
+      expect("unknown-only current parent: raw count zero",
+             dut->pub_path_count_o, 0);
+      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+        char n[80]; snprintf(n, sizeof n,
+                             "unknown-only current parent: tail %u zero", k + 1);
+        expect(n, pub_path_tail(k), 0);
+      }
+      expect("unknown-only current parent: parser accepts",
+             dut->dbg_rx_drop_o, d0);
+    }
+    const uint64_t PATH_U1 = 0x00CCDDFFFE000044ull;
+    {
+      const size_t c0 = commit_snaps.size();
+      const uint16_t d0 = dut->dbg_rx_drop_o;
+      Frame a = ann_wire(0xA0E1, 2, {});
+      append_ann_tlv(a, 0x1234, {0x11, 0x22});
+      append_ann_path(a, {GMID, PATH_U1, PEER_CID});
+      send_frame(a.b, 6335000); run_svc(6000);
+      expect("unknown before path current parent: one commit",
+             commit_snaps.size(), c0 + 1);
+      expect("unknown before path current parent: count",
+             dut->pub_path_count_o, 3);
+      expect("unknown before path current parent: tail 1",
+             pub_path_tail(0), PATH_U1);
+      expect("unknown before path current parent: tail 2",
+             pub_path_tail(1), PEER_CID);
+      expect("unknown before path current parent: parser accepts",
+             dut->dbg_rx_drop_o, d0);
+    }
+    // Refill every retained slot immediately before the raw-empty transition.
+    // This makes count-zero canonicalization prove all seven tail writes rather
+    // than only the first two left active by the preceding short path.
+    const std::vector<uint64_t> PATH_FULL = {
+        GMID, 0x00F800FFFE000001ull, 0x00F800FFFE000002ull,
+        0x00F800FFFE000003ull, 0x00F800FFFE000004ull,
+        0x00F800FFFE000005ull, 0x00F800FFFE000006ull, PEER_CID};
+    send_announce(0xA0E2, 100, GMID, 7, PEER_CID, PATH_FULL, 6340000);
+    expect("full path before raw empty: count eight", dut->pub_path_count_o, 8);
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+      char n[80]; snprintf(n, sizeof n,
+                           "full path before raw empty: tail %u", k + 1);
+      expect(n, pub_path_tail(k), PATH_FULL[k + 1]);
+    }
+  }
 
-  // Force three same-sequence Announces behind a stalled Pdelay response.
-  // The first owns the one frozen Announce context until its handler ends;
-  // the two chasers must be explicitly dropped/counted instead of reusing
-  // either parser bank and tearing A. Once A releases the context, a fresh C
-  // must be accepted normally.
-  auto enqueue_announce = [&](uint16_t seq, uint8_t p1, uint64_t gm,
-                              uint16_t steps, uint64_t src,
-                              const std::vector<uint64_t> &path,
-                              uint64_t rx_ts) {
-    uint16_t tlv = path.empty() ? 0 : (uint16_t)(4 + 8 * path.size());
-    Frame a = ptp(0xB, seq, 0, 0x0008, (uint16_t)(30 + tlv), src);
+  void refuse_a_malformed_announce_suffix() {
+    {
+      const size_t c0 = commit_snaps.size();
+      const uint16_t d0 = dut->dbg_rx_drop_o;
+      send_frame(ann_wire(0xA100, 0, {}).b, 6350000); run_svc(6000);
+      expect("TLV-less current parent: one commit", commit_snaps.size(), c0 + 1);
+      expect("TLV-less current parent: GM retained", dut->pub_gm_id_o, GMID);
+      expect("TLV-less current parent: parent retained", dut->pub_parent_id_o,
+             PEER_CID);
+      expect("TLV-less current parent: raw count zero",
+             dut->pub_path_count_o, 0);
+      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+        char n[80]; snprintf(n, sizeof n,
+                             "TLV-less current parent: tail %u zero", k + 1);
+        expect(n, pub_path_tail(k), 0);
+      }
+      expect("TLV-less current parent: parser accepts",
+             dut->dbg_rx_drop_o, d0);
+    }
+    {
+      const size_t c0 = commit_snaps.size();
+      const uint16_t d0 = dut->dbg_rx_drop_o;
+      Frame a = ann_wire(0xA101, 1, {});              // messageLength stays 64
+      a.u16(0x0008); a.u16(16); a.u64(GMID); a.u64(OUR_CID);
+      send_frame(a.b, 6360000); run_svc(6000);
+      expect("out-of-message fake PathTrace: one commit",
+             commit_snaps.size(), c0 + 1);
+      expect("out-of-message fake PathTrace: raw count zero",
+             dut->pub_path_count_o, 0);
+      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+        char n[80]; snprintf(n, sizeof n,
+                             "out-of-message fake PathTrace: tail %u zero", k + 1);
+        expect(n, pub_path_tail(k), 0);
+      }
+      expect("out-of-message fake PathTrace: parser accepts",
+             dut->dbg_rx_drop_o, d0);
+    }
+    {
+      Frame a = ann_wire(0xA106, 0, {});
+      a.b[16] = 0; a.b[17] = 68;                     // header only, value absent
+      a.u16(0x1234); a.u16(4);
+      malformed_ann("unknown TLV crosses declaration", a, 6365000);
+    }
+    {
+      Frame a = ann_wire(0xA107, 0, {});
+      append_ann_tlv(a, 0x1234, {0xEE});              // generic length must be even
+      malformed_ann("odd-length unknown TLV", a, 6367000);
+    }
+    {
+      Frame a = ann_wire(0xA108, 0, {});
+      append_ann_path(a, {GMID});
+      a.u16(0x1234);                                  // incomplete next header
+      seal_ann_wire(a);
+      malformed_ann("partial TLV after valid PathTrace", a, 6369000);
+    }
+    {
+      Frame a = ann_wire(0xA109, 0, {});
+      append_ann_path(a, {GMID});
+      append_ann_path(a, {GMID});
+      malformed_ann("duplicate PathTrace", a, 6370000);
+    }
+    {
+      Frame a = ann_wire(0xA102, 1, {GMID, PEER_CID});
+      a.b[16] = 0; a.b[17] = 76;                      // second hop is padding
+      malformed_ann("PathTrace crosses messageLength", a, 6370000);
+    }
+    {
+      Frame a = ann_wire(0xA103, 1, {GMID, PEER_CID});
+      a.b.resize(a.b.size() - 8);                     // declared 2, received 1
+      malformed_ann("physically truncated PathTrace", a, 6380000);
+    }
+    {
+      Frame a = ann_wire(0xA104, 0, {GMID});
+      a.b[81] = 9;                                    // lengthField 9
+      a.b[16] = 0; a.b[17] = 77;
+      a.u8(0xEE);
+      malformed_ann("non-identity-aligned PathTrace", a, 6390000);
+    }
+    malformed_ann("PathTrace count differs from stepsRemoved",
+                  ann_wire(0xA105, 2, {GMID, PEER_CID}), 6395000);
+  }
+
+  void refuse_a_path_trace_whose_head_is_not_the_announced_gm() {
+    // A nonempty PathTrace must name the announced GM at pathSequence[0].
+    // Replacing a forged first hop with the separate GM output would create a
+    // synthetic sequence that no peer sent, so reject the complete Announce.
+    const uint64_t commits_before_bad_head = commits_seen;
+    send_announce(14, 100, GMID, 2, PEER_CID,
+                  {0x00BAD0FFFE000001ull, PATH_C1, PEER_CID}, 6400000);
+    expect("mismatched path head produces no commit", commits_seen,
+           commits_before_bad_head);
+    expect("mismatched path head retains count", dut->pub_path_count_o, 0);
+    expect("mismatched path head retains zero tail", pub_path_tail(0), 0);
+  }
+
+  void enqueue_announce(uint16_t seq, uint8_t p1, uint64_t gm,
+                        uint16_t steps, uint64_t src,
+                        const std::vector<uint64_t> &path,
+                        uint64_t rx_ts) {
+    uint16_t tlv =
+        path.empty() ? 0 : static_cast<uint16_t>(4 + 8 * path.size());
+    Frame a = ptp(0xB, seq, 0, 0x0008, static_cast<uint16_t>(30 + tlv), src);
     for (int i = 0; i < 10; i++) a.u8(0);
     a.u16(0xFFC4); a.u8(0);
     a.u8(p1); a.u32(OUR_CQ); a.u8(248);
     a.u64(gm); a.u16(steps); a.u8(0xA0);
     if (!path.empty()) {
-      a.u16(0x0008); a.u16((uint16_t)(8 * path.size()));
+      a.u16(0x0008); a.u16(static_cast<uint16_t>(8 * path.size()));
       for (uint64_t hop : path) a.u64(hop);
     }
     send_frame(a.b, rx_ts);
@@ -1920,94 +2139,103 @@ int main(int argc, char **argv) {
     //! first byte clock after this EOF. The parser's deferred w12/event then
     //! overlaps that successor and must retain the owner's count epoch.
     run(0);
-  };
-  const uint64_t Q_A1 = 0x00E100FFFE000011ull;
-  const uint64_t Q_A2 = 0x00E100FFFE000022ull;
-  const uint64_t Q_C1 = 0x00E300FFFE000033ull;
-  const std::vector<uint64_t> Q_PATH_A = {GMID, Q_A1, Q_A2, PEER_CID};
-  const std::vector<uint64_t> Q_PATH_C = {GMID, Q_C1, PEER_CID};
-  const uint16_t queued_drop_base = dut->dbg_ev_drop_o;
-  dut->tx_ready_i = 0;
-  {
-    Frame q = ptp(0x2, 0x6A6A, 0, 0x0000, 20, PEER_CID);
-    q.u64(0); q.u16(0); q.ts(0); q.b.resize(68);
-    send_frame(q.b, phc() + 100);
-    run(2000);  // response serializer is now non-idle and holds dispatch
   }
-  enqueue_announce(0x7A7A, 100, GMID, 3, PEER_CID, Q_PATH_A, phc() + 200);
-  enqueue_announce(0x7A7A, 200, WORSE_GM, 1, WORSE_SRC,
-                   {WORSE_GM, PATH_B1}, phc() + 300);
-  enqueue_announce(0x7A7A, 100, GMID, 2, PEER_CID, Q_PATH_C, phc() + 400);
-  const size_t queued_commit_base = commit_snaps.size();
-  dut->tx_ready_i = 1;
-  run(30000);
-  expect("only frozen A commits under announce overload", commit_snaps.size(),
-         queued_commit_base + 1);
-  expect("two announce chasers counted as drops", dut->dbg_ev_drop_o,
-         uint16_t(queued_drop_base + 2));
-  if (commit_snaps.size() >= queued_commit_base + 1) {
-    const PubSnap &qa = commit_snaps[queued_commit_base + 0];
-    expect("frozen queued A GM coherent", qa.gm, GMID);
-    expect("frozen queued A parent coherent", qa.parent, PEER_CID);
-    expect("frozen queued A count coherent", qa.count, 4);
-    expect("frozen queued A tail 1 coherent", qa.tail[0], Q_A1);
-    expect("frozen queued A tail 2 coherent", qa.tail[1], Q_A2);
-  }
-  const size_t released_commit_base = commit_snaps.size();
-  send_announce(0x7A7A, 100, GMID, 2, PEER_CID, Q_PATH_C, phc() + 500);
-  expect("post-release C commits", commit_snaps.size(),
-         released_commit_base + 1);
-  expect("post-release C GM coherent", dut->pub_gm_id_o, GMID);
-  expect("post-release C parent coherent", dut->pub_parent_id_o, PEER_CID);
-  expect("post-release C count coherent", dut->pub_path_count_o, 3);
-  expect("post-release C tail coherent", pub_path_tail(0), Q_C1);
-  expect("post-release C clears inactive A tail", pub_path_tail(2), 0);
-  // Repeat the literal EOF/SOF-adjacent stalled-dispatch overload with a
-  // fixed no-PathTrace owner A and present-PathTrace chasers. The deferred
-  // zero count must belong to A, hold the frozen context until its handler
-  // ends, clear every tail on COMMIT, and make both chaser drops observable.
-  {
-    const uint16_t evd0 = dut->dbg_ev_drop_o;
-    const uint16_t rxd0 = dut->dbg_rx_drop_o;
+
+  // Force three same-sequence Announces behind a stalled Pdelay response.
+  // The first owns the one frozen Announce context until its handler ends;
+  // the two chasers must be explicitly dropped/counted instead of reusing
+  // either parser bank and tearing A. Once A releases the context, a fresh C
+  // must be accepted normally.
+  void hold_the_frozen_announce_context_under_overload() {
+    const uint64_t Q_A1 = 0x00E100FFFE000011ull;
+    const uint64_t Q_A2 = 0x00E100FFFE000022ull;
+    Q_C1 = 0x00E300FFFE000033ull;
+    const std::vector<uint64_t> Q_PATH_A = {GMID, Q_A1, Q_A2, PEER_CID};
+    Q_PATH_C = {GMID, Q_C1, PEER_CID};
+    const uint16_t queued_drop_base = dut->dbg_ev_drop_o;
     dut->tx_ready_i = 0;
-    Frame q = ptp(0x2, 0x6B6B, 0, 0x0000, 20, PEER_CID);
-    q.u64(0); q.u16(0); q.ts(0); q.b.resize(68);
-    send_frame(q.b, phc() + 600);
-    run(2000);
-    enqueue_announce(0x7B7B, 100, GMID, 0, PEER_CID, {}, phc() + 700);
-    enqueue_announce(0x7B7B, 200, WORSE_GM, 1, WORSE_SRC,
-                     {WORSE_GM, PATH_B1}, phc() + 800);
-    enqueue_announce(0x7B7B, 100, GMID, 2, PEER_CID,
-                     Q_PATH_C, phc() + 900);
-    const size_t c0 = commit_snaps.size();
+    {
+      Frame q = ptp(0x2, 0x6A6A, 0, 0x0000, 20, PEER_CID);
+      q.u64(0); q.u16(0); q.ts(0); q.b.resize(68);
+      send_frame(q.b, phc() + 100);
+      run(2000);  // response serializer is now non-idle and holds dispatch
+    }
+    enqueue_announce(0x7A7A, 100, GMID, 3, PEER_CID, Q_PATH_A, phc() + 200);
+    enqueue_announce(0x7A7A, 200, WORSE_GM, 1, WORSE_SRC,
+                     {WORSE_GM, PATH_B1}, phc() + 300);
+    enqueue_announce(0x7A7A, 100, GMID, 2, PEER_CID, Q_PATH_C, phc() + 400);
+    const size_t queued_commit_base = commit_snaps.size();
     dut->tx_ready_i = 1;
     run(30000);
-    expect("raw-empty overload: only frozen A commits",
-           commit_snaps.size(), c0 + 1);
-    expect("raw-empty overload: two present chasers dropped",
-           dut->dbg_ev_drop_o, (uint16_t)(evd0 + 2));
-    expect("raw-empty overload: parser accepts every frame",
-           dut->dbg_rx_drop_o, rxd0);
-    if (commit_snaps.size() >= c0 + 1) {
-      const PubSnap &qa = commit_snaps[c0];
-      expect("raw-empty overload: frozen A GM", qa.gm, GMID);
-      expect("raw-empty overload: frozen A parent", qa.parent, PEER_CID);
-      expect("raw-empty overload: frozen A count zero", qa.count, 0);
-      for (unsigned k = 0; k < 7; k++) {
-        char n[80]; snprintf(n, sizeof n,
-                             "raw-empty overload: frozen A tail %u zero", k + 1);
-        expect(n, qa.tail[k], 0);
-      }
+    expect("only frozen A commits under announce overload", commit_snaps.size(),
+           queued_commit_base + 1);
+    expect("two announce chasers counted as drops", dut->dbg_ev_drop_o,
+           uint16_t(queued_drop_base + 2));
+    if (commit_snaps.size() >= queued_commit_base + 1) {
+      const PubSnap &qa = commit_snaps[queued_commit_base + 0];
+      expect("frozen queued A GM coherent", qa.gm, GMID);
+      expect("frozen queued A parent coherent", qa.parent, PEER_CID);
+      expect("frozen queued A count coherent", qa.count, 4);
+      expect("frozen queued A tail 1 coherent", qa.tail[0], Q_A1);
+      expect("frozen queued A tail 2 coherent", qa.tail[1], Q_A2);
     }
-    const size_t c1 = commit_snaps.size();
-    send_announce(0x7B7B, 100, GMID, 2, PEER_CID,
-                  Q_PATH_C, phc() + 1000);
-    expect("raw-empty overload: post-release path commits",
-           commit_snaps.size(), c1 + 1);
-    expect("raw-empty overload: post-release count", dut->pub_path_count_o, 3);
-    expect("raw-empty overload: post-release tail", pub_path_tail(0), Q_C1);
+    const size_t released_commit_base = commit_snaps.size();
+    send_announce(0x7A7A, 100, GMID, 2, PEER_CID, Q_PATH_C, phc() + 500);
+    expect("post-release C commits", commit_snaps.size(),
+           released_commit_base + 1);
+    expect("post-release C GM coherent", dut->pub_gm_id_o, GMID);
+    expect("post-release C parent coherent", dut->pub_parent_id_o, PEER_CID);
+    expect("post-release C count coherent", dut->pub_path_count_o, 3);
+    expect("post-release C tail coherent", pub_path_tail(0), Q_C1);
+    expect("post-release C clears inactive A tail", pub_path_tail(2), 0);
+    // Repeat the literal EOF/SOF-adjacent stalled-dispatch overload with a
+    // fixed no-PathTrace owner A and present-PathTrace chasers. The deferred
+    // zero count must belong to A, hold the frozen context until its handler
+    // ends, clear every tail on COMMIT, and make both chaser drops observable.
+    {
+      const uint16_t evd0 = dut->dbg_ev_drop_o;
+      const uint16_t rxd0 = dut->dbg_rx_drop_o;
+      dut->tx_ready_i = 0;
+      Frame q = ptp(0x2, 0x6B6B, 0, 0x0000, 20, PEER_CID);
+      q.u64(0); q.u16(0); q.ts(0); q.b.resize(68);
+      send_frame(q.b, phc() + 600);
+      run(2000);
+      enqueue_announce(0x7B7B, 100, GMID, 0, PEER_CID, {}, phc() + 700);
+      enqueue_announce(0x7B7B, 200, WORSE_GM, 1, WORSE_SRC,
+                       {WORSE_GM, PATH_B1}, phc() + 800);
+      enqueue_announce(0x7B7B, 100, GMID, 2, PEER_CID,
+                       Q_PATH_C, phc() + 900);
+      const size_t c0 = commit_snaps.size();
+      dut->tx_ready_i = 1;
+      run(30000);
+      expect("raw-empty overload: only frozen A commits",
+             commit_snaps.size(), c0 + 1);
+      expect("raw-empty overload: two present chasers dropped",
+             dut->dbg_ev_drop_o, static_cast<uint16_t>(evd0 + 2));
+      expect("raw-empty overload: parser accepts every frame",
+             dut->dbg_rx_drop_o, rxd0);
+      if (commit_snaps.size() >= c0 + 1) {
+        const PubSnap &qa = commit_snaps[c0];
+        expect("raw-empty overload: frozen A GM", qa.gm, GMID);
+        expect("raw-empty overload: frozen A parent", qa.parent, PEER_CID);
+        expect("raw-empty overload: frozen A count zero", qa.count, 0);
+        for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+          char n[80]; snprintf(n, sizeof n,
+                               "raw-empty overload: frozen A tail %u zero", k + 1);
+          expect(n, qa.tail[k], 0);
+        }
+      }
+      const size_t c1 = commit_snaps.size();
+      send_announce(0x7B7B, 100, GMID, 2, PEER_CID,
+                    Q_PATH_C, phc() + 1000);
+      expect("raw-empty overload: post-release path commits",
+             commit_snaps.size(), c1 + 1);
+      expect("raw-empty overload: post-release count", dut->pub_path_count_o, 3);
+      expect("raw-empty overload: post-release tail", pub_path_tail(0), Q_C1);
+    }
   }
-  {
+
+  void stop_sync_transmission_after_adoption() {
     run_svc(20000);                              // drain anything in flight
     size_t before = txf.size();
     run_svc(700000);                             // 0.35 s: ~3 sync slots
@@ -2018,61 +2246,72 @@ int main(int argc, char **argv) {
   }
 
   // ---- 10: as slave, peer sync -> offset; sync-ok rises -----------------
-  expect("sync-ok low before sync", dut->pub_flags_o & FL_SYNCOK, 0);
-  const uint64_t TRX = 20000000000ull, ORIGIN = 19999000000ull,
-                 CORR_NS = 1000ull;
-  {
-    // an FU pairing with the pre-adopt rogue Sync must find nothing
-    Frame g = follow_up(0x0101, CORR_NS << 16, ORIGIN - 1000000000ull);
-    send_frame(g.b, TRX - 999999500ull);
-    run(6000);
+  void steer_on_the_first_peer_sync() {
+    expect("sync-ok low before sync", dut->pub_flags_o & FL_SYNCOK, 0);
+    TRX = 20000000000ull;
+    ORIGIN = 19999000000ull;
+    CORR_NS = 1000ull;
+    {
+      // an FU pairing with the pre-adopt rogue Sync must find nothing
+      Frame g = follow_up(0x0101, CORR_NS << 16, ORIGIN - 1000000000ull);
+      send_frame(g.b, TRX - 999999500ull);
+      run(6000);
+    }
+    expect("rogue sync voided on adopt",
+           static_cast<uint32_t>(dut->pub_offset_o), 0);
+    {
+      Frame f = ptp(0x0, 0x0102, 0, 0x0208, 10);
+      f.ts(0);
+      send_frame(f.b, TRX);
+      run(2000);
+      Frame g = follow_up(0x0102, CORR_NS << 16, ORIGIN);
+      send_frame(g.b, TRX + 500);
+      run(6000);
+    }
+    OFF = TRX - (ORIGIN + CORR_NS + static_cast<uint64_t>(pdm.d));
+    expect("pub offset", static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF));
+    expect("sync-ok rose", dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
+    servo_mirror(static_cast<int64_t>(OFF));
+    expect("big offset re-bases the phc",
+           !steps_seen.empty() && svm.stepped &&
+               steps_seen.back() == svm.step_val, 1);
   }
-  expect("rogue sync voided on adopt", (uint32_t)dut->pub_offset_o, 0);
-  {
-    Frame f = ptp(0x0, 0x0102, 0, 0x0208, 10);
-    f.ts(0);
-    send_frame(f.b, TRX);
-    run(2000);
-    Frame g = follow_up(0x0102, CORR_NS << 16, ORIGIN);
-    send_frame(g.b, TRX + 500);
-    run(6000);
-  }
-  const uint64_t OFF = TRX - (ORIGIN + CORR_NS + (uint64_t)pdm.d);
-  expect("pub offset", (uint32_t)dut->pub_offset_o, (uint32_t)OFF);
-  expect("sync-ok rose", dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
-  servo_mirror((int64_t)OFF);
-  expect("big offset re-bases the phc",
-         !steps_seen.empty() && svm.stepped &&
-             steps_seen.back() == svm.step_val, 1);
 
   // ---- 11: a Follow_Up later than 125 ms pairs with nothing -------------
   // the lone pair's origin is skewed -777 ns so a wrong pairing would
   // move the published offset instead of reproducing it
-  {
-    Frame f = ptp(0x0, 0x0103, 0, 0x0208, 10);
-    f.ts(0);
-    send_frame(f.b, TRX + 1000000000ull);
-    run_svc(270000);                             // 135 ms: FU watch fires
-    Frame g = follow_up(0x0103, CORR_NS << 16, ORIGIN + 999999223ull);
-    send_frame(g.b, TRX + 1000000500ull);
-    run(6000);
+  void pair_nothing_with_a_late_follow_up() {
+    {
+      Frame f = ptp(0x0, 0x0103, 0, 0x0208, 10);
+      f.ts(0);
+      send_frame(f.b, TRX + 1000000000ull);
+      run_svc(270000);                             // 135 ms: FU watch fires
+      Frame g = follow_up(0x0103, CORR_NS << 16, ORIGIN + 999999223ull);
+      send_frame(g.b, TRX + 1000000500ull);
+      run(6000);
+    }
+    expect("late FU dropped", static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF));
+    expect("late FU never steers", steps_seen.size() + adj_seen.size(),
+           2);                                     // phase 10's step + its -I
+    TRX2 = TRX + 2000000000ull;
+    ORIGIN2 = ORIGIN + 1999000000ull;
+    {
+      Frame f = ptp(0x0, 0x0104, 0, 0x0208, 10);
+      f.ts(0);
+      send_frame(f.b, TRX2);
+      run(2000);
+      Frame g = follow_up(0x0104, CORR_NS << 16, ORIGIN2);
+      send_frame(g.b, TRX2 + 500);
+      run(6000);
+    }
+    OFF2 =
+        TRX2 - (ORIGIN2 + CORR_NS + static_cast<uint64_t>(pdm.d));
+    expect("next pair lands", static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF2));
+    servo_mirror(static_cast<int64_t>(OFF2));
   }
-  expect("late FU dropped", (uint32_t)dut->pub_offset_o, (uint32_t)OFF);
-  expect("late FU never steers", steps_seen.size() + adj_seen.size(),
-         2);                                     // phase 10's step + its -I
-  const uint64_t TRX2 = TRX + 2000000000ull, ORIGIN2 = ORIGIN + 1999000000ull;
-  {
-    Frame f = ptp(0x0, 0x0104, 0, 0x0208, 10);
-    f.ts(0);
-    send_frame(f.b, TRX2);
-    run(2000);
-    Frame g = follow_up(0x0104, CORR_NS << 16, ORIGIN2);
-    send_frame(g.b, TRX2 + 500);
-    run(6000);
-  }
-  const uint64_t OFF2 = TRX2 - (ORIGIN2 + CORR_NS + (uint64_t)pdm.d);
-  expect("next pair lands", (uint32_t)dut->pub_offset_o, (uint32_t)OFF2);
-  servo_mirror((int64_t)OFF2);
 
   // ---- 11b: a Sync + Follow_Up pair in a foreign domain never steers ---
   // the pair is otherwise perfect (matching sequenceId and source, the
@@ -2081,7 +2320,7 @@ int main(int argc, char **argv) {
   // header, the offset and the PHC knobs are untouched, and the foreign
   // Sync left no pending slot, so a domain-0 Follow_Up with its sequence
   // pairs with nothing either (FPGA-gPTP #6)
-  {
+  void never_steer_from_a_foreign_domain_sync_pair() {
     uint16_t drops = dut->dbg_rx_drop_o;
     size_t writes = steps_seen.size() + adj_seen.size();
     uint32_t flags = dut->pub_flags_o;
@@ -2096,18 +2335,20 @@ int main(int argc, char **argv) {
     g.b[18] = 5;
     send_frame(g.b, TRXF + 500);
     run(6000);
-    expect("foreign-domain pair: offset unmoved", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF2);
+    expect("foreign-domain pair: offset unmoved",
+           static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF2));
     expect("foreign-domain pair: never steers",
            steps_seen.size() + adj_seen.size(), writes);
     expect("foreign-domain pair: flags untouched", dut->pub_flags_o, flags);
     expect("foreign-domain pair: both dropped and counted",
-           dut->dbg_rx_drop_o, (uint16_t)(drops + 2));
+           dut->dbg_rx_drop_o, static_cast<uint16_t>(drops + 2));
     Frame h = follow_up(0x0110, CORR_NS << 16, ORGF);   // domain 0
     send_frame(h.b, TRXF + 600);
     run(6000);
-    expect("foreign Sync left no pending slot", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF2);
+    expect("foreign Sync left no pending slot",
+           static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF2));
     expect("orphan Follow_Up never steers",
            steps_seen.size() + adj_seen.size(), writes);
   }
@@ -2128,7 +2369,7 @@ int main(int argc, char **argv) {
   // knobs and the flags unmoved; none consumes the pending Sync, so the
   // complete Follow_Up that follows pairs with it and lands an offset 333
   // ns from the previous one, then re-bases the PHC by its negation
-  {
+  void never_steer_from_a_follow_up_without_its_tlv() {
     uint16_t drops = dut->dbg_rx_drop_o;
     size_t writes = steps_seen.size() + adj_seen.size();
     uint32_t flags = dut->pub_flags_o;
@@ -2142,43 +2383,48 @@ int main(int argc, char **argv) {
     g.ts(ORGM - 777ull);
     send_frame(g.b, TRXM + 500);
     run(6000);
-    expect("TLV-less Follow_Up: offset unmoved", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF2);
+    expect("TLV-less Follow_Up: offset unmoved",
+           static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF2));
     expect("TLV-less Follow_Up: never steers",
            steps_seen.size() + adj_seen.size(), writes);
     expect("TLV-less Follow_Up: flags untouched", dut->pub_flags_o, flags);
     expect("TLV-less Follow_Up: dropped and counted", dut->dbg_rx_drop_o,
-           (uint16_t)(drops + 1));
+           static_cast<uint16_t>(drops + 1));
     Frame h = follow_up(0x0111, CORR_NS << 16, ORGM - 777ull);
     h.b.resize(89);                              // declared 76, cut at 75
     send_frame(h.b, TRXM + 600);
     run(6000);
-    expect("cut Follow_Up: offset unmoved", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF2);
+    expect("cut Follow_Up: offset unmoved",
+           static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF2));
     expect("cut Follow_Up: never steers",
            steps_seen.size() + adj_seen.size(), writes);
     expect("cut Follow_Up: dropped and counted", dut->dbg_rx_drop_o,
-           (uint16_t)(drops + 2));
+           static_cast<uint16_t>(drops + 2));
     Frame k = follow_up(0x0111, CORR_NS << 16, ORGM - 777ull);
     k.b[59] = 0x08;                              // tlvType 0x0008: path trace
     send_frame(k.b, TRXM + 700);
     run(6000);
-    expect("wrong-TLV Follow_Up: offset unmoved", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF2);
+    expect("wrong-TLV Follow_Up: offset unmoved",
+           static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF2));
     expect("wrong-TLV Follow_Up: never steers",
            steps_seen.size() + adj_seen.size(), writes);
     expect("wrong-TLV Follow_Up: flags untouched", dut->pub_flags_o, flags);
     expect("wrong-TLV Follow_Up: dropped and counted", dut->dbg_rx_drop_o,
-           (uint16_t)(drops + 3));
+           static_cast<uint16_t>(drops + 3));
     Frame m = follow_up(0x0111, CORR_NS << 16, ORGM);
     send_frame(m.b, TRXM + 800);
     run(6000);
-    const uint64_t OFFM = TRXM - (ORGM + CORR_NS + (uint64_t)pdm.d);
+    const uint64_t OFFM =
+        TRXM - (ORGM + CORR_NS + static_cast<uint64_t>(pdm.d));
     expect("complete Follow_Up pairs with the surviving Sync",
-           (uint32_t)dut->pub_offset_o, (uint32_t)OFFM);
+           static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFFM));
     expect("complete Follow_Up: nothing further dropped", dut->dbg_rx_drop_o,
-           (uint16_t)(drops + 3));
-    servo_mirror((int64_t)OFFM);
+           static_cast<uint16_t>(drops + 3));
+    servo_mirror(static_cast<int64_t>(OFFM));
     expect("complete Follow_Up re-bases the phc",
            !steps_seen.empty() && svm.stepped &&
                steps_seen.back() == svm.step_val, 1);
@@ -2198,16 +2444,18 @@ int main(int argc, char **argv) {
   // an arm at byte 59 cannot hide from: a poison raised on a frame's eof
   // byte is not seen by the end-of-frame gate, which samples bad_r as
   // registered, so the 60-byte shape alone would pass MR7
-  {
+  void pair_a_padded_sync() {
     struct Pad { const char *tag; uint16_t seq; size_t pad; uint64_t skew; };
     const Pad pads[] = { {"padded Sync (60)", 0x0112, 2, 555ull},
                          {"padded Sync (74)", 0x0113, 16, 999ull} };
     for (const Pad &p : pads) {
       char n[64];
       uint16_t drops = dut->dbg_rx_drop_o;
-      const uint64_t TRXP = TRX2 + 1200000000ull + (uint64_t)p.seq * 1000ull;
-      const uint64_t ORGP = ORIGIN2 + 1200000000ull + (uint64_t)p.seq * 1000ull
-                            - p.skew;
+      const uint64_t TRXP =
+          TRX2 + 1200000000ull + static_cast<uint64_t>(p.seq) * 1000ull;
+      const uint64_t ORGP =
+          ORIGIN2 + 1200000000ull + static_cast<uint64_t>(p.seq) * 1000ull
+          - p.skew;
       Frame f = ptp(0x0, p.seq, 0, 0x0208, 10);
       f.ts(0);
       for (size_t i = 0; i < p.pad; i++) f.u8(0);   // the padding
@@ -2218,10 +2466,12 @@ int main(int argc, char **argv) {
       Frame g = follow_up(p.seq, CORR_NS << 16, ORGP);
       send_frame(g.b, TRXP + 500);
       run(6000);
-      const uint64_t OFFP = TRXP - (ORGP + CORR_NS + (uint64_t)pdm.d);
+      const uint64_t OFFP =
+          TRXP - (ORGP + CORR_NS + static_cast<uint64_t>(pdm.d));
       snprintf(n, sizeof n, "%s pairs: offset", p.tag);
-      expect(n, (uint32_t)dut->pub_offset_o, (uint32_t)OFFP);
-      servo_mirror((int64_t)OFFP);
+      expect(n, static_cast<uint32_t>(dut->pub_offset_o),
+             static_cast<uint32_t>(OFFP));
+      servo_mirror(static_cast<int64_t>(OFFP));
       snprintf(n, sizeof n, "%s pairs: re-bases the phc", p.tag);
       expect(n, !steps_seen.empty() && svm.stepped &&
                     steps_seen.back() == svm.step_val, 1);
@@ -2229,16 +2479,19 @@ int main(int argc, char **argv) {
   }
 
   // ---- 12: syncReceiptTimeout (375 ms) -> sync-ok falls -----------------
-  expect("sync-ok falls on timeout",
-         wait_flags(FL_SYNCOK, 0, 900000ull), 1);
-  expect("still slave at the verdict", dut->pub_flags_o & 3, FL_PRESENT);
-  expect("timeout keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+  void drop_sync_ok_at_the_receipt_timeout() {
+    expect("sync-ok falls on timeout",
+           wait_flags(FL_SYNCOK, 0, 900000ull), 1);
+    expect("still slave at the verdict", dut->pub_flags_o & 3, FL_PRESENT);
+    expect("timeout keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+  }
 
   // ---- 13: a +1 ms offset STEPS the phc by its negation -----------------
-  {
+  void step_the_phc_on_a_one_millisecond_offset() {
     size_t adj_before = adj_seen.size();
     const uint64_t TRX3 = 30000000000ull;
-    const uint64_t ORG3 = TRX3 - CORR_NS - (uint64_t)pdm.d - 1000000ull;
+    const uint64_t ORG3 =
+        TRX3 - CORR_NS - static_cast<uint64_t>(pdm.d) - 1000000ull;
     Frame f = ptp(0x0, 0x0105, 0, 0x0208, 10);
     f.ts(0);
     send_frame(f.b, TRX3);
@@ -2249,17 +2502,19 @@ int main(int argc, char **argv) {
     servo_mirror(1000000);
     expect("step is the negation",
            !steps_seen.empty() && steps_seen.back() == svm.step_val &&
-               svm.step_val == (uint64_t)(-1000000ll), 1);
+               svm.step_val == static_cast<uint64_t>(-1000000ll), 1);
     expect("step writes the bare estimate",
            adj_seen.size() == adj_before + 1 &&
-               adj_seen.back() == (uint32_t)(int32_t)(-svm.intg), 1);
+               adj_seen.back() ==
+                   static_cast<uint32_t>(static_cast<int32_t>(-svm.intg)), 1);
   }
 
   // ---- 14: a +5 us offset SLEWS: the PI addend matches the mirror -------
-  {
+  void slew_on_a_five_microsecond_offset() {
     size_t steps_before = steps_seen.size();
     const uint64_t TRX4 = 31000000000ull;
-    const uint64_t ORG4 = TRX4 - CORR_NS - (uint64_t)pdm.d - 5000ull;
+    const uint64_t ORG4 =
+        TRX4 - CORR_NS - static_cast<uint64_t>(pdm.d) - 5000ull;
     Frame f = ptp(0x0, 0x0106, 0, 0x0208, 10);
     f.ts(0);
     send_frame(f.b, TRX4);
@@ -2270,7 +2525,8 @@ int main(int argc, char **argv) {
     servo_mirror(5000);
     expect("slew addend matches the PI mirror",
            !adj_seen.empty() &&
-               adj_seen.back() == (uint32_t)(int32_t)svm.addend, 1);
+               adj_seen.back() ==
+                   static_cast<uint32_t>(static_cast<int32_t>(svm.addend)), 1);
     expect("a slew is not a step", steps_seen.size(), steps_before);
   }
 
@@ -2278,7 +2534,7 @@ int main(int argc, char **argv) {
   // the master clock runs independent of our phc: 1 ms ahead at start,
   // +0.05 ns per cycle faster. The first pair steps; the PI then drives
   // the measured offset to zero with the integrator carrying the rate.
-  {
+  void converge_the_closed_loop_on_a_fast_master() {
     size_t steps_before = steps_seen.size();
     int64_t intg_at_entry = svm.intg;            // phase 14's ki deposit
     uint64_t mst_base =
@@ -2286,7 +2542,7 @@ int main(int argc, char **argv) {
     uint16_t sq = 0x0200;
     for (int k = 0; k < 24; k++) {
       if ((k % 8) == 0) {                        // keep the GM elected
-        Frame a = ptp(0xB, (uint16_t)(20 + k), 0, 0x0008, 42);
+        Frame a = ptp(0xB, static_cast<uint16_t>(20 + k), 0, 0x0008, 42);
         for (int i = 0; i < 10; i++) a.u8(0);
         a.u16(0xFFC4); a.u8(0);
         a.u8(100); a.u32(OUR_CQ); a.u8(248);
@@ -2312,87 +2568,93 @@ int main(int argc, char **argv) {
         // a step path that cleared it would write zero instead
         expect("integrator survives the step",
                intg_at_entry != 0 && !adj_seen.empty() &&
-                   adj_seen.back() ==
-                       (uint32_t)(int32_t)(-intg_at_entry), 1);
+                   adj_seen.back() == static_cast<uint32_t>(
+                       static_cast<int32_t>(-intg_at_entry)), 1);
       }
       sq++;
     }
     expect("one re-base then lock", steps_seen.size(), steps_before + 1);
-    int32_t final_off = (int32_t)dut->pub_offset_o;
+    int32_t final_off = static_cast<int32_t>(dut->pub_offset_o);
     expect("measured offset converged",
            final_off > -200 && final_off < 200, 1);
     // ideal rate correction for +140 ppm at 2 MHz: +0.07 ns/tick
     // = +1,174,405 addend units. The target sits ABOVE half the
     // +-200 ppm integrator clamp on purpose: a clamp mutation to
     // ILIM/2 cannot carry this master and fails the lock
-    int32_t final_adj = (int32_t)phc_adj;
+    int32_t final_adj = static_cast<int32_t>(phc_adj);
     expect("addend carries the master's rate",
            final_adj > 1056965 && final_adj < 1291846, 1);
   }
 
   // ---- 16: a Follow_Up with the wrong sequenceId pairs with nothing -----
-  const uint64_t TRX6 = 40000000000ull;
-  {
-    uint32_t off_before = dut->pub_offset_o;
-    Frame f = ptp(0x0, 0x0400, 0, 0x0208, 10);
-    f.ts(0);
-    send_frame(f.b, TRX6);
-    run(2000);
-    Frame g = follow_up(0x0401, 0, TRX6 - 5000);   // wrong seq
-    send_frame(g.b, TRX6 + 500);
-    run(6000);
-    expect("mismatched seq dropped", dut->pub_offset_o, off_before);
-    Frame h = follow_up(0x0400, 0, TRX6 - 5000);   // the right one
-    send_frame(h.b, TRX6 + 600);
-    run(6000);
-    const uint64_t OFF6 = TRX6 - (TRX6 - 5000 + (uint64_t)pdm.d);
-    expect("matching FU still lands", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF6);
+  void pair_nothing_with_a_wrong_sequence_follow_up() {
+    TRX6 = 40000000000ull;
+    {
+      uint32_t off_before = dut->pub_offset_o;
+      Frame f = ptp(0x0, 0x0400, 0, 0x0208, 10);
+      f.ts(0);
+      send_frame(f.b, TRX6);
+      run(2000);
+      Frame g = follow_up(0x0401, 0, TRX6 - 5000);   // wrong seq
+      send_frame(g.b, TRX6 + 500);
+      run(6000);
+      expect("mismatched seq dropped", dut->pub_offset_o, off_before);
+      Frame h = follow_up(0x0400, 0, TRX6 - 5000);   // the right one
+      send_frame(h.b, TRX6 + 600);
+      run(6000);
+      const uint64_t OFF6 = TRX6 - (TRX6 - 5000 + static_cast<uint64_t>(pdm.d));
+      expect("matching FU still lands", static_cast<uint32_t>(dut->pub_offset_o),
+             static_cast<uint32_t>(OFF6));
+    }
   }
 
   // ---- 17: a Follow_Up from the wrong source pairs with nothing ---------
-  const uint64_t IMPOSTOR = 0x00DEADFFFE000001ull;
-  {
-    uint32_t off_before = dut->pub_offset_o;
-    Frame f = ptp(0x0, 0x0410, 0, 0x0208, 10);
-    f.ts(0);
-    send_frame(f.b, TRX6 + 1000000000ull);
-    run(2000);
-    Frame g = follow_up(0x0410, 0, TRX6 + 1000000000ull - 7000, IMPOSTOR);
-    send_frame(g.b, TRX6 + 1000000500ull);
-    run(6000);
-    expect("impostor FU dropped", dut->pub_offset_o, off_before);
-    Frame h = follow_up(0x0410, 0, TRX6 + 1000000000ull - 7000);
-    send_frame(h.b, TRX6 + 1000000600ull);
-    run(6000);
-    const uint64_t OFF7 = 7000 - (uint64_t)pdm.d;
-    expect("paired FU still lands", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF7);
+  void pair_nothing_with_a_follow_up_from_the_wrong_source() {
+    const uint64_t IMPOSTOR = 0x00DEADFFFE000001ull;
+    {
+      uint32_t off_before = dut->pub_offset_o;
+      Frame f = ptp(0x0, 0x0410, 0, 0x0208, 10);
+      f.ts(0);
+      send_frame(f.b, TRX6 + 1000000000ull);
+      run(2000);
+      Frame g = follow_up(0x0410, 0, TRX6 + 1000000000ull - 7000, IMPOSTOR);
+      send_frame(g.b, TRX6 + 1000000500ull);
+      run(6000);
+      expect("impostor FU dropped", dut->pub_offset_o, off_before);
+      Frame h = follow_up(0x0410, 0, TRX6 + 1000000000ull - 7000);
+      send_frame(h.b, TRX6 + 1000000600ull);
+      run(6000);
+      const uint64_t OFF7 = 7000 - static_cast<uint64_t>(pdm.d);
+      expect("paired FU still lands", static_cast<uint32_t>(dut->pub_offset_o),
+             static_cast<uint32_t>(OFF7));
+    }
   }
 
   // ---- 18: gmId tie -> stepsRemoved -> sourcePortIdentity ---------------
   // same GM and vector through a second announcer with a LOWER source
   // identity: the source tiebreak switches the parent; sync-ok and the
   // GM identity hold (no adoption flicker)
-  const uint64_t SRC2 = 0x0011223344556677ull;
-  {
-    expect("sync-ok up before the switch",
-           dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
-    announce(40, 100, GMID, 0, SRC2);
-    expect("source tiebreak switches parent", dut->pub_parent_id_o, SRC2);
-    expect("gm survives the switch", dut->pub_gm_id_o, GMID);
-    expect("no flicker on the switch",
-           dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
-    // a LONGER path to the same GM loses on stepsRemoved
-    announce(41, 100, GMID, 1, 0x00F0F0FFFE000001ull);
-    expect("longer path rejected", dut->pub_parent_id_o, SRC2);
-    // and a SHORTER path wins on stepsRemoved BEFORE the source
-    // tiebreak: the parent re-roots deeper, then a higher-identity
-    // announcer with fewer hops takes over
-    announce(46, 100, GMID, 3, SRC2);
-    const uint64_t SRC5 = 0x00F1F1FFFE000009ull;
-    announce(47, 100, GMID, 1, SRC5);
-    expect("shorter path wins", dut->pub_parent_id_o, SRC5);
+  void break_btca_ties_on_steps_then_source() {
+    const uint64_t SRC2 = 0x0011223344556677ull;
+    {
+      expect("sync-ok up before the switch",
+             dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
+      announce(40, 100, GMID, 0, SRC2);
+      expect("source tiebreak switches parent", dut->pub_parent_id_o, SRC2);
+      expect("gm survives the switch", dut->pub_gm_id_o, GMID);
+      expect("no flicker on the switch",
+             dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
+      // a LONGER path to the same GM loses on stepsRemoved
+      announce(41, 100, GMID, 1, 0x00F0F0FFFE000001ull);
+      expect("longer path rejected", dut->pub_parent_id_o, SRC2);
+      // and a SHORTER path wins on stepsRemoved BEFORE the source
+      // tiebreak: the parent re-roots deeper, then a higher-identity
+      // announcer with fewer hops takes over
+      announce(46, 100, GMID, 3, SRC2);
+      const uint64_t SRC5 = 0x00F1F1FFFE000009ull;
+      announce(47, 100, GMID, 1, SRC5);
+      expect("shorter path wins", dut->pub_parent_id_o, SRC5);
+    }
   }
 
   // ---- 18b: a delayed dispatch must not act on a torn epoch -------------
@@ -2403,7 +2665,7 @@ int main(int argc, char **argv) {
   // source, turn it into an unconditional parent-update take, and wrongfully
   // seize mastership. The frozen Announce context makes that R8 failure
   // mode deterministic and impossible without relying on sequenceId.
-  {
+  void read_a_complete_frozen_epoch_in_a_delayed_dispatch() {
     Frame q = ptp(0x2, 0x7777, 0, 0x0000, 20);
     q.u64(0); q.u16(0); q.ts(0);
     q.b.resize(68);
@@ -2429,7 +2691,7 @@ int main(int argc, char **argv) {
   // ---- 19: the parent degrades below us -> immediate takeover -----------
   // 10.3.5: a parent update replaces the best; ours now wins the
   // contest and become-master runs WITHOUT waiting any timeout
-  {
+  void take_mastership_when_the_parent_degrades() {
     announce(42, 250, 0xAABBCCFFFE010203ull, 0, 0x00F1F1FFFE000009ull);
     expect("degraded parent yields NOW", dut->pub_flags_o & 3,
            FL_PRESENT | FL_AMGM);
@@ -2437,7 +2699,7 @@ int main(int argc, char **argv) {
   }
 
   // ---- 20: every two-step Sync carries a zero reserved body --------------
-  {
+  void keep_the_two_step_sync_body_zero() {
     tx_seen = txf.size();
     std::vector<uint8_t> sy = wait_tx(0x0, 800000);
     if (!sy.empty()) {
@@ -2448,13 +2710,13 @@ int main(int argc, char **argv) {
   }
 
   // ---- 21: an asCapable fall stops sync consumption ---------------------
-  {
+  void stop_consuming_sync_when_ascapable_falls() {
     announce(43, 100, GMID, 0, PEER_CID);        // adopt again
     expect("re-adopted", dut->pub_flags_o & 3, FL_PRESENT);
     sync_pair(0x0500, TRX6 + 5000000000ull, TRX6 + 5000000000ull - 4000);
-    const uint64_t OFF_A = 4000 - (uint64_t)pdm.d;
-    expect("baseline pair lands", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF_A);
+    const uint64_t OFF_A = 4000 - static_cast<uint64_t>(pdm.d);
+    expect("baseline pair lands", static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF_A));
     pd_mode = PD_FAR;
     {
       int base = pdm.count;
@@ -2464,8 +2726,8 @@ int main(int argc, char **argv) {
     expect("capable fell", dut->pub_flags_o & FL_ASCAP, 0);
     size_t writes = steps_seen.size() + adj_seen.size();
     sync_pair(0x0501, TRX6 + 6000000000ull, TRX6 + 6000000000ull - 9000);
-    expect("uncapable pair dropped", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF_A);
+    expect("uncapable pair dropped", static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF_A));
     expect("uncapable pair never steers",
            steps_seen.size() + adj_seen.size(), writes);
     pd_mode = PD_NORMAL;
@@ -2473,9 +2735,9 @@ int main(int argc, char **argv) {
     expect("capable again", wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
     announce(45, 100, GMID, 0, PEER_CID);
     sync_pair(0x0502, TRX6 + 9000000000ull, TRX6 + 9000000000ull - 6000);
-    const uint64_t OFF_C = 6000 - (uint64_t)pdm.d;
-    expect("recovered pair lands", (uint32_t)dut->pub_offset_o,
-           (uint32_t)OFF_C);
+    const uint64_t OFF_C = 6000 - static_cast<uint64_t>(pdm.d);
+    expect("recovered pair lands", static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(OFF_C));
   }
 
   // ---- 21b: become resets the best record -- no ghost GM ----------------
@@ -2483,27 +2745,29 @@ int main(int argc, char **argv) {
   // asCapable alive), the plane becomes master, and the DEAD parent's
   // record must be gone: a mediocre newcomer (worse than the ghost,
   // better than us) must be ADOPTED, not lose to a ghost
-  const uint64_t NEWGM = 0x00BEEFFFFE000002ull;
-  const uint64_t NEWSRC = 0x00BEEFFFFE000001ull;
-  {
-    expect("quiet ride to mastership",
-           wait_flags(FL_AMGM, FL_AMGM, 8000000ull), 1);
-    run(200);  // reach the PathTrace write and COMMIT after the flags write
-    expect("gm is us after the quiet", dut->pub_gm_id_o, OUR_CID);
-    expect("own-GM transition publishes count one", dut->pub_path_count_o, 1);
-    for (unsigned k = 0; k < 7; k++) {
-      char n[72]; snprintf(n, sizeof(n), "own-GM transition clears tail %u", k);
-      expect(n, pub_path_tail(k), 0);
+  void reset_the_best_record_on_become() {
+    NEWGM = 0x00BEEFFFFE000002ull;
+    NEWSRC = 0x00BEEFFFFE000001ull;
+    {
+      expect("quiet ride to mastership",
+             wait_flags(FL_AMGM, FL_AMGM, 8000000ull), 1);
+      run(200);  // reach the PathTrace write and COMMIT after the flags write
+      expect("gm is us after the quiet", dut->pub_gm_id_o, OUR_CID);
+      expect("own-GM transition publishes count one", dut->pub_path_count_o, 1);
+      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+        char n[72]; snprintf(n, sizeof(n), "own-GM transition clears tail %u", k);
+        expect(n, pub_path_tail(k), 0);
+      }
+      announce(70, 150, NEWGM, 0, NEWSRC);
+      expect("newcomer adopted, no ghost", dut->pub_gm_id_o, NEWGM);
+      expect("newcomer is the parent", dut->pub_parent_id_o, NEWSRC);
     }
-    announce(70, 150, NEWGM, 0, NEWSRC);
-    expect("newcomer adopted, no ghost", dut->pub_gm_id_o, NEWGM);
-    expect("newcomer is the parent", dut->pub_parent_id_o, NEWSRC);
   }
 
   // ---- 21c: the priority vector outranks the identity -------------------
   // worse pv, lower gmId: 10.3.5 compares the vector FIRST, so this
   // must be rejected -- a swapped compare order would adopt it
-  {
+  void outrank_the_identity_with_the_priority_vector() {
     announce(71, 160, 0x0000000000000005ull, 0, 0x00C0FFEE00000001ull);
     expect("vector outranks identity", dut->pub_gm_id_o, NEWGM);
   }
@@ -2512,88 +2776,103 @@ int main(int argc, char **argv) {
   // the same delayed-dispatch shape as 18b, but with a BETTER announce:
   // the Announce's complete enqueue-time words survive its successor, so the
   // plane ADOPTS instead of dropping or mixing a live-bank epoch
-  const uint64_t GMC = 0x00CAFEFFFE000003ull;
-  {
-    Frame q = ptp(0x2, 0x7779, 0, 0x0000, 20);
-    q.u64(0); q.u16(0); q.ts(0);
-    q.b.resize(68);
-    send_frame(q.b, phc() + 150);
-    Frame a = ptp(0xB, 72, 0, 0x0008, 42, 0x00CAFEFFFE000004ull);
-    for (int i = 0; i < 10; i++) a.u8(0);
-    a.u16(0xFFC4); a.u8(0);
-    a.u8(80); a.u32(OUR_CQ); a.u8(248);
-    a.u64(GMC);
-    a.u16(0); a.u8(0xA0);
-    a.u16(0x0008); a.u16(8); a.u64(GMC);
-    Frame sy = ptp(0x0, 0x777A, 0, 0x0208, 10, NEWSRC);
-    sy.ts(0);
-    send_frame(a.b, phc() + 300);
-    send_frame(sy.b, phc() + 400);               // zero-gap, parent src
-    run(20000);
-    expect("torn better announce adopts", dut->pub_gm_id_o, GMC);
-    expect("its announcer is the parent", dut->pub_parent_id_o,
-           0x00CAFEFFFE000004ull);
+  void process_a_better_delayed_announce_from_its_epoch() {
+    const uint64_t GMC = 0x00CAFEFFFE000003ull;
+    {
+      Frame q = ptp(0x2, 0x7779, 0, 0x0000, 20);
+      q.u64(0); q.u16(0); q.ts(0);
+      q.b.resize(68);
+      send_frame(q.b, phc() + 150);
+      Frame a = ptp(0xB, 72, 0, 0x0008, 42, 0x00CAFEFFFE000004ull);
+      for (int i = 0; i < 10; i++) a.u8(0);
+      a.u16(0xFFC4); a.u8(0);
+      a.u8(80); a.u32(OUR_CQ); a.u8(248);
+      a.u64(GMC);
+      a.u16(0); a.u8(0xA0);
+      a.u16(0x0008); a.u16(8); a.u64(GMC);
+      Frame sy = ptp(0x0, 0x777A, 0, 0x0208, 10, NEWSRC);
+      sy.ts(0);
+      send_frame(a.b, phc() + 300);
+      send_frame(sy.b, phc() + 400);               // zero-gap, parent src
+      run(20000);
+      expect("torn better announce adopts", dut->pub_gm_id_o, GMC);
+      expect("its announcer is the parent", dut->pub_parent_id_o,
+             0x00CAFEFFFE000004ull);
+    }
   }
 
   // ---- 22: negative pdelay inside the Milan floor is accepted -----------
-  pd_mode = PD_NEG;
-  {
-    int base = pdm.count;
-    expect("neg exchange ran", wait_exchanges(base + 1, 4000000ull), 1);
-    run(4000);
+  void accept_a_negative_delay_inside_the_milan_floor() {
+    pd_mode = PD_NEG;
+    {
+      int base = pdm.count;
+      expect("neg exchange ran", wait_exchanges(base + 1, 4000000ull), 1);
+      run(4000);
+    }
+    expect("neg pdelay published", dut->pub_pdelay_ns_o,
+           static_cast<uint32_t>(pdm.d));
+    expect("neg pdelay in floor",
+           pdm.d < 0 && pdm.d >= -80, 1);
+    expect("neg keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
   }
-  expect("neg pdelay published", dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
-  expect("neg pdelay in floor",
-         pdm.d < 0 && pdm.d >= -80, 1);
-  expect("neg keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
 
   // ---- 23: over the 800 ns threshold -> asCapable falls -----------------
-  pd_mode = PD_FAR;
-  {
-    int base = pdm.count;
-    expect("far exchange ran", wait_exchanges(base + 1, 4000000ull), 1);
-    run(4000);
+  void drop_ascapable_over_the_threshold() {
+    pd_mode = PD_FAR;
+    {
+      int base = pdm.count;
+      expect("far exchange ran", wait_exchanges(base + 1, 4000000ull), 1);
+      run(4000);
+    }
+    expect("far pdelay published", dut->pub_pdelay_ns_o,
+           static_cast<uint32_t>(pdm.d));
+    expect("far pdelay over thresh", pdm.d > 800, 1);
+    expect("threshold clears capable", dut->pub_flags_o & FL_ASCAP, 0);
   }
-  expect("far pdelay published", dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
-  expect("far pdelay over thresh", pdm.d > 800, 1);
-  expect("threshold clears capable", dut->pub_flags_o & FL_ASCAP, 0);
 
   // ---- 24: recovery takes two good exchanges again ----------------------
-  pd_mode = PD_NORMAL;
-  {
-    int base = pdm.count;
-    expect("recovery ex1 ran", wait_exchanges(base + 1, 4000000ull), 1);
-    run(4000);
-    expect("one good is not enough", dut->pub_flags_o & FL_ASCAP, 0);
-    expect("recovery ex2 ran", wait_exchanges(base + 2, 4000000ull), 1);
-    run(4000);
-    expect("two goods recover", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+  void recover_ascapable_in_two_good_exchanges() {
+    pd_mode = PD_NORMAL;
+    {
+      int base = pdm.count;
+      expect("recovery ex1 ran", wait_exchanges(base + 1, 4000000ull), 1);
+      run(4000);
+      expect("one good is not enough", dut->pub_flags_o & FL_ASCAP, 0);
+      expect("recovery ex2 ran", wait_exchanges(base + 2, 4000000ull), 1);
+      run(4000);
+      expect("two goods recover", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    }
   }
 
   // ---- 25: lost responses clear asCapable at the FOURTH -----------------
   // 802.1AS-2011 11.2.12.4: the count must EXCEED allowedLostResponses=3
-  pd_mode = PD_OFF;
-  size_t off_mark = txf.size();
-  expect("lost responses clear capable",
-         wait_flags(FL_ASCAP, 0, 12000000ull), 1);
-  {
-    int reqs = 0;
-    for (size_t i = off_mark; i < txf.size(); i++)
-      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) reqs++;
-    expect("fall at the fourth lost", reqs == 4 || reqs == 5, 1);
+  void clear_ascapable_at_the_fourth_lost_response() {
+    pd_mode = PD_OFF;
+    size_t off_mark = txf.size();
+    expect("lost responses clear capable",
+           wait_flags(FL_ASCAP, 0, 12000000ull), 1);
+    {
+      int reqs = 0;
+      for (size_t i = off_mark; i < txf.size(); i++)
+        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) reqs++;
+      expect("fall at the fourth lost", reqs == 4 || reqs == 5, 1);
+    }
   }
 
   // ---- 26: a window wider than 2^32 ns must not update the ratio --------
   // the OFF span above left > 4.3 s between answered exchanges; the
   // first answer after it takes the staleness path in model and DUT
-  pd_mode = PD_NORMAL;
-  {
-    int base = pdm.count;
-    expect("post-gap exchange ran", wait_exchanges(base + 1, 4000000ull), 1);
-    run(4000);
+  void hold_the_ratio_across_a_stale_window() {
+    pd_mode = PD_NORMAL;
+    {
+      int base = pdm.count;
+      expect("post-gap exchange ran", wait_exchanges(base + 1, 4000000ull), 1);
+      run(4000);
+    }
+    expect("gap took the stale path", pdm.stale_skip, 1);
+    expect("stale window skips ratio", dut->pub_pdelay_ns_o,
+           static_cast<uint32_t>(pdm.d));
   }
-  expect("gap took the stale path", pdm.stale_skip, 1);
-  expect("stale window skips ratio", dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
 
   // ---- 26b: a completed exchange cannot be completed again --------------
   // Figure 11-8 (Cor2-2015): after the pair, only the interval timer
@@ -2603,7 +2882,7 @@ int main(int argc, char **argv) {
   // completion in this interval would raise it a request early (Milan
   // 4.2.6.2.4); a skewed replay (t4 + 2000: D 600 -> 1600) would
   // overwrite the genuine delay and clear the ladder (FPGA-gPTP #8)
-  {
+  void refuse_to_complete_an_exchange_twice() {
     pd_mode = PD_SKIP;
     size_t rqi = 0;
     bool found = false;
@@ -2645,7 +2924,7 @@ int main(int argc, char **argv) {
   // three successive requests each answered by two distinct identities
   // stop Pdelay_Req transmission and drop asCapable; the (bench-
   // shortened) resume timer restarts requests and the ladder re-earns
-  {
+  void cease_on_multiple_responders_and_re_earn() {
     pd_mode = PD_NORMAL;                         // regain capable first
     expect("capable before the storm",
            wait_flags(FL_ASCAP, FL_ASCAP, 6000000ull), 1);
@@ -2727,7 +3006,7 @@ int main(int argc, char **argv) {
   // ladder re-earns (the review's probe; a completed path sent to END
   // instead of the bookkeeping passes phase 27, whose second identity
   // answers before the Follow_Up, and fails here)
-  {
+  void cease_on_a_late_second_identity() {
     pd_mode = PD_NORMAL;
     expect("27b: capable before the late-second storm",
            wait_flags(FL_ASCAP, FL_ASCAP, 6000000ull), 1);
@@ -2757,7 +3036,7 @@ int main(int argc, char **argv) {
   // scratch survives reset and the boot re-arms the cadence, so the
   // countdown completes; a timer-armed resume died with the reset and
   // stranded the cease until a bitstream reload (the review's finding)
-  {
+  void resume_after_a_warm_reset_during_a_cease() {
     pd_mode = PD_DUAL;
     expect("second storm ceases",
            wait_flags(FL_ASCAP, 0, 16000000ull), 1);
@@ -2780,10 +3059,12 @@ int main(int argc, char **argv) {
     const size_t empty_c0 = commit_snaps.size();
     const uint16_t empty_d0 = dut->dbg_rx_drop_o;
     send_announce(0xC027, 1, WGM, 0, PEER_CID, {}, phc() + 50);
-    bool empty_selected = false, empty_mixed = false;
+    bool empty_selected = false;
+    bool empty_mixed = false;
     for (size_t i = empty_c0; i < commit_snaps.size(); i++) {
       bool tails_zero = true;
-      for (unsigned k = 0; k < 7; k++) tails_zero &= commit_snaps[i].tail[k] == 0;
+      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++)
+        tails_zero &= commit_snaps[i].tail[k] == 0;
       if ((commit_snaps[i].gm == WGM) &&
           (commit_snaps[i].parent == PEER_CID)) {
         if ((commit_snaps[i].count == 0) && tails_zero)
@@ -2796,7 +3077,7 @@ int main(int argc, char **argv) {
     expect("post-warm-reset raw-empty epoch never mixes tails", empty_mixed, 0);
     expect("post-warm-reset raw-empty GM", dut->pub_gm_id_o, WGM);
     expect("post-warm-reset raw-empty count", dut->pub_path_count_o, 0);
-    for (unsigned k = 0; k < 7; k++) {
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
       char n[80]; snprintf(n, sizeof n,
                            "post-warm-reset raw-empty tail %u zero", k + 1);
       expect(n, pub_path_tail(k), 0);
@@ -2826,13 +3107,13 @@ int main(int argc, char **argv) {
   // ingress-ts register hands the resp the FU's arrival time and skews
   // the delay by half the gap (the parent fabric bench's finding);
   // the per-bank stamp keeps each frame's own
-  {
+  void refuse_a_chasing_follow_up_the_resp_arrival() {
     pd_mode = PD_SKIP;
     tx_seen = txf.size();
     std::vector<uint8_t> rq = wait_tx(0x2, 4000000);
     expect("a request to chase", !rq.empty(), 1);
     uint16_t seq = rq.empty() ? 0
-                 : (uint16_t)((rq[44] << 8) | rq[45]);
+                 : static_cast<uint16_t>((rq[44] << 8) | rq[45]);
     size_t rqi = tx_seen - 1;
     for (int k = 0; k < 400 && txns[rqi] == 0; k++) tick();
     uint64_t t1 = txns[rqi];
@@ -2846,7 +3127,7 @@ int main(int argc, char **argv) {
     run(6000);
     model_exchange(t1, t2, t3, t4);
     expect("chased resp keeps its own stamp",
-           dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
+           dut->pub_pdelay_ns_o, static_cast<uint32_t>(pdm.d));
     pd_mode = PD_NORMAL;
   }
 
@@ -2855,13 +3136,13 @@ int main(int argc, char **argv) {
   // fragment with a wild rx_ts -- the parser drops the runt without an
   // event, so its eof would land before the resp's bank flip; the
   // length-qualified commit refuses it
-  {
+  void refuse_a_runt_chaser_the_predecessor_stamp() {
     pd_mode = PD_SKIP;
     tx_seen = txf.size();
     std::vector<uint8_t> rq = wait_tx(0x2, 4000000);
     expect("a request for the runt test", !rq.empty(), 1);
     uint16_t seq = rq.empty() ? 0
-                 : (uint16_t)((rq[44] << 8) | rq[45]);
+                 : static_cast<uint16_t>((rq[44] << 8) | rq[45]);
     size_t rqi = tx_seen - 1;
     for (int k = 0; k < 400 && txns[rqi] == 0; k++) tick();
     uint64_t t1 = txns[rqi];
@@ -2881,7 +3162,7 @@ int main(int argc, char **argv) {
     run(6000);
     model_exchange(t1, t2, t3, t4);
     expect("runt cannot poison the stamp",
-           dut->pub_pdelay_ns_o, (uint32_t)pdm.d);
+           dut->pub_pdelay_ns_o, static_cast<uint32_t>(pdm.d));
     pd_mode = PD_NORMAL;
   }
 
@@ -2891,7 +3172,7 @@ int main(int argc, char **argv) {
   // lost across reset must not leave S_TXQ_TMR suppressing every later Req
   // and Sync. The resettable validity beside the LUTRAM claim makes the old
   // word read as empty until a post-reset transmitter writes a new one.
-  {
+  void recover_the_request_cadence_across_reset() {
     pd_mode = PD_SKIP;
     while (auto_pend >= 0) tick();
     auto_txts = true;
@@ -2914,12 +3195,15 @@ int main(int argc, char **argv) {
     std::vector<uint8_t> post_reset_req = wait_tx(0x2, 4000000);
     expect("reset claim: cadence restarts", post_reset_req.empty() ? 0 : 1, 1);
     while (auto_pend >= 0) tick();
+  }
 
+  void recover_the_response_claim_across_reset() {
     // The responder claim/context is the other reset-surviving scratch word.
     // Lose one response's return across reset, then require a fresh request
     // to produce a complete response pair instead of waiting behind the
     // orphaned pre-reset owner.
-    const uint16_t RQ1 = 0x31A1, RQ2 = 0x31A2;
+    const uint16_t RQ1 = 0x31A1;
+    const uint16_t RQ2 = 0x31A2;
     auto_txts = false;
     Frame reset_q1 = ptp(0x2, RQ1, 0, 0x0000, 20, NEAR_CID);
     reset_q1.u64(0); reset_q1.u16(0); reset_q1.ts(0);
@@ -2931,7 +3215,7 @@ int main(int argc, char **argv) {
       tick();
       for (size_t i = reset_resp_mark; i < txf.size(); i++)
         if (type_of(txf[i]) == 0x3 && seq_of(txf[i]) == RQ1)
-          pre_reset_resp = (int)i;
+          pre_reset_resp = static_cast<int>(i);
     }
     expect("reset response claim: response sent",
            pre_reset_resp >= 0 ? 1 : 0, 1);
@@ -2948,14 +3232,15 @@ int main(int argc, char **argv) {
     reset_q2.b.resize(68);
     reset_resp_mark = txf.size();
     send_frame(reset_q2.b, phc() + 2000);
-    int post_reset_resp = -1, post_reset_fu = -1;
+    int post_reset_resp = -1;
+    int post_reset_fu = -1;
     for (int k = 0; k < 300000 && post_reset_fu < 0; k++) {
       tick();
       for (size_t i = reset_resp_mark; i < txf.size(); i++) {
         if (type_of(txf[i]) == 0x3 && seq_of(txf[i]) == RQ2)
-          post_reset_resp = (int)i;
+          post_reset_resp = static_cast<int>(i);
         if (type_of(txf[i]) == 0xA && seq_of(txf[i]) == RQ2)
-          post_reset_fu = (int)i;
+          post_reset_fu = static_cast<int>(i);
       }
     }
     expect("reset response claim: fresh response sent",
@@ -2963,7 +3248,9 @@ int main(int argc, char **argv) {
     expect("reset response claim: fresh Follow_Up sent",
            post_reset_fu >= 0 ? 1 : 0, 1);
     while (auto_pend >= 0) tick();
+  }
 
+  void recover_the_sync_cadence_across_reset() {
     // Exercise the other producer of S_TXQ_TMR independently. Re-earn
     // asCapable and mastership, then lose a Sync's boundary return across
     // reset. A later request proves that the shared cadence claim recovered.
@@ -3005,21 +3292,18 @@ int main(int argc, char **argv) {
   // only then may request 2 overwrite the scratch context. This also drives
   // tx_ready low at a frame's first byte, in its body, for one cycle and for
   // many cycles; only valid/ready handshakes enter the captured frame.
-  {
+  void hold_two_response_claims_under_backpressure() {
     pd_mode = PD_SKIP;
     while (auto_pend >= 0) tick();
     auto_txts = false;
     for (int k = 0; k < 20000 && (dut->dbg_busy_o || dut->tx_valid_o); k++)
       tick();
 
-    const uint16_t Q1 = 0x1111, Q2 = 0x2222;
-    const uint64_t C1 = PEER_CID, C2 = NEAR_CID;
-    const uint16_t P1 = 1, P2 = 2;
-    const uint64_t TS1 = 8100111ull, TS2 = 8200222ull;
     Frame q1 = ptp(0x2, Q1, 0, 0x0000, 20, C1);
     q1.u64(0); q1.u16(0); q1.ts(0); q1.b.resize(68);
     Frame q2 = ptp(0x2, Q2, 0, 0x0000, 20, C2);
-    q2.b[42] = (uint8_t)(P2 >> 8); q2.b[43] = (uint8_t)P2;
+    q2.b[42] = static_cast<uint8_t>(P2 >> 8);
+    q2.b[43] = static_cast<uint8_t>(P2);
     q2.u64(0); q2.u16(0); q2.ts(0); q2.b.resize(68);
 
     const size_t mark = txf.size();
@@ -3065,9 +3349,17 @@ int main(int argc, char **argv) {
     expect("backpressure: mid accepts none", cur.size(), mid_size);
     dut->tx_ready_i = 1;
 
+    verify_both_response_claims_complete(mark, evdrop0,
+                                        Q1_RX, Q2_RX);
+  }
+
+  void verify_both_response_claims_complete(
+      size_t mark, uint16_t evdrop0, uint64_t Q1_RX,
+      uint64_t Q2_RX) {
     auto find_frame = [&](uint8_t mt, uint16_t seq) -> int {
       for (size_t i = mark; i < txf.size(); i++)
-        if (type_of(txf[i]) == mt && seq_of(txf[i]) == seq) return (int)i;
+        if (type_of(txf[i]) == mt && seq_of(txf[i]) == seq)
+          return static_cast<int>(i);
       return -1;
     };
 
@@ -3089,7 +3381,7 @@ int main(int argc, char **argv) {
     expect("backpressure: response 2 waits", find_frame(0x3, Q2) < 0 ? 1 : 0,
            1);
 
-    if (resp1 >= 0) txts_idx((size_t)resp1, TS1);
+    if (resp1 >= 0) txts_idx(static_cast<size_t>(resp1), TS1);
     for (int k = 0; k < 20000 && !dut->tx_valid_o; k++) tick();
     expect("backpressure: post-stamp frame starts", dut->tx_valid_o, 1);
     if (dut->tx_valid_o) {
@@ -3104,7 +3396,8 @@ int main(int argc, char **argv) {
       dut->tx_ready_i = 1;
     }
 
-    int fu1 = -1, resp2 = -1;
+    int fu1 = -1;
+    int resp2 = -1;
     for (int k = 0; k < 300000 && (fu1 < 0 || resp2 < 0); k++) {
       tick();
       fu1 = find_frame(0xA, Q1);
@@ -3125,7 +3418,7 @@ int main(int argc, char **argv) {
              Q2_RX);
       expect("backpressure: response 2 requester", fld64(txf[resp2], 58), C2);
       expect("backpressure: response 2 port", fld16(txf[resp2], 66), P2);
-      txts_idx((size_t)resp2, TS2);
+      txts_idx(static_cast<size_t>(resp2), TS2);
     }
 
     int fu2 = -1;
@@ -3145,8 +3438,12 @@ int main(int argc, char **argv) {
     auto_txts = true;
     pd_mode = PD_NORMAL;
   }
+};
 
-  printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
-  delete dut;
-  return fails ? 1 : 0;
+}  // namespace
+
+int main(int argc, char **argv) {
+  Verilated::commandArgs(argc, argv);
+  GptpEngineHarness harness;
+  return harness.run_suite();
 }
