@@ -29,121 +29,256 @@
 #include <sstream>
 #include <verilated.h>
 #include "VKL_gptp_engine.h"
+#include "../common/verilator_harness.hpp"
 
 static const uint64_t OUR_CID = 0x02A1B2FFFEC3D4E5ull;
 static const uint64_t PD_NS = 700;
 
-static VKL_gptp_engine *dut;
-static std::vector<std::vector<uint8_t>> txf;
-static std::vector<uint64_t> txns;
-static std::vector<uint8_t> cur;
-static bool in_tx = false;
-static int auto_pend = -1;
-static size_t dumped = 0;
+namespace {
 
-static void tick() {
-  if (auto_pend >= 0 && !dut->txts_valid_i) {
-    // the engine claims egress stamps by {messageType, sequenceId}
-    // (issues #32/#37), so the return carries both, read from the
-    // transmitted frame itself: type at frame byte 14 low nibble,
-    // sequenceId big-endian at frame bytes 44..45
-    const std::vector<uint8_t> &f = txf[auto_pend];
-    uint64_t ns = 50000000ull + (uint64_t)auto_pend * 1000000ull;
-    dut->txts_valid_i = 1;
-    dut->txts_ns_i = ns;
-    dut->txts_seq_i =
-        f.size() > 45 ? (uint16_t)((f[44] << 8) | f[45]) : 0;
-    dut->txts_type_i = f.size() > 14 ? (f[14] & 0xF) : 0;
-    txns[auto_pend] = ns;
-    auto_pend = -1;
+//! The whole script-driven engine session: the Verilated model, the wire
+//! model that carries frames both ways, the automatic pdelay responder that
+//! keeps the peer alive, and one member per script command.
+//!
+//! Every piece of state a command leaves behind for a later command is a
+//! member here rather than a file-scope variable (C++ Core Guidelines I.2),
+//! so a reader can see the whole of what one command can disturb by reading
+//! one class rather than the whole translation unit.
+class TsnGenHarness {
+ public:
+  //! Reads the script and runs each command in file order. Returns the
+  //! process exit status: 0 clean, 1 a bring-up that never completed,
+  //! 2 a command the script language does not have.
+  int run_script(std::istream &script) {
+    bring_the_engine_out_of_reset();
+
+    std::string line;
+    while (std::getline(script, line)) {
+      std::istringstream ls(line);
+      std::string cmd;
+      ls >> cmd;
+      if (cmd.empty() || cmd[0] == '#') continue;
+
+      if (cmd == "BOOT") {
+        if (!boot_until_ascapable()) return 1;
+      } else if (cmd == "MASTER") {
+        if (!pump_until_the_announce_timeout_elects_us()) return 1;
+      } else if (cmd == "RX") {
+        inject_one_frame(ls);
+      } else if (cmd == "RUN") {
+        uint64_t n = 0; ls >> n;
+        pump(n);
+      } else if (cmd == "PUB") {
+        print_the_publish_bank();
+      } else if (cmd == "TXDUMP") {
+        dump_the_frames_transmitted_since_the_last_dump();
+      } else {
+        fprintf(stderr, "unknown command: %s\n", cmd.c_str());
+        return 2;
+      }
+    }
+    fflush(stdout);
+    return 0;
   }
-  dut->clk_i = 0; dut->eval();
-  dut->clk_i = 1; dut->eval();
-  if (dut->tx_valid_o) {
-    if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
-    if (in_tx) cur.push_back(dut->tx_data_o);
-    if (dut->tx_eof_o && in_tx) {
-      txf.push_back(cur);
-      txns.push_back(0);
-      auto_pend = (int)txf.size() - 1;
-      in_tx = false;
+
+ private:
+  const milan::tb::Model<VKL_gptp_engine> model;
+  VKL_gptp_engine *dut = model.get();   // the harness's own observing pointer
+
+  std::vector<std::vector<uint8_t>> txf;
+  std::vector<uint64_t> txns;
+  std::vector<uint8_t> cur;
+  bool in_tx = false;
+  int auto_pend = -1;
+  size_t dumped = 0;
+
+  void tick() {
+    if (auto_pend >= 0 && !dut->txts_valid_i) {
+      // the engine claims egress stamps by {messageType, sequenceId}
+      // (issues #32/#37), so the return carries both, read from the
+      // transmitted frame itself: type at frame byte 14 low nibble,
+      // sequenceId big-endian at frame bytes 44..45
+      const std::vector<uint8_t> &f = txf[auto_pend];
+      uint64_t ns = 50000000ull + static_cast<uint64_t>(auto_pend) * 1000000ull;
+      dut->txts_valid_i = 1;
+      dut->txts_ns_i = ns;
+      dut->txts_seq_i =
+          f.size() > 45 ? static_cast<uint16_t>((f[44] << 8) | f[45]) : 0;
+      dut->txts_type_i = f.size() > 14 ? (f[14] & 0xF) : 0;
+      txns[auto_pend] = ns;
+      auto_pend = -1;
+    }
+    dut->clk_i = 0; dut->eval();
+    dut->clk_i = 1; dut->eval();
+    if (dut->tx_valid_o) {
+      if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
+      if (in_tx) cur.push_back(dut->tx_data_o);
+      if (dut->tx_eof_o && in_tx) {
+        txf.push_back(cur);
+        txns.push_back(0);
+        auto_pend = static_cast<int>(txf.size()) - 1;
+        in_tx = false;
+      }
+    }
+    dut->txts_valid_i = 0;
+  }
+
+  void run(uint64_t n) { while (n--) tick(); }
+
+  void send_frame(const std::vector<uint8_t> &bytes, uint64_t rx_ts) {
+    dut->rx_ts_i = rx_ts;
+    for (size_t i = 0; i < bytes.size(); i++) {
+      dut->rx_valid_i = 1;
+      dut->rx_data_i = bytes[i];
+      dut->rx_sof_i = (i == 0);
+      dut->rx_eof_i = (i + 1 == bytes.size());
+      dut->rx_err_i = 0;
+      tick();
+    }
+    dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+  }
+
+  // minimal 802.1AS frame builder for the auto pdelay responder only —
+  // every frame under test comes from packet_gen, not from here
+  static std::vector<uint8_t> pd_answer(uint8_t mtype, uint16_t seq,
+                                        uint16_t flags, uint8_t logint,
+                                        uint64_t ts_ns, uint64_t rq_cid) {
+    std::vector<uint8_t> b;
+    auto u8 = [&](uint8_t v) { b.push_back(v); };
+    auto u16 = [&](uint16_t v) { u8(v >> 8); u8(v & 0xFF); };
+    auto u32 = [&](uint32_t v) { u16(v >> 16); u16(v & 0xFFFF); };
+    auto u64f = [&](uint64_t v) { u32(v >> 32); u32(v & 0xFFFFFFFF); };
+    u16(0x0180); u32(0xC200000E);
+    u16(0x0080); u32(0xE1112233);
+    u16(0x88F7);
+    u8(0x10 | mtype); u8(0x02);
+    u16(54);
+    u8(0); u8(0);
+    u16(flags);
+    u64f(0); u32(0);
+    u64f(0x0080E1FFFE112233ull); u16(1);
+    u16(seq);
+    u8(0x05); u8(logint);
+    u16((ts_ns / 1000000000ull) >> 32); u32((ts_ns / 1000000000ull));
+    u32(ts_ns % 1000000000ull);
+    u64f(rq_cid); u16(1);
+    return b;
+  }
+
+  bool auto_pd = false;
+  size_t pd_seen = 0;
+  void service_pdelay() {
+    if (!auto_pd) return;
+    while (pd_seen < txf.size()) {
+      size_t i = pd_seen;
+      if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) {
+        if (txns[i] == 0) return;
+        uint64_t t1 = txns[i];
+        uint16_t seq = static_cast<uint16_t>((txf[i][44] << 8) | txf[i][45]);
+        uint64_t t2 = t1 + 123456;
+        uint64_t t3 = t2 + 15000;
+        uint64_t t4 = t1 + 15000 + 2 * PD_NS;
+        send_frame(pd_answer(0x3, seq, 0x0200, 0x7F, t2, OUR_CID), t4);
+        run(2000);
+        send_frame(pd_answer(0xA, seq, 0x0000, 0x7F, t3, OUR_CID),
+                   t4 + 1000);
+        run(2000);
+      }
+      pd_seen++;
     }
   }
-  dut->txts_valid_i = 0;
-}
 
-static void run(uint64_t n) { while (n--) tick(); }
-
-static void send_frame(const std::vector<uint8_t> &bytes, uint64_t rx_ts) {
-  dut->rx_ts_i = rx_ts;
-  for (size_t i = 0; i < bytes.size(); i++) {
-    dut->rx_valid_i = 1;
-    dut->rx_data_i = bytes[i];
-    dut->rx_sof_i = (i == 0);
-    dut->rx_eof_i = (i + 1 == bytes.size());
-    dut->rx_err_i = 0;
-    tick();
-  }
-  dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
-}
-
-// minimal 802.1AS frame builder for the auto pdelay responder only —
-// every frame under test comes from packet_gen, not from here
-static std::vector<uint8_t> pd_answer(uint8_t mtype, uint16_t seq,
-                                      uint16_t flags, uint8_t logint,
-                                      uint64_t ts_ns, uint64_t rq_cid) {
-  std::vector<uint8_t> b;
-  auto u8 = [&](uint8_t v) { b.push_back(v); };
-  auto u16 = [&](uint16_t v) { u8(v >> 8); u8(v & 0xFF); };
-  auto u32 = [&](uint32_t v) { u16(v >> 16); u16(v & 0xFFFF); };
-  auto u64f = [&](uint64_t v) { u32(v >> 32); u32(v & 0xFFFFFFFF); };
-  u16(0x0180); u32(0xC200000E);
-  u16(0x0080); u32(0xE1112233);
-  u16(0x88F7);
-  u8(0x10 | mtype); u8(0x02);
-  u16(54);
-  u8(0); u8(0);
-  u16(flags);
-  u64f(0); u32(0);
-  u64f(0x0080E1FFFE112233ull); u16(1);
-  u16(seq);
-  u8(0x05); u8(logint);
-  u16((ts_ns / 1000000000ull) >> 32); u32((ts_ns / 1000000000ull));
-  u32(ts_ns % 1000000000ull);
-  u64f(rq_cid); u16(1);
-  return b;
-}
-
-static bool auto_pd = false;
-static size_t pd_seen = 0;
-static void service_pdelay() {
-  if (!auto_pd) return;
-  while (pd_seen < txf.size()) {
-    size_t i = pd_seen;
-    if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) {
-      if (txns[i] == 0) return;
-      uint64_t t1 = txns[i];
-      uint16_t seq = (uint16_t)((txf[i][44] << 8) | txf[i][45]);
-      uint64_t t2 = t1 + 123456, t3 = t2 + 15000;
-      uint64_t t4 = t1 + 15000 + 2 * PD_NS;
-      send_frame(pd_answer(0x3, seq, 0x0200, 0x7F, t2, OUR_CID), t4);
-      run(2000);
-      send_frame(pd_answer(0xA, seq, 0x0000, 0x7F, t3, OUR_CID),
-                 t4 + 1000);
-      run(2000);
+  void pump(uint64_t n) {
+    while (n) {
+      uint64_t burst = n < 64 ? n : 64;
+      run(burst);
+      n -= burst;
+      service_pdelay();
     }
-    pd_seen++;
   }
-}
 
-static void pump(uint64_t n) {
-  while (n) {
-    uint64_t burst = n < 64 ? n : 64;
-    run(burst);
-    n -= burst;
-    service_pdelay();
+  //! Every input driven to its idle level, then reset released.
+  void bring_the_engine_out_of_reset() {
+    dut->rst_n = 0;
+    dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+    dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
+    dut->tx_ready_i = 1;
+    dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
+    dut->txts_type_i = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->rst_n = 1;
   }
-}
+
+  //! BOOT: wait for the engine's own first Pdelay_Req, arm the automatic
+  //! responder, and pump until the exchange ladder raises asCapable.
+  bool boot_until_ascapable() {
+    uint64_t n = 0;
+    while (txf.empty() && n++ < 3200000ull) tick();
+    if (txf.empty()) { fprintf(stderr, "BOOT: no pdreq\n"); return false; }
+    auto_pd = true;
+    pump(64);
+    n = 0;
+    while (!(dut->pub_flags_o & 4) && n < 6000000ull) { pump(64); n += 64; }
+    if (!(dut->pub_flags_o & 4)) {
+      fprintf(stderr, "BOOT: no asCapable\n"); return false;
+    }
+    printf("OK BOOT\n");
+    return true;
+  }
+
+  //! MASTER: pump until the announce receipt timeout hands us mastership.
+  bool pump_until_the_announce_timeout_elects_us() {
+    uint64_t n = 0;
+    while (!(dut->pub_flags_o & 2) && n < 12000000ull) { pump(64); n += 64; }
+    if (!(dut->pub_flags_o & 2)) {
+      fprintf(stderr, "MASTER: timeout\n"); return false;
+    }
+    printf("OK MASTER\n");
+    return true;
+  }
+
+  //! RX: one hex-encoded frame, injected with the ingress timestamp the
+  //! script names, then pumped far enough for the engine to answer it.
+  void inject_one_frame(std::istringstream &ls) {
+    std::string hex; uint64_t ts = 0;
+    ls >> hex >> ts;
+    std::vector<uint8_t> b;
+    for (size_t i = 0; i + 1 < hex.size(); i += 2)
+      b.push_back(static_cast<uint8_t>(
+          strtoul(hex.substr(i, 2).c_str(), nullptr, 16)));
+    send_frame(b, ts);
+    pump(4000);
+  }
+
+  //! PUB: the publish bank and the two drop counters, in the one line
+  //! run_tsngen.py parses.
+  void print_the_publish_bank() {
+    printf("PUB gm=%016llx parent=%016llx flags=%08x pdelay=%u "
+           "offset=%d annq=%016llx rxdrop=%u evdrop=%u\n",
+           static_cast<unsigned long long>(dut->pub_gm_id_o),
+           static_cast<unsigned long long>(dut->pub_parent_id_o),
+           static_cast<unsigned>(dut->pub_flags_o),
+           static_cast<unsigned>(dut->pub_pdelay_ns_o),
+           static_cast<int32_t>(dut->pub_offset_o),
+           static_cast<unsigned long long>(dut->pub_annq_o),
+           static_cast<unsigned>(dut->dbg_rx_drop_o),
+           static_cast<unsigned>(dut->dbg_ev_drop_o));
+  }
+
+  //! TXDUMP: every frame transmitted since the last dump, with the egress
+  //! stamp the model returned for it.
+  void dump_the_frames_transmitted_since_the_last_dump() {
+    pump(256);                       // let egress stamps land
+    for (; dumped < txf.size(); dumped++) {
+      printf("TX ");
+      for (uint8_t v : txf[dumped]) printf("%02x", v);
+      printf(" ts=%llu\n", static_cast<unsigned long long>(txns[dumped]));
+    }
+    printf("ENDTX\n");
+  }
+};
+
+}  // namespace
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
@@ -151,77 +286,6 @@ int main(int argc, char **argv) {
   std::ifstream script(argv[1]);
   if (!script) { fprintf(stderr, "no script %s\n", argv[1]); return 2; }
 
-  dut = new VKL_gptp_engine;
-  dut->rst_n = 0;
-  dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
-  dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
-  dut->tx_ready_i = 1;
-  dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
-  dut->txts_type_i = 0;
-  for (int i = 0; i < 8; i++) tick();
-  dut->rst_n = 1;
-
-  std::string line;
-  while (std::getline(script, line)) {
-    std::istringstream ls(line);
-    std::string cmd;
-    ls >> cmd;
-    if (cmd.empty() || cmd[0] == '#') continue;
-
-    if (cmd == "BOOT") {
-      uint64_t n = 0;
-      while (txf.empty() && n++ < 3200000ull) tick();
-      if (txf.empty()) { fprintf(stderr, "BOOT: no pdreq\n"); return 1; }
-      auto_pd = true;
-      pump(64);
-      n = 0;
-      while (!(dut->pub_flags_o & 4) && n < 6000000ull) { pump(64); n += 64; }
-      if (!(dut->pub_flags_o & 4)) {
-        fprintf(stderr, "BOOT: no asCapable\n"); return 1;
-      }
-      printf("OK BOOT\n");
-    } else if (cmd == "MASTER") {
-      uint64_t n = 0;
-      while (!(dut->pub_flags_o & 2) && n < 12000000ull) { pump(64); n += 64; }
-      if (!(dut->pub_flags_o & 2)) {
-        fprintf(stderr, "MASTER: timeout\n"); return 1;
-      }
-      printf("OK MASTER\n");
-    } else if (cmd == "RX") {
-      std::string hex; uint64_t ts = 0;
-      ls >> hex >> ts;
-      std::vector<uint8_t> b;
-      for (size_t i = 0; i + 1 < hex.size(); i += 2)
-        b.push_back((uint8_t)strtoul(hex.substr(i, 2).c_str(), nullptr, 16));
-      send_frame(b, ts);
-      pump(4000);
-    } else if (cmd == "RUN") {
-      uint64_t n = 0; ls >> n;
-      pump(n);
-    } else if (cmd == "PUB") {
-      printf("PUB gm=%016llx parent=%016llx flags=%08x pdelay=%u "
-             "offset=%d annq=%016llx rxdrop=%u evdrop=%u\n",
-             (unsigned long long)dut->pub_gm_id_o,
-             (unsigned long long)dut->pub_parent_id_o,
-             (unsigned)dut->pub_flags_o,
-             (unsigned)dut->pub_pdelay_ns_o,
-             (int32_t)dut->pub_offset_o,
-             (unsigned long long)dut->pub_annq_o,
-             (unsigned)dut->dbg_rx_drop_o, (unsigned)dut->dbg_ev_drop_o);
-    } else if (cmd == "TXDUMP") {
-      pump(256);                       // let egress stamps land
-      for (; dumped < txf.size(); dumped++) {
-        printf("TX ");
-        for (uint8_t v : txf[dumped]) printf("%02x", v);
-        printf(" ts=%llu\n", (unsigned long long)txns[dumped]);
-      }
-      printf("ENDTX\n");
-    } else {
-      fprintf(stderr, "unknown command: %s\n", cmd.c_str());
-      return 2;
-    }
-  }
-  fflush(stdout);
-  delete dut;
-  return 0;
+  TsnGenHarness harness;
+  return harness.run_script(script);
 }

@@ -16,6 +16,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zlib
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -109,8 +110,14 @@ def run(command: list[str]) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
 
 
-def validate_evidence(read_text=None) -> list[str]:
-    """Verify every documented structure against current HDL."""
+def validate_evidence(
+        read_text: Callable[[str], str] | None = None) -> list[str]:
+    """One complaint per token EVIDENCE claims is in an HDL file and is not.
+
+    `read_text` supplies the source of each repository-relative path, so the
+    selftest can hand in a mutated tree; the default reads the tree itself.
+    An empty list is the claim that every documented structure still exists.
+    """
     reader = read_text or (lambda path: (ROOT / path).read_text(encoding="utf-8"))
     problems: list[str] = []
     for relative, tokens in EVIDENCE.items():

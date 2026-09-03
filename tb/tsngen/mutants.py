@@ -77,8 +77,16 @@ VFLAGS = [
 ]
 
 
-def stage(work, tag, mutate=None):
-    """A self-contained copy of the suite, with at most one source mutated."""
+def stage(work: Path, tag: str,
+          mutate: tuple[str, str, str] | None = None) -> Path:
+    """A self-contained copy of the suite, with at most one source mutated.
+
+    `mutate` is the (source, pattern, replacement) triple of MUTATIONS; the
+    replacement is applied to that one source as it is copied, so the staged
+    tree differs from the tree under test in exactly one place. The returned
+    directory holds the harness, its microcode image and the RTL, and nothing
+    outside it is written.
+    """
     suite = work / f"suite_{tag}"
     (suite / "rtl").mkdir(parents=True)
     for rel in SOURCES:
@@ -90,10 +98,21 @@ def stage(work, tag, mutate=None):
         dst.write_text(text)
     for name in ("run_tsngen.py", "tsngen_main.cpp", "gptp_ucode.hex"):
         shutil.copy2(HERE / name, suite / name)
+    # `tsngen_main.cpp` includes the shared model owner as
+    # `../common/verilator_harness.hpp` (Core Guidelines R.11, and the copy
+    # `check_cpp_idiom.py` refuses to let drift). That header lives one
+    # directory up from the suite, so the staged tree needs it at the same
+    # relative place. Without it every build below fails to compile, and a
+    # build that fails is reported as a mutant that proves nothing -- four
+    # red checks on a host whose only real answer is the skip below.
+    common = suite.parent / "common"
+    common.mkdir(exist_ok=True)
+    shutil.copy2(HERE.parent / "common" / "verilator_harness.hpp",
+                 common / "verilator_harness.hpp")
     return suite
 
 
-def build(suite):
+def build(suite: Path) -> bool:
     """Build the staged suite into its own obj_dir; True when it produced one."""
     out = subprocess.run(
         ["verilator", *VFLAGS, "--Mdir", str(suite / "obj_dir"),
@@ -104,7 +123,7 @@ def build(suite):
     return (suite / "obj_dir" / "Vtsngen").is_file() and out.returncode == 0
 
 
-def run_harness(suite):
+def run_harness(suite: Path) -> tuple[int, str]:
     """(rc, stdout) of the staged run_tsngen.py.
 
     No host deadline: tsngen_main.cpp puts an explicit tick ceiling on every
@@ -117,7 +136,14 @@ def run_harness(suite):
 
 
 
-def main():
+def main() -> int:
+    """Run the control and every mutant, and report the arm's exit status.
+
+    0 when the unmutated engine passes and every mutant is caught, or when
+    the suite skips because there is no tsn-gen checkout to judge against;
+    1 when any mutant survived, failed to build, or no longer matches its
+    pattern - each of which is printed with the assertion it was defending.
+    """
     passes = fails = 0
     with tempfile.TemporaryDirectory(prefix="tsngen-mutants-") as td:
         work = Path(td)
