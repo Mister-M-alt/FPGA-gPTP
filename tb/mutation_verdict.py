@@ -35,19 +35,25 @@ def reports_failure(out: str) -> tuple[str, bool]:
     return "the harness printed no tally and no FAIL line", False
 
 
-def verdict(rc: object, out: str, timeout_s: int) -> str:
-    """'pass', 'caught', 'skipped', or why this run is not evidence."""
+def verdict(rc: int, out: str) -> str:
+    """'pass', 'caught', 'skipped', or why this run is not evidence.
+
+    There is deliberately no host deadline here. Both harnesses bound their
+    own waits in DUT CYCLES - the gasket harness so that a wedged gasket
+    fails the suite instead of hanging it, and tsngen with an explicit tick
+    ceiling on every wait - so a mutant that livelocks the design still
+    returns, and returns a verdict. A wall-clock deadline would only add a
+    second, machine-dependent answer to a question the DUT already answers.
+    """
     if "SKIP:" in out:
         return "skipped"
     reason, failed = reports_failure(out)
-    if rc == "TIMEOUT":
-        return f"TIMEOUT after {timeout_s}s - a hang is not a catch"
     if rc == 0 and not failed:
         return "pass"
     if rc == 0 and failed:
         return f"exited 0 but {reason} - a masked verdict is not evidence"
     if failed:
         return "caught"
-    if isinstance(rc, int) and rc < 0:
+    if rc < 0:
         return f"died by signal {-rc} with no harness verdict - a crash is not a catch"
     return f"exited {rc} with no harness verdict - an abort is not a catch"
