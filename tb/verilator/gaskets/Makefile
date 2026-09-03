@@ -7,7 +7,7 @@ VFLAGS = --cc --exe --build -j 0 \
          --top-module $(TOP) \
          -Wall -Wno-fatal -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL \
          -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDPARAM \
-         -CFLAGS "-std=c++17 -O2 -I$(CURDIR)"
+         -CFLAGS "-std=c++17 -O2 -Wall -Wextra -I$(CURDIR)"
 SRCS = $(BENCH_DIR)/bench_afifo.sv $(BENCH_DIR)/bench_mii_tx.sv \
        $(BENCH_DIR)/bench_mii_rx.sv gasket_tb_top.sv
 CPP  = sim_main.cpp

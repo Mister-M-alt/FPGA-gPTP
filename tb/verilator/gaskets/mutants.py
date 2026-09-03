@@ -76,7 +76,7 @@ VFLAGS = [
 ]
 
 
-def build(srcdir, workdir, tag):
+def build(srcdir: Path, workdir: Path, tag: str) -> Path | None:
     """Build the harness against the sources in `srcdir`; the exe, or None."""
     mdir = workdir / f"obj_{tag}"
     exe_name = f"Vgasket_{tag}"
@@ -92,7 +92,7 @@ def build(srcdir, workdir, tag):
     return exe
 
 
-def run_harness(exe):
+def run_harness(exe: Path) -> tuple[int, str]:
     """(rc, stdout) of one harness run.
 
     No host deadline: sim_main.cpp bounds its own waits in DUT cycles, so a
@@ -104,8 +104,15 @@ def run_harness(exe):
 
 
 
-def stage(work, tag, mutate=None):
-    """A directory holding the four sources, with at most one mutated."""
+def stage(work: Path, tag: str,
+          mutate: tuple[str, str, str] | None = None) -> Path:
+    """A directory holding the four sources, with at most one mutated.
+
+    `mutate` is the (source, pattern, replacement) triple of MUTATIONS; the
+    replacement is applied to that one source as it is copied, so the staged
+    tree differs from bench/arty in exactly one place. Nothing outside the
+    returned directory is written.
+    """
     srcdir = work / f"src_{tag}"
     srcdir.mkdir()
     for name in SOURCES:
@@ -117,7 +124,13 @@ def stage(work, tag, mutate=None):
     return srcdir
 
 
-def main():
+def main() -> int:
+    """Run the control and every mutant, and report the arm's exit status.
+
+    0 when the unmutated bench RTL passes and all four mutants are caught;
+    1 when any mutant survived, failed to build, or no longer matches its
+    pattern - each of which is printed with the assertion it was defending.
+    """
     passes = fails = 0
     with tempfile.TemporaryDirectory(prefix="gasket-mutants-") as td:
         work = Path(td)
