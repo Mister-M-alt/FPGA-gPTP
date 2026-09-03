@@ -153,6 +153,14 @@ def prose_units(text: str) -> list[tuple[int, str]]:
     paragraph_line = 1
 
     def flush() -> None:
+        """End the paragraph being accumulated, emitting its sentences.
+
+        Everything gathered since the last flush is joined into one line and
+        split on sentence boundaries, and each sentence is emitted against the
+        line the paragraph STARTED on - a sentence that runs across a wrapped
+        paragraph is reported where a reader will find it. Nothing is emitted
+        when no paragraph is open, so a blank line costs nothing.
+        """
         nonlocal paragraph
         if paragraph:
             combined = " ".join(part.strip() for part in paragraph)

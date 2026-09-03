@@ -20,25 +20,40 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = Path(__file__).resolve().parent
 OUR_MAC = 0x02A1B2C3D4E5
 OUR_CID = 0x02A1B2FFFEC3D4E5
 OUR_CQ = 0xF8FE436A
 PD_NS = 700
 
+
 # ---------------------------------------------------------------------------
 # tsn-gen location — the milan-fpga convention (TSAGEN_DIR), skip clean
 # ---------------------------------------------------------------------------
-TSAGEN = os.environ.get("TSAGEN_DIR", "")
-if not TSAGEN:
+def _tsagen_root() -> Path | None:
+    """The tsn-gen checkout to cross-check against, or None when there is none.
+
+    TSAGEN_DIR is taken as given even when it names nothing, so a typo skips
+    with the reason rather than silently cross-checking against whichever
+    default checkout happens to exist.
+    """
+    named = os.environ.get("TSAGEN_DIR", "")
+    if named:
+        return Path(named)
     for cand in ("~/prjs/tsn-gen", "~/tsn-gen"):
-        if os.path.isdir(os.path.expanduser(cand)):
-            TSAGEN = os.path.expanduser(cand)
-            break
-PG = os.path.join(TSAGEN, "build/traffic-gen/packet_gen") if TSAGEN else ""
-YD = os.path.join(TSAGEN, "protocols/data_link/ptp") if TSAGEN else ""
-if not (PG and os.path.isfile(PG) and os.path.isdir(YD)):
+        root = Path(cand).expanduser()
+        if root.is_dir():
+            return root
+    return None
+
+
+TSAGEN = _tsagen_root()
+PG = TSAGEN / "build/traffic-gen/packet_gen" if TSAGEN else None
+YD = TSAGEN / "protocols/data_link/ptp" if TSAGEN else None
+if not (PG and PG.is_file() and YD and YD.is_dir()):
     print("SKIP: tsn-gen checkout/binary not found (set TSAGEN_DIR)")
     sys.exit(0)
 
@@ -81,32 +96,69 @@ SPEC = {
                   flags=0x0000, control=0x05, log_message_interval=0x7F),
 }
 
-checks = fails = 0
+
+class Tally:
+    """The run's verdict so far, owned by an object rather than the module.
+
+    Every arm below reports through one instance, so the counts cannot be
+    reached from anywhere that did not ask for them, and a second scenario in
+    the same process would start its own rather than inherit this one's.
+    """
+
+    def __init__(self) -> None:
+        self.checks = 0
+        self.fails = 0
+
+    def expect(self, what: str, got: object, exp: object) -> None:
+        """Record one comparison, and print it only when the two disagree.
+
+        The check count grows on every call and the failure count only on a
+        mismatch, so the transcript is exactly the list of disagreements and
+        the tally at the end says how much agreement they are set against.
+        """
+        self.checks += 1
+        if got != exp:
+            self.fails += 1
+            print(f"FAIL {what}: got {got!r} exp {exp!r}")
 
 
-def expect(what, got, exp):
-    global checks, fails
-    checks += 1
-    if got != exp:
-        fails += 1
-        print(f"FAIL {what}: got {got!r} exp {exp!r}")
+tally = Tally()
 
 
-def pg(*args):
-    r = subprocess.run([PG, "--yaml-dir", YD, *args],
+def pg(*args: str) -> str:
+    """packet_gen's stdout for one invocation, against the 802.1AS YAMLs.
+
+    A non-zero exit raises: the cross-check's independence rests on this
+    decoder, so a run where it refused has measured nothing and must stop
+    rather than record the frames it did manage.
+    """
+    # `str(...)` because these two cross into an argv, where a Path would be
+    # stringified anyway and by a rule this file does not own.
+    r = subprocess.run([str(PG), "--yaml-dir", str(YD), *args],
                        capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"packet_gen {args}: {r.stderr[:400]}")
     return r.stdout.strip()
 
 
-def pg_gen(key, seed):
+def pg_gen(key: str, seed: int) -> tuple[str, dict[str, int]]:
+    """The (wire hex, decoded fields) of the frame packet_gen builds for `seed`.
+
+    Seeded and reproducible: the same interface and seed give the same bytes
+    on every host, so a failure below names a frame anyone can rebuild.
+    """
     out = pg("--interface", IFACE[key], "--seed", str(seed))
     d = json.loads(out.splitlines()[0])
     return d["hex"], d["fields"]
 
 
-def pg_decode(key, hexstr):
+def pg_decode(key: str, hexstr: str) -> dict[str, int]:
+    """The fields packet_gen reads out of `hexstr`, decoded as interface `key`.
+
+    This is the whole point of the suite: nothing here parses a PDU itself,
+    so the layout every check below is stated in is an independent
+    implementation's and not this repository's C++ mirror.
+    """
     out = pg("--interface", IFACE[key], "--hex", hexstr)
     return json.loads(out.splitlines()[0])["fields"]
 
@@ -114,12 +166,16 @@ def pg_decode(key, hexstr):
 # ---------------------------------------------------------------------------
 # 1: the YAML pins and the clause table must agree exactly
 # ---------------------------------------------------------------------------
-def yaml_pins():
-    pins = {}
-    for fn in os.listdir(YD):
-        if not fn.endswith(".yaml"):
-            continue
-        doc = yaml.safe_load(open(os.path.join(YD, fn)))
+def yaml_pins() -> dict[str, dict[str, int]]:
+    """Every field value the 802.1AS YAMLs pin, as {service: {field: value}}.
+
+    These are tsn-gen's own `expected: value` entries. SPEC below states the
+    same values from the clauses, and the two are compared field by field, so
+    neither copy can drift without the run saying which one moved.
+    """
+    pins: dict[str, dict[str, int]] = {}
+    for doc_path in YD.glob("*.yaml"):
+        doc = yaml.safe_load(doc_path.read_text())
         for v in doc.get("vars", []):
             exp = v.get("expected") or {}
             if "value" in exp:
@@ -138,19 +194,29 @@ for key, svc in (("sync", "as_sync"), ("fu", "as_follow_up"),
     # intersection, and a floor on the pin count catches a YAML whose
     # expectations vanish entirely
     shared = [f for f in SPEC[key] if f in got]
-    expect(f"yaml pin coverage {svc}", len(shared) >= 5, True)
+    tally.expect(f"yaml pin coverage {svc}", len(shared) >= 5, True)
     for f in shared:
-        expect(f"yaml pin {svc}.{f}", got[f], SPEC[key][f])
+        tally.expect(f"yaml pin {svc}.{f}", got[f], SPEC[key][f])
 
 # ---------------------------------------------------------------------------
 # build the scripted scenario: every input frame is packet_gen output
 # ---------------------------------------------------------------------------
-def eth(seed):
-    h, f = pg_gen("eth", seed)
-    return h, f
+def eth(seed: int) -> tuple[str, dict[str, int]]:
+    """A generated Ethernet header, as (wire hex, decoded fields).
+
+    Every frame handed to the engine gets one of these rather than a constant
+    written here, so the header on the wire is the generator's too.
+    """
+    return pg_gen("eth", seed)
 
 
-def patch(hexstr, byte_off, newbyte):
+def patch(hexstr: str, byte_off: int, newbyte: int) -> str:
+    """`hexstr` with the byte at `byte_off` replaced and every other kept.
+
+    How a generated frame is steered into a specific arm - a stepsRemoved
+    small enough to qualify, a priority1 that has to win - while the rest of
+    the frame stays whatever the generator chose.
+    """
     return hexstr[:2 * byte_off] + f"{newbyte:02x}" + hexstr[2 * byte_off + 2:]
 
 
@@ -179,7 +245,7 @@ class BmcaModel:
     grandmaster, and our own vector when there is no incumbent or when the
     incumbent itself is re-announcing."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.master = True
         self.gm = OUR_CID
         self.parent = OUR_CID
@@ -187,7 +253,16 @@ class BmcaModel:
         self.ppv = None
         self.annq = 0
 
-    def feed(self, af, path):
+    def feed(self, af: dict[str, int],
+             path: list[int]) -> dict[str, int]:
+        """The publication this Announce should produce, having applied it.
+
+        `af` is the decoded Announce and `path` its pathSequence. An announce
+        that fails 10.3.10.2.1 qualification changes nothing and the previous
+        publication is returned unchanged; a qualified one moves the raw
+        announce word before the compare, so annq marches even through a
+        refusal to adopt, exactly as the handler's first write does.
+        """
         vec = ((af["gm_priority1"] << 56) | (af["gm_clock_quality"] << 24)
                | (af["gm_priority2"] << 16))
         qualified = (af["source_clock_identity"] != OUR_CID
@@ -216,17 +291,17 @@ class BmcaModel:
         return {"gm": self.gm, "parent": self.parent, "annq": self.annq,
                 "flags_lo": 0x7 if self.master else 0x5}
 
-    def _adopt(self, af, vec):
+    def _adopt(self, af: dict[str, int], vec: int) -> None:
         self.master = False
         self.gm = af["gm_identity"]
         self._refresh(af, vec)
 
-    def _refresh(self, af, vec):
+    def _refresh(self, af: dict[str, int], vec: int) -> None:
         self.parent = af["source_clock_identity"]
         self.parent_port = af["source_port_number"]
         self.ppv = vec
 
-    def _become(self):
+    def _become(self) -> None:
         self.master = True
         self.gm = OUR_CID
         self.parent = OUR_CID
@@ -251,9 +326,9 @@ for i, (seed, kind) in enumerate(ANN_SEEDS):
     if kind == "ann_pt1":
         ahex = ahex[:2 * 68] + ahex[2 * 53:2 * 61] + ahex[2 * 76:]
     af = pg_decode(kind, ahex)
-    expect(f"ann[{i}] steps pinned", af["steps_removed"], steps)
+    tally.expect(f"ann[{i}] steps pinned", af["steps_removed"], steps)
     if kind == "ann_pt1":
-        expect(f"ann[{i}] path head is gm", af["path0"], af["gm_identity"])
+        tally.expect(f"ann[{i}] path head is gm", af["path0"], af["gm_identity"])
     script.append(f"RX {ehex}{ahex} {rxts}")
     script.append("PUB")
     rxts += 1_000_000
@@ -268,13 +343,13 @@ sahex = patch(sahex, 47, 0)                    # gm_priority1 at PDU byte 47
 sahex = patch(patch(sahex, 61, 0), 62, 0)      # steps_removed = hops - 1
 sahex = sahex[:2 * 68] + sahex[2 * 53:2 * 61] + sahex[2 * 76:]
 saf = pg_decode("ann_pt1", sahex)
-expect("patched p1", saf["gm_priority1"], 0)
-expect("patched steps", saf["steps_removed"], 0)
-expect("patched path head", saf["path0"], saf["gm_identity"])
+tally.expect("patched p1", saf["gm_priority1"], 0)
+tally.expect("patched steps", saf["steps_removed"], 0)
+tally.expect("patched path head", saf["path0"], saf["gm_identity"])
 script.append(f"RX {sehex}{sahex} {rxts}")
 script.append("PUB")
 expected_pubs.append(bmca.feed(saf, [saf["path0"]]))
-expect("forced slave in model", expected_pubs[-1]["flags_lo"], 0x5)
+tally.expect("forced slave in model", expected_pubs[-1]["flags_lo"], 0x5)
 rxts += 1_000_000
 
 # offset arithmetic: generated Sync + Follow_Up pairs against the model
@@ -295,8 +370,8 @@ for seed in FU_SEEDS:
     syhex = patch(patch(syhex, 6, 0x02), 7, 0x08)
     syhex = syhex[:2 * 20] + src_hex + syhex[2 * 30:]
     syf = pg_decode("sync", syhex)
-    expect(f"sync twoStep pinned [{seed}]", syf["flags"], 0x0208)
-    expect(f"sync from parent [{seed}]",
+    tally.expect(f"sync twoStep pinned [{seed}]", syf["flags"], 0x0208)
+    tally.expect(f"sync from parent [{seed}]",
            syf["source_clock_identity"], bmca.parent)
     fuehex, _ = eth(seed + 50)
     fuhex, _ = pg_gen("fu", seed + 50)
@@ -306,7 +381,7 @@ for seed in FU_SEEDS:
     seq = syf["sequence_id"]
     fuhex = patch(patch(fuhex, 30, seq >> 8), 31, seq & 0xFF)
     fuf = pg_decode("fu", fuhex)
-    expect(f"fu seq paired [{seed}]", fuf["sequence_id"], seq)
+    tally.expect(f"fu seq paired [{seed}]", fuf["sequence_id"], seq)
     trx = rxts
     script.append(f"RX {syehex}{syhex} {trx}")
     script.append(f"RX {fuehex}{fuhex} {trx + 500}")
@@ -324,9 +399,11 @@ for seed in FU_SEEDS:
 # ---------------------------------------------------------------------------
 # run the DUT
 # ---------------------------------------------------------------------------
-scr_path = os.path.join(HERE, "obj_dir", "scenario.txt")
-open(scr_path, "w").write("\n".join(script) + "\n")
-r = subprocess.run([os.path.join(HERE, "obj_dir", "Vtsngen"), scr_path],
+scr_path = HERE / "obj_dir" / "scenario.txt"
+scr_path.write_text("\n".join(script) + "\n")
+# `str(...)` because both cross into an argv, where a Path would be
+# stringified anyway and by a rule this file does not own.
+r = subprocess.run([str(HERE / "obj_dir" / "Vtsngen"), str(scr_path)],
                    capture_output=True, text=True)
 if r.returncode != 0:
     print(f"FAIL harness rc={r.returncode}\n{r.stderr[:800]}")
@@ -334,7 +411,14 @@ if r.returncode != 0:
 lines = r.stdout.splitlines()
 
 
-def take_txdump(it):
+def take_txdump(it: Iterator[str]) -> list[tuple[str, int]]:
+    """The (frame hex, timestamp) pairs of one TXDUMP block, up to its ENDTX.
+
+    The iterator is consumed through the terminator, so the dumps of one run
+    are read in order from a single stream. A stream that ends first raises
+    rather than returning what it had: a truncated dump is indistinguishable
+    from a port that transmitted nothing, and the two mean opposite things.
+    """
     frames = []
     for ln in it:
         if ln == "ENDTX":
@@ -346,15 +430,20 @@ def take_txdump(it):
 
 
 it = iter(lines)
-expect("BOOT ok", next(it), "OK BOOT")
+tally.expect("BOOT ok", next(it), "OK BOOT")
 dump1 = take_txdump(it)
 dump2 = take_txdump(it)
-expect("MASTER ok", next(it), "OK MASTER")
+tally.expect("MASTER ok", next(it), "OK MASTER")
 dump3 = take_txdump(it)
 pubs = [ln for ln in it if ln.startswith("PUB ")]
 
 
-def pub_fields(ln):
+def pub_fields(ln: str) -> dict[str, int]:
+    """One PUB line's key=value tokens, with the identity fields read as hex.
+
+    gm, parent, annq and flags are published in hexadecimal and everything
+    else in decimal, so each value reads the way the engine's register does.
+    """
     d = {}
     for tok in ln.split()[1:]:
         k, v = tok.split("=")
@@ -363,29 +452,36 @@ def pub_fields(ln):
     return d
 
 
-def frames_of(dump, mtype):
+def frames_of(dump: list[tuple[str, int]],
+              mtype: int) -> list[tuple[str, int]]:
+    """The frames of one messageType in a TXDUMP, in transmission order.
+
+    Frame byte 14 is the PTP common header's first octet and its low nibble
+    is the messageType, which is hex character 29 of the dumped frame.
+    """
     return [(h, ts) for h, ts in dump if len(h) > 30
             and int(h[29], 16) == mtype]
 
 
-def check_tx(tag, hexfrm, key, extra):
+def check_tx(tag: str, hexfrm: str, key: str,
+             extra: dict[str, int]) -> dict[str, int]:
     """Decode one of OUR frames with packet_gen and enforce the YAML
     pins plus the scenario-derived fields."""
     ef = pg_decode("eth", hexfrm[:28])
-    expect(f"{tag} eth dst", ef["dst_mac"], 0x0180C200000E)
-    expect(f"{tag} eth type", ef["ethertype"], 0x88F7)
-    expect(f"{tag} eth src", ef["src_mac"], OUR_MAC)
+    tally.expect(f"{tag} eth dst", ef["dst_mac"], 0x0180C200000E)
+    tally.expect(f"{tag} eth type", ef["ethertype"], 0x88F7)
+    tally.expect(f"{tag} eth src", ef["src_mac"], OUR_MAC)
     f = pg_decode(key, hexfrm[28:])
     for name, v in SPEC[key].items():
-        expect(f"{tag} {name}", f[name], v)
+        tally.expect(f"{tag} {name}", f[name], v)
     for name, v in extra.items():
-        expect(f"{tag} {name}", f[name], v)
+        tally.expect(f"{tag} {name}", f[name], v)
     return f
 
 
 # --- our Pdelay_Req ---
 reqs = frames_of(dump1, 0x2)
-expect("boot sent pdreq", len(reqs) >= 1, True)
+tally.expect("boot sent pdreq", len(reqs) >= 1, True)
 if reqs:
     check_tx("pdreq", reqs[0][0], "pdreq",
              {"source_clock_identity": OUR_CID, "source_port_number": 1})
@@ -393,8 +489,8 @@ if reqs:
 # --- our Pdelay_Resp + Resp_FU for the generated request ---
 resps = frames_of(dump2, 0x3)
 rfus = frames_of(dump2, 0xA)
-expect("resp sent", len(resps), 1)
-expect("rfu sent", len(rfus), 1)
+tally.expect("resp sent", len(resps), 1)
+tally.expect("rfu sent", len(rfus), 1)
 if resps:
     check_tx("pdresp", resps[0][0], "pdresp", {
         "sequence_id": req_f["sequence_id"],
@@ -417,9 +513,9 @@ if rfus:
 anns = frames_of(dump3, 0xB)
 syncs = frames_of(dump3, 0x0)
 fus = frames_of(dump3, 0x8)
-expect("announce sent", len(anns) >= 1, True)
-expect("sync sent", len(syncs) >= 1, True)
-expect("fu sent", len(fus) >= 1, True)
+tally.expect("announce sent", len(anns) >= 1, True)
+tally.expect("sync sent", len(syncs) >= 1, True)
+tally.expect("fu sent", len(fus) >= 1, True)
 if anns:
     check_tx("ann", anns[0][0], "ann_pt1", {
         "source_clock_identity": OUR_CID, "current_utc_offset": 37,
@@ -431,7 +527,7 @@ if syncs and fus:
                   {"source_clock_identity": OUR_CID})
     fmatch = [(h, ts) for h, ts in fus
               if pg_decode("fu", h[28:])["sequence_id"] == sf["sequence_id"]]
-    expect("fu pairs its sync", len(fmatch) >= 1, True)
+    tally.expect("fu pairs its sync", len(fmatch) >= 1, True)
     if fmatch:
         check_tx("fu", fmatch[0][0], "fu", {
             "source_clock_identity": OUR_CID,
@@ -441,16 +537,16 @@ if syncs and fus:
 
 # --- BTCA sweep + forced adopt ---
 n_btca = len(expected_pubs)
-expect("pub count", len(pubs), n_btca + len(FU_SEEDS))
+tally.expect("pub count", len(pubs), n_btca + len(FU_SEEDS))
 for i, exp_pub in enumerate(expected_pubs):
     if i >= len(pubs):
         break
     got = pub_fields(pubs[i])
     tag = f"btca[{i}]"
-    expect(f"{tag} gm", got["gm"], exp_pub["gm"])
-    expect(f"{tag} parent", got["parent"], exp_pub["parent"])
-    expect(f"{tag} annq", got["annq"], exp_pub["annq"])
-    expect(f"{tag} flags", got["flags"] & 0x7, exp_pub["flags_lo"])
+    tally.expect(f"{tag} gm", got["gm"], exp_pub["gm"])
+    tally.expect(f"{tag} parent", got["parent"], exp_pub["parent"])
+    tally.expect(f"{tag} annq", got["annq"], exp_pub["annq"])
+    tally.expect(f"{tag} flags", got["flags"] & 0x7, exp_pub["flags_lo"])
 
 # --- offset arithmetic from generated Sync+FU ---
 for i, off in enumerate(expected_offsets):
@@ -458,8 +554,9 @@ for i, off in enumerate(expected_offsets):
     if idx >= len(pubs):
         break
     got = pub_fields(pubs[idx])
-    expect(f"offset[{i}]", got["offset"], off)
-    expect(f"offset[{i}] syncOk", got["flags"] & 0x8, 0x8)
+    tally.expect(f"offset[{i}]", got["offset"], off)
+    tally.expect(f"offset[{i}] syncOk", got["flags"] & 0x8, 0x8)
 
-print(f"{checks} checks: {checks - fails} PASS, {fails} FAIL")
-sys.exit(1 if fails else 0)
+print(f"{tally.checks} checks: {tally.checks - tally.fails} PASS,"
+      f" {tally.fails} FAIL")
+sys.exit(1 if tally.fails else 0)

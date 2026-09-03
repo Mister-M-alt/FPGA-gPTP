@@ -36,6 +36,8 @@ REQUIRED = {
 
 
 def main() -> int:
+    """The gate: 0 when no removed token has come back and every surviving
+    path is still wired, 1 with the file and the token named."""
     failures = []
     for relpath, needles in FORBIDDEN.items():
         text = (ROOT / relpath).read_text(encoding="utf-8")

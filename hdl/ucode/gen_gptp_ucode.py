@@ -215,6 +215,7 @@ and sourcePortIdentity matching on Sync.
 """
 
 import argparse
+from dataclasses import dataclass
 
 DEPTH = 1024
 WMASK = (1 << 48) - 1
@@ -354,16 +355,28 @@ GAIN_S_C = 6                    # ns -> addend units: (off * GAIN_M) >> 6
 GAIN_M_C = 86                   # for the 100 MHz default; see set_servo_gains
 ILIM_C = 33554                  # integrator clamp = +-200 ppm at that clock
 
+# ---- what this run actually uses -------------------------------------------
+# Seeded from the constants above and MUTATED IN PLACE by the CLI and by
+# set_servo_gains. The constants stay the literal, one-per-file declarations
+# sw/builder/endstation_builder.py and sw/builder/test_builder.py parse as the
+# engine's authority, so an override must not rebind them: it moves the value
+# here, where every reader looks.
+RUNTIME = {
+    "p1": P1_C,                 # --p1
+    "cease_ms": CEASE_MS_C,     # --cease-ms
+    "gain_m": GAIN_M_C,         # --clk-hz, through set_servo_gains
+    "ilim": ILIM_C,             # --clk-hz, through set_servo_gains
+}
 
-def set_servo_gains(clk_hz):
+
+def set_servo_gains(clk_hz: int) -> None:
     """An addend unit adds 2^-24 ns per tick; one 125 ms sync interval is
     clk/8 ticks, so one unit is clk/8/2^24 ns of phase per interval. The
     PI shifts assume normalized gain, hence M/2^6 = 2^24/(clk/8)."""
-    global GAIN_M_C, ILIM_C
-    GAIN_M_C = round((1 << 24) * 64 * 8 / clk_hz)
-    ILIM_C = round(200 * (1 << 24) * 1000 / clk_hz)
-    assert 0 < GAIN_M_C < (1 << 24), GAIN_M_C
-    assert 2 * ILIM_C + 1 < (1 << 24), ILIM_C
+    RUNTIME["gain_m"] = round((1 << 24) * 64 * 8 / clk_hz)
+    RUNTIME["ilim"] = round(200 * (1 << 24) * 1000 / clk_hz)
+    assert 0 < RUNTIME["gain_m"] < (1 << 24), RUNTIME["gain_m"]
+    assert 2 * RUNTIME["ilim"] + 1 < (1 << 24), RUNTIME["ilim"]
 
 # publish flags bits
 FL_PRESENT_C, FL_AMGM_C, FL_ASCAP_C, FL_SYNCOK_C = 1, 2, 4, 8
@@ -389,13 +402,33 @@ REV, RTS0 = 15, 14
 LB = {}
 
 
-def w(op, rd=0, ra=0, rb=0, fmt=0, cnd=0, imm=0):
-    assert 0 <= imm < (1 << 24), hex(imm)
-    return ((OPS[op] << 43) | (rd << 39) | (ra << 35) | (rb << 31) |
-            (fmt << 28) | (cnd << 24) | imm)
+@dataclass(frozen=True)
+class Insn:
+    """One instruction's fields, named as gptp_ucpu_pkg.sv names them and in
+    the order it packs them into the 48-bit ROM word. Frozen: an emitted
+    instruction is a record, not a builder."""
+    op: str
+    rd: int = 0
+    ra: int = 0
+    rb: int = 0
+    fmt: int = 0
+    cnd: int = 0
+    imm: int = 0
+
+    def word(self) -> int:
+        """The packed 48-bit ROM word."""
+        assert 0 <= self.imm < (1 << 24), hex(self.imm)
+        return ((OPS[self.op] << 43) | (self.rd << 39) | (self.ra << 35) |
+                (self.rb << 31) | (self.fmt << 28) | (self.cnd << 24) |
+                self.imm)
 
 
-def splitmix48(i):
+def splitmix48(i: int) -> int:
+    """Filler for a ROM address no program claims.
+
+    SplitMix64 of the address itself, truncated to the ROM word: unowned
+    space is neither zero nor a repeat, and two builds of one image are
+    still byte-identical."""
     z = (i + 0x9E3779B97F4A7C15) & ((1 << 64) - 1)
     z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & ((1 << 64) - 1)
     z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & ((1 << 64) - 1)
@@ -409,13 +442,19 @@ class Prog:
         self.base = base
         self.items = []
 
-    def emit(self, op, label=None, **kw):
+    def emit(self, op: str, label: str | int | None = None,
+             **kw: int) -> None:
+        """Queue one instruction; `label` is a local name or an absolute
+        µPC, resolved into `imm` by the second pass."""
         self.items.append((op, kw, label))
 
-    def label(self, name):
+    def label(self, name: str) -> None:
+        """Name the address the next emitted instruction will occupy."""
         self.items.append(("label", name))
 
-    def words(self):
+    def words(self) -> list[int]:
+        """Resolve every label against this program's real base and pack
+        the result into ROM words."""
         addr, labels = self.base, {}
         for it in self.items:
             if it[0] == "label":
@@ -430,13 +469,15 @@ class Prog:
             if label is not None:
                 kw = dict(kw, imm=labels[label] if isinstance(label, str)
                           else label)
-            out.append(w(op, **kw))
+            out.append(Insn(op, **kw).word())
         return out
 
 
 # ---- emit helpers ----------------------------------------------------------
 
-def e_const(p, rd, value):
+def e_const(p: Prog, rd: int, value: int) -> None:
+    """Load a constant of any width into rd, 24 bits at a time: MOVE's
+    immediate is one chunk wide, so anything larger is shifted in."""
     chunks = []
     v = value
     while True:
@@ -453,7 +494,9 @@ def e_const(p, rd, value):
             p.emit("ALU", rd=rd, ra=rd, rb=RT, cnd=ALU_OR)
 
 
-def e_guard_init(p, end_label):
+def e_guard_init(p: Prog, end_label: str) -> None:
+    """Fall through only once S_INIT stands: a handler that ran before the
+    timer's init leg seeded scratch would decide on uninitialised cells."""
     p.emit("RDST", rd=RA, imm=RG_SCR | S_INIT, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
     p.emit("BRS", cnd=BRS_Z, label="run")
@@ -461,7 +504,7 @@ def e_guard_init(p, end_label):
     p.label("run")
 
 
-def e_flags(p, andm=None, orm=None):
+def e_flags(p: Prog, andm: int | None = None, orm: int | None = None) -> None:
     """Read-modify-write the publish flags word (clobbers RT)."""
     p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
     if andm is not None:
@@ -471,7 +514,8 @@ def e_flags(p, andm=None, orm=None):
     p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)
 
 
-def e_flag_gate(p, mask, want, tag, out_label):
+def e_flag_gate(p: Prog, mask: int, want: int, tag: str,
+                out_label: str) -> None:
     """Fall through when (flags & mask) == want, else branch out."""
     p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=mask)
@@ -481,7 +525,8 @@ def e_flag_gate(p, mask, want, tag, out_label):
     p.label(f"fg_{tag}")
 
 
-def e_hdr(p, mtype, flags, seq_reg, logint, msglen):
+def e_hdr(p: Prog, mtype: int, flags: int, seq_reg: int, logint: int,
+          msglen: int) -> None:
     """Bytes 0..47: eth + 802.1AS common header."""
     control = TX_CONTROL_BY_TYPE_C[mtype]
     p.emit("RDST", rd=RC, imm=RG_SCR | S_HDR8, fmt=FMT_Q)
@@ -516,7 +561,9 @@ def e_hdr(p, mtype, flags, seq_reg, logint, msglen):
     p.emit("BFLD", ra=RT, fmt=FMT_B)
 
 
-def e_ts_fields(p, ns_reg):
+def e_ts_fields(p: Prog, ns_reg: int) -> None:
+    """Append the 10-byte PTP Timestamp (48-bit seconds, 32-bit
+    nanoseconds) for the nanosecond count in ns_reg."""
     p.emit("RDST", rd=RP, imm=RG_SCR | S_1E9, fmt=FMT_Q)
     p.emit("MD", rd=RSEC, ra=ns_reg, rb=RP, cnd=MD_DIVU)
     p.emit("MD", rd=RT, ra=RSEC, rb=RP, cnd=MD_MULS)
@@ -527,7 +574,9 @@ def e_ts_fields(p, ns_reg):
     p.emit("BFLD", ra=RNS, fmt=FMT_D)
 
 
-def e_full_ts(p, rd):
+def e_full_ts(p: Prog, rd: int) -> None:
+    """Fold the received frame's seconds and nanoseconds (bank words 4 and
+    5) into one 64-bit nanosecond value in rd."""
     p.emit("RDST", rd=RSEC, imm=RG_BANK | 4, fmt=FMT_Q)
     p.emit("RDST", rd=RP, imm=RG_SCR | S_1E9, fmt=FMT_Q)
     p.emit("MD", rd=rd, ra=RSEC, rb=RP, cnd=MD_MULS)
@@ -535,7 +584,8 @@ def e_full_ts(p, rd):
     p.emit("ALU", rd=rd, ra=rd, rb=RNS, cnd=ALU_ADD)
 
 
-def e_ult64(p, ra, rb, less_label, geq_label, tag):
+def e_ult64(p: Prog, ra: int, rb: int, less_label: str, geq_label: str,
+            tag: str) -> None:
     """Branch to less_label when u64 rf[ra] < rf[rb]; geq on >; falls
     through on equal."""
     p.emit("ALU", rd=RT, ra=ra, rb=0, cnd=ALU_SHR, imm=32)
@@ -554,7 +604,11 @@ def e_ult64(p, ra, rb, less_label, geq_label, tag):
 
 # ---- RX handlers -----------------------------------------------------------
 
-def prog_rx_sync(base):
+def prog_rx_sync(base: int) -> Prog:
+    """Sync receipt (entry 16): park the receipt stamp, the header and the
+    sourcePortIdentity, then arm the Follow_Up watch. Heard while master it
+    writes nothing: slot 6 then holds our own in-flight Sync sequence.
+    """
     p = Prog(base)
     # gate FIRST: a rogue Sync heard while master must not touch the
     # slot-6 alias (it holds OUR in-flight FU sequence in that role)
@@ -572,7 +626,10 @@ def prog_rx_sync(base):
     return p
 
 
-def prog_rx_followup(base):
+def prog_rx_followup(base: int) -> Prog:
+    """Follow_Up receipt (entry 64): pair it with the pending Sync on
+    sequenceId and sourcePortIdentity, publish the offset (local minus
+    master, less correctionField and the link delay), then run SERVO."""
     p = Prog(base)
     e_guard_init(p, "out")
     # an asCapable fall stops consumption: the servo must not steer on
@@ -615,7 +672,7 @@ def prog_rx_followup(base):
     return p
 
 
-def prog_leg_servo(base):
+def prog_leg_servo(base: int) -> Prog:
     """Accepted Sync+FU as slave; RA = offset (local minus master).
     Step-vs-slew into the PHC region, then the receipt-timeout tail."""
     p = Prog(base)
@@ -639,27 +696,27 @@ def prog_leg_servo(base):
     p.emit("WRST", ra=RC, imm=RG_PHC | 0, fmt=FMT_Q)
     p.emit("BR", label="sv_done")
     p.label("sv_slew")
-    p.emit("MOVE", rd=RB, ra=0, imm=GAIN_M_C)
+    p.emit("MOVE", rd=RB, ra=0, imm=RUNTIME["gain_m"])
     p.emit("MD", rd=RT, ra=RA, rb=RB, cnd=MD_MULS)           # off * M
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SAR, imm=GAIN_S_C)
     p.emit("ALU", rd=RB, ra=RT, rb=0, cnd=ALU_SAR, imm=2)    # ki term
     p.emit("RDST", rd=RC, imm=RG_SCR | S_INTG, fmt=FMT_Q)
     p.emit("ALU", rd=RC, ra=RC, rb=RB, cnd=ALU_ADD)
     # clamp the integrator to +-ILIM: (I + ILIM) u<= 2*ILIM
-    p.emit("MOVE", rd=RU, ra=0, imm=ILIM_C)
+    p.emit("MOVE", rd=RU, ra=0, imm=RUNTIME["ilim"])
     p.emit("ALU", rd=RB, ra=RC, rb=RU, cnd=ALU_ADD)
     p.emit("ALU", rd=RW, ra=RB, rb=0, cnd=ALU_SHR, imm=32)
     p.emit("CMP", ra=RW, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="sv_cl")
     p.emit("BR", label="sv_sat")
     p.label("sv_cl")
-    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=2 * ILIM_C + 1)
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=2 * RUNTIME["ilim"] + 1)
     p.emit("BRS", cnd=BRS_LT, label="sv_iok")
     p.label("sv_sat")
     p.emit("ALU", rd=RW, ra=RC, rb=0, cnd=ALU_SHR, imm=63)
     p.emit("CMP", ra=RW, rb=0, fmt=FMT_D, imm=1)
     p.emit("BRS", cnd=BRS_Z, label="sv_neg")
-    p.emit("MOVE", rd=RC, ra=0, imm=ILIM_C)
+    p.emit("MOVE", rd=RC, ra=0, imm=RUNTIME["ilim"])
     p.emit("BR", label="sv_iok")
     p.label("sv_neg")
     p.emit("ALU", rd=RC, ra=R0, rb=RU, cnd=ALU_SUB)          # -ILIM
@@ -681,7 +738,10 @@ def prog_leg_servo(base):
     return p
 
 
-def prog_rx_announce(base):
+def prog_rx_announce(base: int) -> Prog:
+    """Announce receipt (entry 128): 10.3.10.2.1 qualifyAnnounce runs ahead
+    of every write this handler makes, so only a qualified vector reaches
+    BTCA and a disqualified one moves no grandmaster."""
     p = Prog(base)
     e_guard_init(p, "out")
     # 802.1AS: a port that is not asCapable does not enter the contest
@@ -729,7 +789,10 @@ def prog_rx_announce(base):
     return p
 
 
-def prog_rx_pdreq(base):
+def prog_rx_pdreq(base: int) -> Prog:
+    """Pdelay_Req receipt (entry 192): answer a neighbour's request with a
+    Pdelay_Resp carrying t2 and its requestingPortIdentity, and claim the
+    egress stamp the paired Follow_Up will carry as t3."""
     p = Prog(base)
     e_guard_init(p, "out")
     # IEEE 1588-2008 9.5.2.2: "A message received at the same port that
@@ -790,7 +853,10 @@ def prog_rx_pdreq(base):
     return p
 
 
-def prog_rx_pdresp(base):
+def prog_rx_pdresp(base: int) -> Prog:
+    """Pdelay_Resp receipt (entry 256): arm the Follow_Up pairing and store
+    t2/t4 when the response answers our outstanding request, and keep the
+    Milan 4.2.6.2.5 count of distinct responders in this interval."""
     p = Prog(base)
     e_guard_init(p, "out")
     # 11.2.15.3 (Figure 11-8, WAITING_FOR_PDELAY_RESP): the response is
@@ -879,7 +945,10 @@ def prog_rx_pdresp(base):
     return p
 
 
-def prog_rx_pdrfu(base):
+def prog_rx_pdrfu(base: int) -> Prog:
+    """Pdelay_Resp_Follow_Up receipt (entry 320): compute t3 and hand the
+    exchange to PDPOST, which owns the sequence and responder pairing
+    rules; only the requesting clockIdentity is checked here."""
     p = Prog(base)
     e_guard_init(p, "out")
     p.emit("RDST", rd=RA, imm=RG_BANK | 6, fmt=FMT_Q)
@@ -895,13 +964,15 @@ def prog_rx_pdrfu(base):
     return p
 
 
-def prog_rx_signal(base):
+def prog_rx_signal(base: int) -> Prog:
+    """Signaling receipt (entry 384): accepted and dropped. This plane
+    negotiates no message intervals, so there is nothing to consume."""
     p = Prog(base)
     p.emit("END")
     return p
 
 
-def prog_tx_ts(base):
+def prog_tx_ts(base: int) -> Prog:
     """Match the stamp to a claim by {messageType, sequenceId}.
 
     The parent stamper returns both fields from the PTP header beside the
@@ -946,13 +1017,21 @@ def prog_tx_ts(base):
     return p
 
 
-def prog_tmr(base, mac, seq_seed=0, sync_seq_seed=0):
-    cid = ((mac >> 24) << 40) | (0xFFFE << 24) | (mac & 0xFFFFFF)
-    hdr8 = (0x0180C200000E << 16) | ((mac >> 32) & 0xFFFF)
-    salo = mac & 0xFFFFFFFF
-    mypv = (P1_C << 56) | (CQ_C << 24) | (P2_C << 16)
-    annbody = (UTC_OFF_C << 48) | (P1_C << 32) | CQ_C
+def prog_tmr(base: int, mac: int, seq_seed: int = 0,
+             sync_seq_seed: int = 0) -> Prog:
+    """The 1 s timer program: the event-slot dispatch, the one-shot init, the
+    cadence gate, the Milan cease rule and the next Pdelay_Req."""
     p = Prog(base)
+    _tmr_slot_dispatch(p)
+    _tmr_init_once(p, mac, seq_seed, sync_seq_seed)
+    _tmr_cadence_gate(p)
+    _tmr_cease_rule(p)
+    _tmr_pdelay_request(p)
+    return p
+
+
+def _tmr_slot_dispatch(p):
+    """Event slot -> leg. Slot 0 is this program's own cadence."""
     p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="slot0")
     p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=1)
@@ -967,10 +1046,19 @@ def prog_tmr(base, mac, seq_seed=0, sync_seq_seed=0):
     p.emit("BRS", cnd=BRS_Z, label=LB["FUTO"])
     p.emit("END")
     p.label("slot0")
+
+
+def _tmr_init_once(p, mac, seq_seed, sync_seq_seed):
+    """The init leg, taken exactly once: our clock vector, the frame
+    constants derived from `mac`, and the scratch cells cleared at boot."""
+    cid = ((mac >> 24) << 40) | (0xFFFE << 24) | (mac & 0xFFFFFF)
+    hdr8 = (0x0180C200000E << 16) | ((mac >> 32) & 0xFFFF)
+    salo = mac & 0xFFFFFFFF
+    mypv = (RUNTIME["p1"] << 56) | (CQ_C << 24) | (P2_C << 16)
+    annbody = (UTC_OFF_C << 48) | (RUNTIME["p1"] << 32) | CQ_C
     p.emit("RDST", rd=RA, imm=RG_SCR | S_INIT, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
     p.emit("BRS", cnd=BRS_Z, label="cadence")
-    # ---- init leg, exactly once ----
     p.emit("MOVE", rd=R0, ra=0, imm=0)
     e_const(p, RP, 1_000_000_000)
     p.emit("WRST", ra=RP, imm=RG_SCR | S_1E9, fmt=FMT_Q)
@@ -1018,6 +1106,10 @@ def prog_tmr(base, mac, seq_seed=0, sync_seq_seed=0):
     p.emit("WRST", ra=RT, imm=RG_SCR | S_INIT, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)   # announce receipt
+
+
+def _tmr_cadence_gate(p):
+    """Re-arm the 1 s beat, then run only when the TX queue is free."""
     p.label("cadence")
     p.emit("MOVE", rd=RT, ra=0, imm=1000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 0, fmt=FMT_Q)
@@ -1026,7 +1118,11 @@ def prog_tmr(base, mac, seq_seed=0, sync_seq_seed=0):
     p.emit("BRS", cnd=BRS_Z, label="send")
     p.emit("END")
     p.label("send")
-    # ---- the cease rule (Milan 4.2.6.2.5): while ceased, no requests
+
+
+def _tmr_cease_rule(p):
+    """Milan 4.2.6.2.5: while ceased, no requests; count the resume down,
+    and start the cease on CEASE_N_C successive multi-answered intervals."""
     p.emit("RDST", rd=RA, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
     p.emit("BRS", cnd=BRS_Z, label="quiet")
@@ -1057,7 +1153,7 @@ def prog_tmr(base, mac, seq_seed=0, sync_seq_seed=0):
     # cease: stop requesting, drop the verdict, load the countdown
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
-    p.emit("MOVE", rd=RT, ra=0, imm=max(1, CEASE_MS_C // 1000))
+    p.emit("MOVE", rd=RT, ra=0, imm=max(1, RUNTIME["cease_ms"] // 1000))
     p.emit("WRST", ra=RT, imm=RG_SCR | S_CEASECNT, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
     e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
@@ -1068,6 +1164,11 @@ def prog_tmr(base, mac, seq_seed=0, sync_seq_seed=0):
     p.label("iv_clear")
     p.emit("WRST", ra=0, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
+
+
+def _tmr_pdelay_request(p):
+    """Judge the previous request (802.1AS-2011 10.2.4.1 lost-response
+    accounting), then queue this interval's Pdelay_Req."""
     # ---- lost-response accounting (802.1AS-2011 10.2.4.1): before each
     # new request, judge the last one; skip until a first was ever sent
     p.emit("RDST", rd=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
@@ -1111,10 +1212,11 @@ def prog_tmr(base, mac, seq_seed=0, sync_seq_seed=0):
     p.emit("WRST", ra=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
     p.emit("SEND")
     p.emit("END")
-    return p
 
 
-def prog_tb_battery(base):
+def prog_tb_battery(base: int) -> Prog:
+    """The µCPU bench battery (entry 704): one ALU or MD result per scratch
+    slot, so the testbench reads back every opcode's arithmetic."""
     p = Prog(base)
     for n, cnd in enumerate([ALU_ADD, ALU_SUB, ALU_AND, ALU_OR, ALU_XOR,
                              ALU_SHL, ALU_SHR, ALU_SAR]):
@@ -1134,7 +1236,7 @@ def prog_tb_battery(base):
 
 # ---- shared legs (auto-packed) ---------------------------------------------
 
-def prog_btca(base):
+def prog_btca(base: int) -> Prog:
     """RA = their {p1,cq,p2,16'0}, RB = their gmId; the bank still holds
     the announce. 10.3.4/10.3.5: a parent update replaces the best
     unconditionally; anything else must beat it lexicographically --
@@ -1225,7 +1327,7 @@ def prog_btca(base):
     return p
 
 
-def prog_becgate(base):
+def prog_becgate(base: int) -> Prog:
     """Announce receipt expiry: only an asCapable port may become master."""
     p = Prog(base)
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "bg", "held")
@@ -1237,7 +1339,10 @@ def prog_becgate(base):
     return p
 
 
-def prog_become(base):
+def prog_become(base: int) -> Prog:
+    """Take the grandmaster role: publish our own identity, reset the
+    best-vector record to ourselves, and swap the slave's receipt watches
+    for the Sync and Announce transmit cadences."""
     p = Prog(base)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 0, fmt=FMT_Q)
@@ -1264,10 +1369,22 @@ def prog_become(base):
     return p
 
 
-def prog_leg_pdpost(base):
+def prog_leg_pdpost(base: int) -> Prog:
     """Pdelay exchange complete; RC = t3. neighborRateRatio, corrected
     link delay, the threshold verdict and the asCapable ladder."""
     p = Prog(base)
+    _pdpost_pairing_gates(p)
+    _pdpost_neighbor_rate_ratio(p)
+    _pdpost_corrected_delay(p)
+    _pdpost_verdict(p)
+    p.emit("COMMIT")
+    p.emit("END")
+    return p
+
+
+def _pdpost_pairing_gates(p):
+    """Every reason to refuse this Follow_Up, ahead of any write: the port
+    number, the armed sequenceId, the armed responder, and the cease."""
     # 11.2.15.3 (Figure 11-8, WAITING_FOR_PDELAY_RESP_FOLLOW_UP): the
     # Follow_Up is consumed only when a Pdelay_Resp with this sequenceId
     # answered the outstanding request (the arm is cleared by each new
@@ -1314,8 +1431,12 @@ def prog_leg_pdpost(base):
     p.emit("BRS", cnd=BRS_Z, label="live")
     p.emit("END")
     p.label("live")
+
+
+def _pdpost_neighbor_rate_ratio(p):
+    """The nrr window (802.1AS-2011 11.2.15.3): Q2.30 (t3-prev3)/(t4-prev4),
+    skipped whenever the window is first, stale or zero."""
     p.emit("RDST", rd=RD_, imm=RG_SCR | S_T4, fmt=FMT_Q)
-    # ---- nrr window (802.1AS-2011 11.2.15.3) ----
     p.emit("RDST", rd=RA, imm=RG_SCR | S_NR3, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_Q, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="save")           # first exchange
@@ -1335,7 +1456,10 @@ def prog_leg_pdpost(base):
     p.label("save")
     p.emit("WRST", ra=RC, imm=RG_SCR | S_NR3, fmt=FMT_Q)
     p.emit("WRST", ra=RD_, imm=RG_SCR | S_NR4, fmt=FMT_Q)
-    # ---- corrected D = (nrr*(t4-t1) - (t3-t2)) / 2 ----
+
+
+def _pdpost_corrected_delay(p):
+    """The published link delay: D = (nrr*(t4-t1) - (t3-t2)) / 2."""
     p.emit("RDST", rd=RB, imm=RG_SCR | S_T1, fmt=FMT_Q)
     p.emit("ALU", rd=RB, ra=RD_, rb=RB, cnd=ALU_SUB)  # turn = t4 - t1
     p.emit("RDST", rd=RV, imm=RG_SCR | S_NRR, fmt=FMT_Q)
@@ -1350,7 +1474,11 @@ def prog_leg_pdpost(base):
     p.emit("ALU", rd=RD_, ra=RD_, rb=0, cnd=ALU_SAR, imm=1)
     p.emit("WRST", ra=RD_, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
     p.emit("WRST", ra=RD_, imm=RG_PUB | 3, fmt=FMT_Q)
-    # ---- verdict: good iff -80 <= D <= 800, i.e. (D + 80) u<= 880 ----
+
+
+def _pdpost_verdict(p):
+    """The threshold verdict and the asCapable ladder: good iff
+    -80 <= D <= 800, i.e. (D + 80) u<= 880."""
     p.emit("ALU", rd=RT, ra=RD_, rb=0, cnd=ALU_ADD, imm=NPD_LO_C)
     p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
     p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
@@ -1377,12 +1505,9 @@ def prog_leg_pdpost(base):
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
     e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
     p.label("done")
-    p.emit("COMMIT")
-    p.emit("END")
-    return p
 
 
-def prog_leg_resume(base):
+def prog_leg_resume(base: int) -> Prog:
     """The cease countdown reached zero: requests resume; asCapable
     re-earns through the ladder as ever (PDGOT set: no phantom lost)."""
     p = Prog(base)
@@ -1397,7 +1522,7 @@ def prog_leg_resume(base):
     return p
 
 
-def prog_leg_srto(base):
+def prog_leg_srto(base: int) -> Prog:
     """Sync receipt timeout (375 ms): the sync-ok verdict falls."""
     p = Prog(base)
     e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
@@ -1406,7 +1531,7 @@ def prog_leg_srto(base):
     return p
 
 
-def prog_leg_futo(base):
+def prog_leg_futo(base: int) -> Prog:
     """Follow_Up receipt timeout (125 ms): the pending Sync is void."""
     p = Prog(base)
     p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
@@ -1414,7 +1539,9 @@ def prog_leg_futo(base):
     return p
 
 
-def prog_leg_rfu(base):
+def prog_leg_rfu(base: int) -> Prog:
+    """Transmit the Pdelay_Resp_Follow_Up: the egress stamp of the response
+    we just sent, addressed to the stored requestingPortIdentity."""
     p = Prog(base)
     p.emit("RDST", rd=RA, imm=RG_SCR | S_RQSEQ, fmt=FMT_Q)
     e_hdr(p, 0xA, 0x0000, RA, 0x7F, 54)
@@ -1428,7 +1555,9 @@ def prog_leg_rfu(base):
     return p
 
 
-def prog_leg_syncfu(base):
+def prog_leg_syncfu(base: int) -> Prog:
+    """Transmit the two-step Follow_Up: the Sync's egress stamp as
+    preciseOriginTimestamp, plus the 802.1AS information TLV."""
     p = Prog(base)
     p.emit("RDST", rd=RA, imm=RG_SCR | S_SSEQFLY, fmt=FMT_Q)
     e_hdr(p, 0x8, 0x0008, RA, 0xFD, 76)
@@ -1449,7 +1578,10 @@ def prog_leg_syncfu(base):
     return p
 
 
-def prog_leg_synctx(base):
+def prog_leg_synctx(base: int) -> Prog:
+    """The 125 ms Sync cadence: re-arm the beat, then send only as an
+    asCapable grandmaster with no timer-driven stamp still owed, bounding
+    the free-running counter to 16 bits before it enters the claim."""
     p = Prog(base)
     p.emit("MOVE", rd=RT, ra=0, imm=125)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)
@@ -1484,7 +1616,10 @@ def prog_leg_synctx(base):
     return p
 
 
-def prog_leg_anntx(base):
+def prog_leg_anntx(base: int) -> Prog:
+    """The 1 s Announce cadence: our priority vector, grandmasterIdentity
+    and a one-hop path trace, sent only while an asCapable grandmaster.
+    """
     p = Prog(base)
     p.emit("MOVE", rd=RT, ra=0, imm=1000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)
@@ -1530,7 +1665,14 @@ LEG_FNS = [
 ]
 
 
-def build(mac, seq_seed=0, sync_seq_seed=0):
+def build(mac: int, seq_seed: int = 0,
+          sync_seq_seed: int = 0) -> tuple[list[int], int]:
+    """The complete ROM image and how many of its words are real code.
+
+    Two passes: measure every program with placeholder bases, first-fit the
+    shared legs into the gaps the fixed entry table leaves, then emit with
+    the real bases. An entry that would run into the next one, or a leg
+    that does not fit anywhere, is an assertion rather than a bad image."""
     assert not (seq_seed and sync_seq_seed), "seed one counter per image"
     fixed = [
         (16, prog_rx_sync), (64, prog_rx_followup), (128, prog_rx_announce),
@@ -1588,7 +1730,8 @@ def build(mac, seq_seed=0, sync_seq_seed=0):
     return rom, used
 
 
-def main():
+def main() -> None:
+    """Write the hex image the CLI describes and report its packing."""
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", default="gptp_ucode.hex")
     ap.add_argument("--seq-seed", type=lambda s: int(s, 0), default=0,
@@ -1605,11 +1748,9 @@ def main():
     ap.add_argument("--cease-ms", type=int, default=300_000,
                     help="cease-rule resume delay (Milan: 5 minutes)")
     args = ap.parse_args()
-    global CEASE_MS_C
-    CEASE_MS_C = args.cease_ms
-    assert 0 < CEASE_MS_C < (1 << 24), CEASE_MS_C
-    global P1_C
-    P1_C = args.p1
+    RUNTIME["cease_ms"] = args.cease_ms
+    assert 0 < RUNTIME["cease_ms"] < (1 << 24), RUNTIME["cease_ms"]
+    RUNTIME["p1"] = args.p1
     set_servo_gains(args.clk_hz)
     rom, used = build(args.mac, args.seq_seed, args.sync_seq_seed)
     with open(args.out, "w", encoding="ascii") as f:
