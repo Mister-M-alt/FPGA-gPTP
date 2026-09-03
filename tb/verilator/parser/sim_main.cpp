@@ -21,18 +21,17 @@
 #include <vector>
 #include <verilated.h>
 #include "VKL_gptp_rx_parser.h"
+#include "../../common/verilator_harness.hpp"
 
-static int checks = 0, fails = 0;
-static const uint64_t LOCAL_CID = 0x02A1B2FFFEC3D4E5ull;
+constexpr uint64_t LOCAL_CID = 0x02A1B2FFFEC3D4E5ull;
 
-static void expect_eq(const char *what, uint64_t got, uint64_t exp) {
-  checks++;
-  if (got != exp) {
-    fails++;
-    printf("FAIL %-24s got %016llx exp %016llx\n", what,
-           (unsigned long long)got, (unsigned long long)exp);
-  }
-}
+//! Cycles held in reset, and cycles idled after it before the first frame.
+constexpr int kResetTicks = 4;
+constexpr int kPostResetTicks = 2;
+//! Idle cycles after a feed, so a deferred end-of-frame resolves before the
+//! next feed clears the recorded bank and event state.
+constexpr int kDrainTicks = 3;
+
 
 struct Frame {
   std::vector<uint8_t> b;
@@ -44,9 +43,16 @@ struct Frame {
 };
 
 struct Hdr {
-  uint8_t  mtype = 0, dom = 0, logint = 0x7F, ts_field = 1, ver = 2;
-  uint16_t seq = 0, flags = 0, etype = 0x88F7;
-  uint64_t corr = 0, srcid = 0;
+  uint8_t  mtype = 0;
+  uint8_t  dom = 0;
+  uint8_t  logint = 0x7F;
+  uint8_t  ts_field = 1;
+  uint8_t  ver = 2;
+  uint16_t seq = 0;
+  uint16_t flags = 0;
+  uint16_t etype = 0x88F7;
+  uint64_t corr = 0;
+  uint64_t srcid = 0;
   uint16_t srcpn = 0;
 };
 
@@ -55,9 +61,9 @@ static Frame common(const Hdr &h, uint16_t body_len) {
   for (int i = 0; i < 6; i++) f.u8(0x01);            // DA
   for (int i = 0; i < 6; i++) f.u8(0x22);            // SA
   f.u16(h.etype);
-  f.u8((uint8_t)((h.ts_field << 4) | (h.mtype & 0xF)));
+  f.u8(static_cast<uint8_t>((h.ts_field << 4) | (h.mtype & 0xF)));
   f.u8(h.ver);
-  f.u16((uint16_t)(34 + body_len));
+  f.u16(static_cast<uint16_t>(34 + body_len));
   f.u8(h.dom);
   f.u8(0);
   f.u16(h.flags);
@@ -71,9 +77,93 @@ static Frame common(const Hdr &h, uint16_t body_len) {
   return f;
 }
 
-int main(int argc, char **argv) {
-  Verilated::commandArgs(argc, argv);
-  auto *dut = new VKL_gptp_rx_parser;
+static uint64_t w0_of(const Hdr &h) {
+  return (static_cast<uint64_t>(h.mtype & 0xF) << 48) |
+         (static_cast<uint64_t>(h.seq) << 32) |
+         (static_cast<uint64_t>(h.dom) << 24) |
+         (static_cast<uint64_t>(h.flags) << 8) | h.logint;
+}
+
+static Frame announce_frame(uint16_t seq, uint64_t gm, uint16_t steps,
+                            uint64_t src,
+                            const std::vector<uint64_t> &path) {
+  Hdr h; h.mtype = 0xB; h.seq = seq; h.flags = 0x0008;
+  h.srcid = src; h.srcpn = 1;
+  const uint16_t suffix = path.empty() ? 0 :
+                          static_cast<uint16_t>(4 + 8 * path.size());
+  Frame f = common(h, static_cast<uint16_t>(30 + suffix));
+  for (int i = 0; i < 10; i++) f.u8(0);
+  f.u16(0xFFC4); f.u8(0);
+  f.u8(100); f.u32(0xF8FE436A); f.u8(248);
+  f.u64(gm); f.u16(steps); f.u8(0xA0);
+  if (!path.empty()) {
+    f.u16(0x0008); f.u16(static_cast<uint16_t>(8 * path.size()));
+    for (uint64_t hop : path) f.u64(hop);
+  }
+  return f;
+}
+
+static void set_declared_to_physical(Frame &f) {
+  const uint16_t n = static_cast<uint16_t>(f.b.size() - 14);
+  f.b[16] = static_cast<uint8_t>(n >> 8);
+  f.b[17] = static_cast<uint8_t>(n);
+}
+
+static void append_tlv(Frame &f, uint16_t type,
+                       const std::vector<uint8_t> &value) {
+  f.u16(type); f.u16(static_cast<uint16_t>(value.size()));
+  for (uint8_t b : value) f.u8(b);
+  set_declared_to_physical(f);
+}
+
+static void append_path_tlv(Frame &f, const std::vector<uint64_t> &path) {
+  f.u16(0x0008); f.u16(static_cast<uint16_t>(8 * path.size()));
+  for (uint64_t hop : path) f.u64(hop);
+  set_declared_to_physical(f);
+}
+
+// The Announce identities the declared-length probes are built from.
+constexpr uint64_t AGM = 0x001122FFFE334455ull;
+constexpr uint64_t ASRC = 0x001122FFFE556677ull;
+
+namespace {
+
+//! The parser, the message bank it writes, the per-feed event record and
+//! the tally in one object. `checks`/`fails` were file-scope mutables (I.2)
+//! and every probe below lived in one 994-line `main` (F.3).
+class RxParserHarness {
+ public:
+  int run();
+
+ private:
+  void expect_eq(const char *what, uint64_t got, uint64_t exp);
+  void tick();
+  void feed(const std::vector<uint8_t> &bytes, bool err_at_eof);
+  void feed_gap(const std::vector<uint8_t> &a,
+                const std::vector<uint8_t> &b, int gap);
+  void reset_the_parser();
+  void check_announce_with_a_two_hop_path_trace();
+  void check_a_declared_suffix_binds_parsing_to_the_message();
+  void check_unknown_tlvs_are_skipped_around_the_path_tlv();
+  void check_an_incomplete_declared_chain_is_refused();
+  void check_a_duplicate_path_tlv_is_refused();
+  void check_declared_path_boundaries_and_padding();
+  void check_sync();
+  void check_follow_up_with_information_tlv();
+  void check_pdelay_resp();
+  void check_header_level_drop_arms();
+  void check_foreign_domain_is_refused_for_every_type();
+  void check_follow_up_minimum_and_tlv_arms();
+  void check_message_length_minimum_per_type();
+  void check_a_padded_sync_is_accepted();
+  void check_pdelay_req_minimum_arms();
+  void check_unlisted_message_types_are_refused();
+  void check_adjacent_refusals_are_each_counted();
+  void check_the_drop_count_advanced();
+  int report();
+
+  const milan::tb::Model<VKL_gptp_rx_parser> model;
+  VKL_gptp_rx_parser *const dut = model.get();
 
   std::map<uint32_t, uint64_t> bank;
   //! every event in a feed, with the word-0 the frame that raised it left
@@ -85,100 +175,85 @@ int main(int argc, char **argv) {
   uint8_t ev_code = 0;
   uint16_t ev_seq = 0;
 
-  auto tick = [&]() {
-    dut->clk_i = 0; dut->eval();
-    dut->clk_i = 1; dut->eval();
-    if (dut->bank_we_o) bank[dut->bank_addr_o] = dut->bank_wdata_o;
-    if (dut->ev_valid_o) { ev_seen = true; ev_code = dut->ev_code_o;
-                           ev_seq = dut->ev_seq_o; ev_count++;
-                           ev_w0.push_back(bank.count(0) ? bank[0] : 0); }
-  };
+  //! the drop count before the drop arms, so the last check can assert the
+  //! total every arm between them added
+  uint16_t drops0 = 0;
 
-  auto feed = [&](const std::vector<uint8_t> &bytes, bool err_at_eof) {
-    bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
-    for (size_t i = 0; i < bytes.size(); i++) {
+  int checks = 0;
+  int fails = 0;
+};
+
+void RxParserHarness::expect_eq(const char *what, uint64_t got, uint64_t exp) {
+  checks++;
+  if (got != exp) {
+    fails++;
+    printf("FAIL %-24s got %016llx exp %016llx\n", what,
+           static_cast<unsigned long long>(got),
+           static_cast<unsigned long long>(exp));
+  }
+}
+
+void RxParserHarness::tick() {
+  dut->clk_i = 0; dut->eval();
+  dut->clk_i = 1; dut->eval();
+  if (dut->bank_we_o) bank[dut->bank_addr_o] = dut->bank_wdata_o;
+  if (dut->ev_valid_o) {
+    ev_seen = true;
+    ev_code = dut->ev_code_o;
+    ev_seq = dut->ev_seq_o;
+    ev_count++;
+    ev_w0.push_back(bank.count(0) ? bank[0] : 0);
+  }
+}
+
+void RxParserHarness::feed(const std::vector<uint8_t> &bytes, bool err_at_eof) {
+  bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
+  for (size_t i = 0; i < bytes.size(); i++) {
+    dut->rx_valid_i = 1;
+    dut->rx_data_i  = bytes[i];
+    dut->rx_sof_i   = (i == 0);
+    dut->rx_eof_i   = (i + 1 == bytes.size());
+    dut->rx_err_i   = err_at_eof && (i + 1 == bytes.size());
+    tick();
+  }
+  dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+  dut->rx_err_i = 0;
+  for (int i = 0; i < kDrainTicks; i++) tick();
+}
+
+//! stream two frames with an exact inter-frame gap, so a frame can start
+//! in the cycle a predecessor's deferred end-of-frame is still settling
+void RxParserHarness::feed_gap(const std::vector<uint8_t> &a,
+                               const std::vector<uint8_t> &b, int gap) {
+  bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
+  for (const std::vector<uint8_t> *f : {&a, &b}) {
+    for (size_t i = 0; i < f->size(); i++) {
       dut->rx_valid_i = 1;
-      dut->rx_data_i  = bytes[i];
+      dut->rx_data_i  = (*f)[i];
       dut->rx_sof_i   = (i == 0);
-      dut->rx_eof_i   = (i + 1 == bytes.size());
-      dut->rx_err_i   = err_at_eof && (i + 1 == bytes.size());
+      dut->rx_eof_i   = (i + 1 == f->size());
+      dut->rx_err_i   = 0;         //! driven, not inherited from feed
       tick();
     }
     dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
-    dut->rx_err_i = 0;
-    for (int i = 0; i < 3; i++) tick();
-  };
+    if (f == &a) for (int i = 0; i < gap; i++) tick();
+  }
+  for (int i = 0; i < kDrainTicks; i++) tick();
+}
 
-  //! stream two frames with an exact inter-frame gap, so a frame can start
-  //! in the cycle a predecessor's deferred end-of-frame is still settling
-  auto feed_gap = [&](const std::vector<uint8_t> &a,
-                      const std::vector<uint8_t> &b, int gap) {
-    bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
-    for (const std::vector<uint8_t> *f : {&a, &b}) {
-      for (size_t i = 0; i < f->size(); i++) {
-        dut->rx_valid_i = 1;
-        dut->rx_data_i  = (*f)[i];
-        dut->rx_sof_i   = (i == 0);
-        dut->rx_eof_i   = (i + 1 == f->size());
-        dut->rx_err_i   = 0;         //! driven, not inherited from feed
-        tick();
-      }
-      dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
-      if (f == &a) for (int i = 0; i < gap; i++) tick();
-    }
-    for (int i = 0; i < 3; i++) tick();
-  };
-
-  // reset
+// reset
+void RxParserHarness::reset_the_parser() {
   dut->rst_n = 0; dut->rx_valid_i = 0; dut->rx_sof_i = 0;
   dut->rx_eof_i = 0; dut->rx_err_i = 0; dut->rx_data_i = 0;
   dut->local_clock_id_i = LOCAL_CID;
   dut->local_clock_valid_i = 1;
-  for (int i = 0; i < 4; i++) tick();
+  for (int i = 0; i < kResetTicks; i++) tick();
   dut->rst_n = 1;
-  for (int i = 0; i < 2; i++) tick();
+  for (int i = 0; i < kPostResetTicks; i++) tick();
+}
 
-  auto w0_of = [](const Hdr &h) {
-    return ((uint64_t)(h.mtype & 0xF) << 48) | ((uint64_t)h.seq << 32) |
-           ((uint64_t)h.dom << 24) | ((uint64_t)h.flags << 8) | h.logint;
-  };
-
-  auto announce_frame = [](uint16_t seq, uint64_t gm, uint16_t steps,
-                           uint64_t src,
-                           const std::vector<uint64_t> &path) {
-    Hdr h; h.mtype = 0xB; h.seq = seq; h.flags = 0x0008;
-    h.srcid = src; h.srcpn = 1;
-    const uint16_t suffix = path.empty() ? 0 :
-                            (uint16_t)(4 + 8 * path.size());
-    Frame f = common(h, (uint16_t)(30 + suffix));
-    for (int i = 0; i < 10; i++) f.u8(0);
-    f.u16(0xFFC4); f.u8(0);
-    f.u8(100); f.u32(0xF8FE436A); f.u8(248);
-    f.u64(gm); f.u16(steps); f.u8(0xA0);
-    if (!path.empty()) {
-      f.u16(0x0008); f.u16((uint16_t)(8 * path.size()));
-      for (uint64_t hop : path) f.u64(hop);
-    }
-    return f;
-  };
-  auto set_declared_to_physical = [](Frame &f) {
-    const uint16_t n = (uint16_t)(f.b.size() - 14);
-    f.b[16] = (uint8_t)(n >> 8);
-    f.b[17] = (uint8_t)n;
-  };
-  auto append_tlv = [&](Frame &f, uint16_t type,
-                        const std::vector<uint8_t> &value) {
-    f.u16(type); f.u16((uint16_t)value.size());
-    for (uint8_t b : value) f.u8(b);
-    set_declared_to_physical(f);
-  };
-  auto append_path_tlv = [&](Frame &f, const std::vector<uint64_t> &path) {
-    f.u16(0x0008); f.u16((uint16_t)(8 * path.size()));
-    for (uint64_t hop : path) f.u64(hop);
-    set_declared_to_physical(f);
-  };
-
-  // ---- Announce with a 2-hop path trace TLV -----------------------------
+// ---- Announce with a 2-hop path trace TLV -----------------------------
+void RxParserHarness::check_announce_with_a_two_hop_path_trace() {
   {
     Hdr h; h.mtype = 0xB; h.seq = 0xBEEF; h.dom = 0; h.flags = 0x0008;
     h.corr = 0; h.srcid = 0x00220FFFFE334455ull; h.srcpn = 2;
@@ -203,7 +278,7 @@ int main(int argc, char **argv) {
     expect_eq("ann w3 srcpn", bank[3], 2);
     expect_eq("ann w8", bank[8],
               (0xFFC4ull << 48) | (248ull << 40) |
-              ((uint64_t)0xF8FE436A << 8) | 248ull);
+              (static_cast<uint64_t>(0xF8FE436A) << 8) | 248ull);
     expect_eq("ann w9 gmid", bank[9], 0x00220FFFFE334455ull);
     expect_eq("ann w10", bank[10],
               (1ull << 48) | (0xA0ull << 40));
@@ -211,17 +286,17 @@ int main(int argc, char **argv) {
     expect_eq("ann w16 pt0", bank[16], 0x00220FFFFE334455ull);
     expect_eq("ann w17 pt1", bank[17], 0x2222222222222222ull);
   }
+}
 
-  // ---- Announce declared-length and complete-PathTrace boundary --------
-  // A fixed 64-octet Announce without PathTrace is qualified and reported
-  // honestly as count zero. If a declared suffix is present, 10.5.3.3 makes
-  // PathTrace lengthField 8N and N=stepsRemoved+1. These probes bind parsing
-  // to the PTP message rather than physical Ethernet padding and bite
-  // independently on an invalid declared suffix, overrun, truncation,
-  // misalignment, and count mismatch. A valid message may still have
-  // arbitrary physical padding after its declared end.
-  const uint64_t AGM = 0x001122FFFE334455ull;
-  const uint64_t ASRC = 0x001122FFFE556677ull;
+// ---- Announce declared-length and complete-PathTrace boundary --------
+// A fixed 64-octet Announce without PathTrace is qualified and reported
+// honestly as count zero. If a declared suffix is present, 10.5.3.3 makes
+// PathTrace lengthField 8N and N=stepsRemoved+1. These probes bind parsing
+// to the PTP message rather than physical Ethernet padding and bite
+// independently on an invalid declared suffix, overrun, truncation,
+// misalignment, and count mismatch. A valid message may still have
+// arbitrary physical padding after its declared end.
+void RxParserHarness::check_a_declared_suffix_binds_parsing_to_the_message() {
   {
     uint16_t d0 = dut->drop_cnt_o;
     Frame f = announce_frame(0xA001, AGM, 0, ASRC, {});
@@ -267,6 +342,9 @@ int main(int argc, char **argv) {
     expect_eq("unknown organization TLV: no identity", bank.count(16), 0);
     expect_eq("unknown organization TLV: no drop", dut->drop_cnt_o, d0);
   }
+}
+
+void RxParserHarness::check_unknown_tlvs_are_skipped_around_the_path_tlv() {
   {
     uint16_t d0 = dut->drop_cnt_o;
     Frame f = announce_frame(0xA011, AGM, 0, ASRC, {});
@@ -325,12 +403,16 @@ int main(int argc, char **argv) {
     expect_eq("unknowns around path: tail", bank[17], ASRC);
     expect_eq("unknowns around path: no drop", dut->drop_cnt_o, d0);
   }
-  // A declared suffix must be a complete chain. Trailing 1..3 header bytes,
-  // odd generic values, length overflow and physical truncation are refused.
+}
+
+// A declared suffix must be a complete chain. Trailing 1..3 header bytes,
+// odd generic values, length overflow and physical truncation are refused.
+void RxParserHarness::check_an_incomplete_declared_chain_is_refused() {
   for (unsigned partial = 1; partial <= 3; partial++) {
     uint16_t d0 = dut->drop_cnt_o;
-    Frame f = announce_frame((uint16_t)(0xA020 + partial), AGM, 0, ASRC, {});
-    for (unsigned i = 0; i < partial; i++) f.u8((uint8_t)(0xD0 + i));
+    Frame f = announce_frame(static_cast<uint16_t>(0xA020 + partial), AGM, 0,
+                             ASRC, {});
+    for (unsigned i = 0; i < partial; i++) f.u8(static_cast<uint8_t>(0xD0 + i));
     set_declared_to_physical(f);
     feed(f.b, false);
     char n[80];
@@ -339,7 +421,7 @@ int main(int argc, char **argv) {
     snprintf(n, sizeof n, "partial TLV header %u: no w12", partial);
     expect_eq(n, bank.count(12), 0);
     snprintf(n, sizeof n, "partial TLV header %u: one drop", partial);
-    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+    expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -349,7 +431,7 @@ int main(int argc, char **argv) {
     expect_eq("odd unknown length: no event", ev_seen, 0);
     expect_eq("odd unknown length: no w12", bank.count(12), 0);
     expect_eq("odd unknown length: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -360,7 +442,7 @@ int main(int argc, char **argv) {
     expect_eq("huge unknown length: no event", ev_seen, 0);
     expect_eq("huge unknown length: no w12", bank.count(12), 0);
     expect_eq("huge unknown length: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -371,7 +453,7 @@ int main(int argc, char **argv) {
     expect_eq("unknown crosses declaration: no event", ev_seen, 0);
     expect_eq("unknown crosses declaration: no w12", bank.count(12), 0);
     expect_eq("unknown crosses declaration: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -382,7 +464,7 @@ int main(int argc, char **argv) {
     expect_eq("physically truncated unknown: no event", ev_seen, 0);
     expect_eq("physically truncated unknown: no w12", bank.count(12), 0);
     expect_eq("physically truncated unknown: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -394,14 +476,18 @@ int main(int argc, char **argv) {
     expect_eq("malformed after valid path: no event", ev_seen, 0);
     expect_eq("malformed after valid path: no w12", bank.count(12), 0);
     expect_eq("malformed after valid path: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
-  // Only one PATH_TRACE is defined for an Announce. Reject duplicates before
-  // a second value can overwrite the selected count, hide a conflict or hide
-  // a local-identity loop.
+}
+
+// Only one PATH_TRACE is defined for an Announce. Reject duplicates before
+// a second value can overwrite the selected count, hide a conflict or hide
+// a local-identity loop.
+void RxParserHarness::check_a_duplicate_path_tlv_is_refused() {
   for (unsigned duplicate = 0; duplicate < 3; duplicate++) {
     uint16_t d0 = dut->drop_cnt_o;
-    Frame f = announce_frame((uint16_t)(0xA030 + duplicate), AGM, 0, ASRC, {});
+    Frame f = announce_frame(static_cast<uint16_t>(0xA030 + duplicate), AGM, 0,
+                             ASRC, {});
     append_path_tlv(f, {AGM});
     const uint64_t hop = duplicate == 0 ? AGM
                        : duplicate == 1 ? 0x00BAD0FFFE000001ull : LOCAL_CID;
@@ -413,7 +499,7 @@ int main(int argc, char **argv) {
     snprintf(n, sizeof n, "duplicate path %u: no w12", duplicate);
     expect_eq(n, bank.count(12), 0);
     snprintf(n, sizeof n, "duplicate path %u: one drop", duplicate);
-    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+    expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -433,7 +519,7 @@ int main(int argc, char **argv) {
     expect_eq("declared suffix without path: no event", ev_seen, 0);
     expect_eq("declared suffix without path: no w12", bank.count(12), 0);
     expect_eq("declared suffix without path: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -443,8 +529,11 @@ int main(int argc, char **argv) {
     expect_eq("truncated path: no event", ev_seen, 0);
     expect_eq("truncated path: no w12", bank.count(12), 0);
     expect_eq("truncated path: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
+}
+
+void RxParserHarness::check_declared_path_boundaries_and_padding() {
   {
     uint16_t d0 = dut->drop_cnt_o;
     Frame f = announce_frame(0xA008, AGM, 1, ASRC, {AGM, ASRC});
@@ -452,7 +541,7 @@ int main(int argc, char **argv) {
     feed(f.b, false);                               // physical 2nd is padding
     expect_eq("declared path overrun: no event", ev_seen, 0);
     expect_eq("declared path overrun: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -463,7 +552,7 @@ int main(int argc, char **argv) {
     feed(f.b, false);
     expect_eq("misaligned path: no event", ev_seen, 0);
     expect_eq("misaligned path: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -471,7 +560,7 @@ int main(int argc, char **argv) {
     feed(f.b, false);                               // N=2, steps+1=3
     expect_eq("path-count mismatch: no event", ev_seen, 0);
     expect_eq("path-count mismatch: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -496,8 +585,10 @@ int main(int argc, char **argv) {
     expect_eq("deep self path: eighth retained", bank[23], 0x7007);
     expect_eq("deep self path: no drop", dut->drop_cnt_o, d0);
   }
+}
 
-  // ---- Sync -------------------------------------------------------------
+// ---- Sync -------------------------------------------------------------
+void RxParserHarness::check_sync() {
   {
     Hdr h; h.mtype = 0x0; h.seq = 0x0102; h.flags = 0x0208;
     h.corr = 0x0000001234560000ull; h.srcid = 0xAABBCCFFFE001122ull;
@@ -512,8 +603,10 @@ int main(int argc, char **argv) {
     expect_eq("sync w4 sec", bank[4], 0x000012345678ull);
     expect_eq("sync w5 ns", bank[5], 0x1DCD6500ull);
   }
+}
 
-  // ---- Follow_Up with information TLV -----------------------------------
+// ---- Follow_Up with information TLV -----------------------------------
+void RxParserHarness::check_follow_up_with_information_tlv() {
   {
     Hdr h; h.mtype = 0x8; h.seq = 0x0102; h.srcid = 0xAABBCCFFFE001122ull;
     Frame f = common(h, 10 + 32);
@@ -533,8 +626,10 @@ int main(int argc, char **argv) {
     expect_eq("fu w11", bank[11],
               (0xFFFFF000ull << 32) | (0x0007ull << 16));
   }
+}
 
-  // ---- Pdelay_Resp ------------------------------------------------------
+// ---- Pdelay_Resp ------------------------------------------------------
+void RxParserHarness::check_pdelay_resp() {
   {
     Hdr h; h.mtype = 0x3; h.seq = 0x77AA; h.flags = 0x0200;
     h.srcid = 0x00220FFFFE334455ull; h.srcpn = 2;
@@ -550,9 +645,11 @@ int main(int argc, char **argv) {
     expect_eq("pdresp w6", bank[6], 0xDEADBEEFCAFEF00Dull);
     expect_eq("pdresp w7", bank[7], 1);
   }
+}
 
-  // ---- drop arms --------------------------------------------------------
-  uint16_t drops0 = dut->drop_cnt_o;
+// ---- drop arms --------------------------------------------------------
+void RxParserHarness::check_header_level_drop_arms() {
+  drops0 = dut->drop_cnt_o;
   {
     Hdr h; h.mtype = 0x0; h.etype = 0x0800;          // not 88F7
     Frame f = common(h, 10);
@@ -588,20 +685,23 @@ int main(int argc, char **argv) {
     feed(f.b, true);
     expect_eq("rx_err drop: no event", ev_seen, 0);
   }
-  // 802.1AS-2011 8.1: the domain number of a gPTP domain shall be 0, and
-  // IEEE 1588-2008 9.5.1 accepts only messages whose domainNumber matches
-  // the local domain. The arm sits at header byte 4, ahead of every bank
-  // write, so a foreign-domain frame of ANY type leaves no event and no
-  // bank word for a handler to read: BTCA (Announce), the servo (Sync,
-  // Follow_Up) and both Pdelay roles are covered by the one compare
-  // (FPGA-gPTP #6). Five shapes, otherwise valid: a Sync in domain 5, a
-  // better-priority Announce in domain 1, a Pdelay_Resp in domain 255,
-  // and the two header-only types whose min_ok_r is set regardless of
-  // bad_r, so that the end-of-frame gate's !bad_r term is their only
-  // barrier: a Pdelay_Req in domain 0x10 and a Signaling in domain 0x80,
-  // the zero-low-nibble values that pin the compare's full width. Each
-  // arm counts exactly one drop; the header-only types first prove their
-  // domain-0 shape dispatches, so the refusals cannot pass vacuously.
+}
+
+// 802.1AS-2011 8.1: the domain number of a gPTP domain shall be 0, and
+// IEEE 1588-2008 9.5.1 accepts only messages whose domainNumber matches
+// the local domain. The arm sits at header byte 4, ahead of every bank
+// write, so a foreign-domain frame of ANY type leaves no event and no
+// bank word for a handler to read: BTCA (Announce), the servo (Sync,
+// Follow_Up) and both Pdelay roles are covered by the one compare
+// (FPGA-gPTP #6). Five shapes, otherwise valid: a Sync in domain 5, a
+// better-priority Announce in domain 1, a Pdelay_Resp in domain 255,
+// and the two header-only types whose min_ok_r is set regardless of
+// bad_r, so that the end-of-frame gate's !bad_r term is their only
+// barrier: a Pdelay_Req in domain 0x10 and a Signaling in domain 0x80,
+// the zero-low-nibble values that pin the compare's full width. Each
+// arm counts exactly one drop; the header-only types first prove their
+// domain-0 shape dispatches, so the refusals cannot pass vacuously.
+void RxParserHarness::check_foreign_domain_is_refused_for_every_type() {
   {
     uint16_t d0 = dut->drop_cnt_o;
     Hdr h; h.mtype = 0x0; h.dom = 5; h.seq = 0x0D05; h.flags = 0x0208;
@@ -612,7 +712,7 @@ int main(int argc, char **argv) {
     expect_eq("domain 5 sync drop: no event", ev_seen, 0);
     expect_eq("domain 5 sync drop: no bank write", bank.size(), 0);
     expect_eq("domain 5 sync drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -628,7 +728,7 @@ int main(int argc, char **argv) {
     expect_eq("domain 1 announce drop: no event", ev_seen, 0);
     expect_eq("domain 1 announce drop: no bank write", bank.size(), 0);
     expect_eq("domain 1 announce drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -641,7 +741,7 @@ int main(int argc, char **argv) {
     expect_eq("domain 255 pdresp drop: no event", ev_seen, 0);
     expect_eq("domain 255 pdresp drop: no bank write", bank.size(), 0);
     expect_eq("domain 255 pdresp drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     Hdr h; h.mtype = 0x2; h.seq = 0x0C02; h.srcid = 0x00220FFFFE334455ull;
@@ -672,7 +772,7 @@ int main(int argc, char **argv) {
     expect_eq("domain 0x10 pdreq drop: no event", ev_seen, 0);
     expect_eq("domain 0x10 pdreq drop: no bank write", bank.size(), 0);
     expect_eq("domain 0x10 pdreq drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -684,42 +784,50 @@ int main(int argc, char **argv) {
     expect_eq("domain 0x80 sig drop: no event", ev_seen, 0);
     expect_eq("domain 0x80 sig drop: no bank write", bank.size(), 0);
     expect_eq("domain 0x80 sig drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
-  // 802.1AS-2011 Table 11-9: a Follow_Up is 76 octets, the header, the
-  // preciseOriginTimestamp and the Follow_Up information TLV, which
-  // 11.4.4.3 makes a field of the message (tlvType 0x3, lengthField 28,
-  // organizationId 00-80-C2, organizationSubType 1: 11.4.4.3.2 to
-  // 11.4.4.3.5) and 11.4.4.2.2 places first; 10.5.2.2.4 counts exactly
-  // those 76 octets in messageLength. Until #11 the parser's Follow_Up
-  // minimum was the 44-octet header-and-timestamp shape and a TLV type
-  // mismatch only withheld bank word 11, so a TLV-less Follow_Up
-  // dispatched and steered. Arms: the issue's 44-octet shape and a
-  // declared length of 75, each refused at the messageLength byte with
-  // no event, no bank write and one counted drop; a declared 76 cut at
-  // 75 octets, refused at the end-of-frame gate (no event, one drop);
-  // then a TLV header wrong in exactly one field (tlvType 0x0008,
-  // lengthField 27, organizationId 00-1B-19, organizationSubType 2),
-  // each refused at the TLV arm with no event, no word-11 write and one
-  // drop. Controls: the complete Follow_Up dispatches with its word 11
-  // after the arms as it did before them, and a Follow_Up with a second
-  // TLV appended after the information TLV (messageLength 88) is
-  // accepted: 11.4.1 has a receiver skip a TLV it does not parse.
-  auto fu_frame = [&](uint16_t seq, uint16_t tlvt, uint16_t tlvl,
+}
+
+static Frame fu_frame(uint16_t seq, uint16_t tlvt, uint16_t tlvl,
                       uint32_t org, uint32_t sub) {
-    Hdr h; h.mtype = 0x8; h.seq = seq; h.srcid = 0xAABBCCFFFE001122ull;
-    h.srcpn = 1;
-    Frame f = common(h, 10 + 32);
-    f.u48(0x000012345678ull); f.u32(0x2FAF0800);
-    f.u16(tlvt); f.u16(tlvl);
-    f.u8((uint8_t)(org >> 16)); f.u8((uint8_t)(org >> 8)); f.u8((uint8_t)org);
-    f.u8((uint8_t)(sub >> 16)); f.u8((uint8_t)(sub >> 8)); f.u8((uint8_t)sub);
-    f.u32(0xFFFFF000); f.u16(0x0007);
-    for (int i = 0; i < 12; i++) f.u8(0);
-    f.u32(0x00000123);
-    return f;
-  };
-  const uint64_t W11 = (0xFFFFF000ull << 32) | (0x0007ull << 16);
+  Hdr h; h.mtype = 0x8; h.seq = seq; h.srcid = 0xAABBCCFFFE001122ull;
+  h.srcpn = 1;
+  Frame f = common(h, 10 + 32);
+  f.u48(0x000012345678ull); f.u32(0x2FAF0800);
+  f.u16(tlvt); f.u16(tlvl);
+  f.u8(static_cast<uint8_t>(org >> 16));
+  f.u8(static_cast<uint8_t>(org >> 8));
+  f.u8(static_cast<uint8_t>(org));
+  f.u8(static_cast<uint8_t>(sub >> 16));
+  f.u8(static_cast<uint8_t>(sub >> 8));
+  f.u8(static_cast<uint8_t>(sub));
+  f.u32(0xFFFFF000); f.u16(0x0007);
+  for (int i = 0; i < 12; i++) f.u8(0);
+  f.u32(0x00000123);
+  return f;
+}
+
+// 802.1AS-2011 Table 11-9: a Follow_Up is 76 octets, the header, the
+// preciseOriginTimestamp and the Follow_Up information TLV, which
+// 11.4.4.3 makes a field of the message (tlvType 0x3, lengthField 28,
+// organizationId 00-80-C2, organizationSubType 1: 11.4.4.3.2 to
+// 11.4.4.3.5) and 11.4.4.2.2 places first; 10.5.2.2.4 counts exactly
+// those 76 octets in messageLength. Until #11 the parser's Follow_Up
+// minimum was the 44-octet header-and-timestamp shape and a TLV type
+// mismatch only withheld bank word 11, so a TLV-less Follow_Up
+// dispatched and steered. Arms: the issue's 44-octet shape and a
+// declared length of 75, each refused at the messageLength byte with
+// no event, no bank write and one counted drop; a declared 76 cut at
+// 75 octets, refused at the end-of-frame gate (no event, one drop);
+// then a TLV header wrong in exactly one field (tlvType 0x0008,
+// lengthField 27, organizationId 00-1B-19, organizationSubType 2),
+// each refused at the TLV arm with no event, no word-11 write and one
+// drop. Controls: the complete Follow_Up dispatches with its word 11
+// after the arms as it did before them, and a Follow_Up with a second
+// TLV appended after the information TLV (messageLength 88) is
+// accepted: 11.4.1 has a receiver skip a TLV it does not parse.
+void RxParserHarness::check_follow_up_minimum_and_tlv_arms() {
+  constexpr uint64_t W11 = (0xFFFFF000ull << 32) | (0x0007ull << 16);
   {
     uint16_t d0 = dut->drop_cnt_o;
     Hdr h; h.mtype = 0x8; h.seq = 0x0F44; h.srcid = 0xAABBCCFFFE001122ull;
@@ -730,7 +838,7 @@ int main(int argc, char **argv) {
     expect_eq("TLV-less fu drop: no event", ev_seen, 0);
     expect_eq("TLV-less fu drop: no bank write", bank.size(), 0);
     expect_eq("TLV-less fu drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -741,7 +849,7 @@ int main(int argc, char **argv) {
     expect_eq("75-octet fu drop: no event", ev_seen, 0);
     expect_eq("75-octet fu drop: no bank write", bank.size(), 0);
     expect_eq("75-octet fu drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -749,7 +857,8 @@ int main(int argc, char **argv) {
     f.b.pop_back();                                  // declared 76, cut at 75
     feed(f.b, false);
     expect_eq("cut fu drop: no event", ev_seen, 0);
-    expect_eq("cut fu drop: one drop", dut->drop_cnt_o, (uint16_t)(d0 + 1));
+    expect_eq("cut fu drop: one drop", dut->drop_cnt_o,
+              static_cast<uint16_t>(d0 + 1));
   }
   struct BadTlv { const char *tag; uint16_t tlvt, tlvl; uint32_t org, sub; };
   const BadTlv bad_tlv[] = {
@@ -768,7 +877,7 @@ int main(int argc, char **argv) {
     snprintf(n, sizeof n, "%s: no w11 write", t.tag);
     expect_eq(n, bank.count(11), 0);
     snprintf(n, sizeof n, "%s: one drop", t.tag);
-    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+    expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -790,16 +899,19 @@ int main(int argc, char **argv) {
     expect_eq("fu with a trailing TLV: w11", bank[11], W11);
     expect_eq("fu with a trailing TLV: no drop", dut->drop_cnt_o, d0);
   }
-  // The messageLength arm is one compare against the per-type table, so
-  // it must hold for every type the table names, not only the Follow_Up
-  // that motivated it (the #18 review's MR8, the arm narrowed to
-  // Follow_Up, passed both suites). For each of Sync (44, Table 11-8),
-  // Pdelay_Resp and Pdelay_Resp_Follow_Up
-  // (54, Tables 11-12 / 11-13), Pdelay_Req (54, Table 11-11, #12) and
-  // Signaling (34, the header alone): a physically complete frame
-  // declaring one octet below the minimum is refused at the
-  // messageLength byte with no event, no bank write and one drop, and
-  // the same frame declaring the exact minimum dispatches with no drop.
+}
+
+// The messageLength arm is one compare against the per-type table, so
+// it must hold for every type the table names, not only the Follow_Up
+// that motivated it (the #18 review's MR8, the arm narrowed to
+// Follow_Up, passed both suites). For each of Sync (44, Table 11-8),
+// Pdelay_Resp and Pdelay_Resp_Follow_Up
+// (54, Tables 11-12 / 11-13), Pdelay_Req (54, Table 11-11, #12) and
+// Signaling (34, the header alone): a physically complete frame
+// declaring one octet below the minimum is refused at the
+// messageLength byte with no event, no bank write and one drop, and
+// the same frame declaring the exact minimum dispatches with no drop.
+void RxParserHarness::check_message_length_minimum_per_type() {
   struct LenArm { const char *tag; uint8_t mtype; uint16_t minlen; uint8_t ev; };
   const LenArm len_arms[] = {
     {"sync", 0x0, 44, 1}, {"pdresp", 0x3, 54, 5},
@@ -807,45 +919,50 @@ int main(int argc, char **argv) {
   };
   for (const LenArm &a : len_arms) {
     char n[64];
-    Hdr h; h.mtype = a.mtype; h.seq = (uint16_t)(0x0B00 | a.minlen);
+    Hdr h; h.mtype = a.mtype; h.seq = static_cast<uint16_t>(0x0B00 | a.minlen);
     h.srcid = 0x00220FFFFE334455ull; h.srcpn = 2;
     uint16_t d0 = dut->drop_cnt_o;
-    Frame f = common(h, (uint16_t)(a.minlen - 34));    // the full message
+    // the full message
+    Frame f = common(h, static_cast<uint16_t>(a.minlen - 34));
     for (int i = 34; i < a.minlen; i++) f.u8(0);
-    f.b[16] = (uint8_t)((a.minlen - 1) >> 8);          // declaring one
-    f.b[17] = (uint8_t)((a.minlen - 1) & 0xFF);        // octet fewer
+    f.b[16] = static_cast<uint8_t>((a.minlen - 1) >> 8);      // declaring one
+    f.b[17] = static_cast<uint8_t>((a.minlen - 1) & 0xFF);    // octet fewer
     feed(f.b, false);
     snprintf(n, sizeof n, "%s declared %u drop: no event", a.tag,
-             (unsigned)(a.minlen - 1));
+             static_cast<unsigned>(a.minlen - 1));
     expect_eq(n, ev_seen, 0);
     snprintf(n, sizeof n, "%s declared %u drop: no bank write", a.tag,
-             (unsigned)(a.minlen - 1));
+             static_cast<unsigned>(a.minlen - 1));
     expect_eq(n, bank.size(), 0);
     snprintf(n, sizeof n, "%s declared %u drop: one drop", a.tag,
-             (unsigned)(a.minlen - 1));
-    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+             static_cast<unsigned>(a.minlen - 1));
+    expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 1));
     d0 = dut->drop_cnt_o;
-    Frame g = common(h, (uint16_t)(a.minlen - 34));    // the exact minimum
+    // the exact minimum
+    Frame g = common(h, static_cast<uint16_t>(a.minlen - 34));
     for (int i = 34; i < a.minlen; i++) g.u8(0);
     feed(g.b, false);
     snprintf(n, sizeof n, "%s declared %u control: event", a.tag,
-             (unsigned)a.minlen);
+             static_cast<unsigned>(a.minlen));
     expect_eq(n, ev_seen ? ev_code : 0, a.ev);
     snprintf(n, sizeof n, "%s declared %u control: no drop", a.tag,
-             (unsigned)a.minlen);
+             static_cast<unsigned>(a.minlen));
     expect_eq(n, dut->drop_cnt_o, d0);
   }
-  // A 44-octet Sync is a 58-byte frame and leaves the transmitting MAC
-  // padded to the 60-byte Ethernet minimum (IEEE 1588-2008 13.3.2.4
-  // NOTE: messageLength excludes the padding), so octets 58..59 exist on
-  // every Sync a real link delivers and the receiver ignores them. The
-  // #18 review's MR7, the TLV arms applied to Sync as well, passed both
-  // suites because no suite sent a padded Sync: the arm at byte 59 was
-  // never reached. Four padded Syncs, each accepted with its event, its
-  // six bank words and no drop: zero padding, padding shaped like the
-  // information TLV's tlvType (0x0003), padding 0x0008 (a path trace
-  // TLV's type), and a Sync padded to 74 bytes, the span of the whole
-  // TLV header arm.
+}
+
+// A 44-octet Sync is a 58-byte frame and leaves the transmitting MAC
+// padded to the 60-byte Ethernet minimum (IEEE 1588-2008 13.3.2.4
+// NOTE: messageLength excludes the padding), so octets 58..59 exist on
+// every Sync a real link delivers and the receiver ignores them. The
+// #18 review's MR7, the TLV arms applied to Sync as well, passed both
+// suites because no suite sent a padded Sync: the arm at byte 59 was
+// never reached. Four padded Syncs, each accepted with its event, its
+// six bank words and no drop: zero padding, padding shaped like the
+// information TLV's tlvType (0x0003), padding 0x0008 (a path trace
+// TLV's type), and a Sync padded to 74 bytes, the span of the whole
+// TLV header arm.
+void RxParserHarness::check_a_padded_sync_is_accepted() {
   {
     struct Pad { const char *tag; std::vector<uint8_t> pad; };
     const Pad pads[] = {
@@ -873,19 +990,22 @@ int main(int argc, char **argv) {
       expect_eq(n, dut->drop_cnt_o, d0);
     }
   }
-  // 802.1AS-2011 11.4.5 / Table 11-11: a Pdelay_Req is 54 octets, the
-  // header and two reserved 10-octet fields (IEEE 1588-2008 13.9 NOTE:
-  // the second reserved field gives the request the response's length).
-  // Until #12 the parser's minimum was the 34-octet header, so a
-  // header-only request dispatched and the responder answered it. Arms:
-  // the issue's header-only shape (messageLength 34, a 48-byte frame),
-  // messageLength 44 and messageLength 53, each refused at the
-  // messageLength byte with no event, no bank write and one drop; a
-  // declared 54 cut at 53 octets, refused at the end-of-frame gate (no
-  // event, one drop). Control: the complete 54-octet request dispatches
-  // after the arms as the domain-0 control did before them. The declared
-  // 53 in a complete 54-octet frame is the Pdelay_Req row of the
-  // per-type table above.
+}
+
+// 802.1AS-2011 11.4.5 / Table 11-11: a Pdelay_Req is 54 octets, the
+// header and two reserved 10-octet fields (IEEE 1588-2008 13.9 NOTE:
+// the second reserved field gives the request the response's length).
+// Until #12 the parser's minimum was the 34-octet header, so a
+// header-only request dispatched and the responder answered it. Arms:
+// the issue's header-only shape (messageLength 34, a 48-byte frame),
+// messageLength 44 and messageLength 53, each refused at the
+// messageLength byte with no event, no bank write and one drop; a
+// declared 54 cut at 53 octets, refused at the end-of-frame gate (no
+// event, one drop). Control: the complete 54-octet request dispatches
+// after the arms as the domain-0 control did before them. The declared
+// 53 in a complete 54-octet frame is the Pdelay_Req row of the
+// per-type table above.
+void RxParserHarness::check_pdelay_req_minimum_arms() {
   {
     uint16_t d0 = dut->drop_cnt_o;
     Hdr h; h.mtype = 0x2; h.seq = 0x0E22; h.srcid = 0x00220FFFFE334455ull;
@@ -895,7 +1015,7 @@ int main(int argc, char **argv) {
     expect_eq("header-only pdreq drop: no event", ev_seen, 0);
     expect_eq("header-only pdreq drop: no bank write", bank.size(), 0);
     expect_eq("header-only pdreq drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -907,7 +1027,7 @@ int main(int argc, char **argv) {
     expect_eq("44-octet pdreq drop: no event", ev_seen, 0);
     expect_eq("44-octet pdreq drop: no bank write", bank.size(), 0);
     expect_eq("44-octet pdreq drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -919,7 +1039,7 @@ int main(int argc, char **argv) {
     expect_eq("53-octet pdreq drop: no event", ev_seen, 0);
     expect_eq("53-octet pdreq drop: no bank write", bank.size(), 0);
     expect_eq("53-octet pdreq drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -930,23 +1050,28 @@ int main(int argc, char **argv) {
     feed(f.b, false);
     expect_eq("cut pdreq drop: no event", ev_seen, 0);
     expect_eq("cut pdreq drop: one drop", dut->drop_cnt_o,
-              (uint16_t)(d0 + 1));
+              static_cast<uint16_t>(d0 + 1));
   }
-  // IEEE 1588-2008 13.3.2.2 and its Table 19 define the messageType
-  // values; a gPTP port carries only the seven of 802.1AS-2011 Clause 10
-  // and 11 (Sync 0x0, Pdelay_Req 0x2, Pdelay_Resp 0x3, Follow_Up 0x8,
-  // Pdelay_Resp_Follow_Up 0xA, Announce 0xB, Signaling 0xC) and has no
-  // handler for the rest. The arm sits at the type byte beside the
-  // transportSpecific compare, ahead of every bank write, so an unlisted
-  // type leaves no event, no bank word and one counted drop instead of
-  // dispatching with the event code no handler claims (FPGA-gPTP #22).
-  // All nine unlisted values, each in an otherwise valid 44-octet frame
-  // that every other arm admits: without this compare each one dispatches
-  // (measured before the fix: events=1 ev_code=0 bank_writes=4 drops=+0).
-  const uint8_t unlisted[] = {0x1, 0x4, 0x5, 0x6, 0x7, 0x9, 0xD, 0xE, 0xF};
+}
+
+// IEEE 1588-2008 13.3.2.2 and its Table 19 define the messageType
+// values; a gPTP port carries only the seven of 802.1AS-2011 Clause 10
+// and 11 (Sync 0x0, Pdelay_Req 0x2, Pdelay_Resp 0x3, Follow_Up 0x8,
+// Pdelay_Resp_Follow_Up 0xA, Announce 0xB, Signaling 0xC) and has no
+// handler for the rest. The arm sits at the type byte beside the
+// transportSpecific compare, ahead of every bank write, so an unlisted
+// type leaves no event, no bank word and one counted drop instead of
+// dispatching with the event code no handler claims (FPGA-gPTP #22).
+// All nine unlisted values, each in an otherwise valid 44-octet frame
+// that every other arm admits: without this compare each one dispatches
+// (measured before the fix: events=1 ev_code=0 bank_writes=4 drops=+0).
+void RxParserHarness::check_unlisted_message_types_are_refused() {
+  const uint8_t unlisted[] = {0x1, 0x4, 0x5, 0x6, 0x7,
+                              0x9, 0xD, 0xE, 0xF};
   for (uint8_t mt : unlisted) {
     uint16_t d0 = dut->drop_cnt_o;
-    Hdr h; h.mtype = mt; h.seq = (uint16_t)(0x0E60 + mt); h.flags = 0x0208;
+    Hdr h; h.mtype = mt; h.seq = static_cast<uint16_t>(0x0E60 + mt);
+    h.flags = 0x0208;
     h.srcid = 0xAABBCCFFFE001122ull; h.srcpn = 1; h.logint = 0xFD;
     Frame f = common(h, 10);
     f.u48(0x000012345678ull); f.u32(0x1DCD6500);
@@ -957,7 +1082,7 @@ int main(int argc, char **argv) {
     snprintf(n, sizeof n, "type 0x%X drop: no bank write", mt);
     expect_eq(n, bank.size(), 0);
     snprintf(n, sizeof n, "type 0x%X drop: one drop", mt);
-    expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 1));
+    expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 1));
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -972,16 +1097,19 @@ int main(int argc, char **argv) {
     expect_eq("complete pdreq after the arms: w2 srcid", bank[2], h.srcid);
     expect_eq("complete pdreq after the arms: no drop", dut->drop_cnt_o, d0);
   }
-  // Two refusals can resolve on one clock edge: the deferred
-  // end-of-frame of a dropped frame, and a one-byte frame arriving in
-  // that same cycle. They are different frames and both must be counted,
-  // and as two increments of one register only one survived
-  // (FPGA-gPTP #27). `dbg_rx_drop_o` is the oracle the parent's
-  // conformance probes read, so a lost increment weakens every probe
-  // that asserts a counted refusal. Both orderings and both gaps: only
-  // drop-then-runt at zero gap ever collided, and the reverse never did,
-  // because a runt resolves on its own edge while the frame behind it
-  // finalizes two cycles later
+}
+
+// Two refusals can resolve on one clock edge: the deferred
+// end-of-frame of a dropped frame, and a one-byte frame arriving in
+// that same cycle. They are different frames and both must be counted,
+// and as two increments of one register only one survived
+// (FPGA-gPTP #27). `dbg_rx_drop_o` is the oracle the parent's
+// conformance probes read, so a lost increment weakens every probe
+// that asserts a counted refusal. Both orderings and both gaps: only
+// drop-then-runt at zero gap ever collided, and the reverse never did,
+// because a runt resolves on its own edge while the frame behind it
+// finalizes two cycles later
+void RxParserHarness::check_adjacent_refusals_are_each_counted() {
   {
     Hdr h; h.mtype = 0x0; h.dom = 5;                 // a foreign-domain Sync
     Frame f = common(h, 10);
@@ -992,11 +1120,11 @@ int main(int argc, char **argv) {
       uint16_t d0 = dut->drop_cnt_o;
       feed_gap(f.b, runt, gap);
       snprintf(n, sizeof n, "drop then %d-gap runt: two drops", gap);
-      expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 2));
+      expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 2));
       d0 = dut->drop_cnt_o;
       feed_gap(runt, f.b, gap);
       snprintf(n, sizeof n, "runt then %d-gap drop: two drops", gap);
-      expect_eq(n, dut->drop_cnt_o, (uint16_t)(d0 + 2));
+      expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 2));
     }
     // and the accepted path is untouched: a good frame arriving in the
     // cycle a dropped frame finalizes still dispatches with a clean bank
@@ -1008,7 +1136,7 @@ int main(int argc, char **argv) {
     uint16_t d1 = dut->drop_cnt_o;
     feed_gap(f.b, good.b, 0);
     expect_eq("drop then zero-gap sync: one drop", dut->drop_cnt_o,
-              (uint16_t)(d1 + 1));
+              static_cast<uint16_t>(d1 + 1));
     expect_eq("drop then zero-gap sync: event", ev_seen ? ev_code : 0, 1);
     expect_eq("drop then zero-gap sync: w0", bank[0], w0_of(g));
 
@@ -1038,12 +1166,48 @@ int main(int argc, char **argv) {
     dut->rx_data_i = 0x01;
     for (int i = 0; i < 4; i++) tick();
     dut->rx_sof_i = 0; dut->rx_eof_i = 0;
-    for (int i = 0; i < 3; i++) tick();
+    for (int i = 0; i < kDrainTicks; i++) tick();
     expect_eq("sof and eof without valid: not a frame", dut->drop_cnt_o, d3);
   }
-  expect_eq("drop count advanced", dut->drop_cnt_o, (uint16_t)(drops0 + 44));
+}
 
+void RxParserHarness::check_the_drop_count_advanced() {
+  expect_eq("drop count advanced", dut->drop_cnt_o,
+            static_cast<uint16_t>(drops0 + 44));
+}
+
+int RxParserHarness::report() {
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
-  delete dut;
   return fails ? 1 : 0;
+}
+
+int RxParserHarness::run() {
+  reset_the_parser();
+  check_announce_with_a_two_hop_path_trace();
+  check_a_declared_suffix_binds_parsing_to_the_message();
+  check_unknown_tlvs_are_skipped_around_the_path_tlv();
+  check_an_incomplete_declared_chain_is_refused();
+  check_a_duplicate_path_tlv_is_refused();
+  check_declared_path_boundaries_and_padding();
+  check_sync();
+  check_follow_up_with_information_tlv();
+  check_pdelay_resp();
+  check_header_level_drop_arms();
+  check_foreign_domain_is_refused_for_every_type();
+  check_follow_up_minimum_and_tlv_arms();
+  check_message_length_minimum_per_type();
+  check_a_padded_sync_is_accepted();
+  check_pdelay_req_minimum_arms();
+  check_unlisted_message_types_are_refused();
+  check_adjacent_refusals_are_each_counted();
+  check_the_drop_count_advanced();
+  return report();
+}
+
+}  // namespace
+
+int main(int argc, char **argv) {
+  Verilated::commandArgs(argc, argv);
+  RxParserHarness harness;
+  return harness.run();
 }

@@ -5,14 +5,27 @@
 #include "verilated.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
-static std::vector<uint16_t> words;
-static std::size_t rd_pos;
+namespace {
 
-static void append_frame(uint8_t type, uint16_t seq) {
+class MiiTxTagHarness {
+ public:
+  int run();
+
+ private:
+  void append_frame(uint8_t type, uint16_t seq);
+  void drive_fifo(Vbench_mii_tx &dut);
+  void tick(Vbench_mii_tx &dut);
+
+  std::vector<uint16_t> words;
+  std::size_t rd_pos = 0;
+};
+
+void MiiTxTagHarness::append_frame(uint8_t type, uint16_t seq) {
   std::vector<uint8_t> frame(60, 0);
   frame[12] = 0x88;
   frame[13] = 0xF7;
@@ -27,14 +40,14 @@ static void append_frame(uint8_t type, uint16_t seq) {
   }
 }
 
-static void drive_fifo(Vbench_mii_tx &dut) {
+void MiiTxTagHarness::drive_fifo(Vbench_mii_tx &dut) {
   const std::size_t left = words.size() - rd_pos;
   dut.f_empty_i = left == 0;
   dut.f_level_i = static_cast<uint8_t>(std::min<std::size_t>(left, 127));
   dut.f_data_i = left ? words[rd_pos] : 0;
 }
 
-static void tick(Vbench_mii_tx &dut) {
+void MiiTxTagHarness::tick(Vbench_mii_tx &dut) {
   drive_fifo(dut);
   dut.tx_clk_i = 0;
   dut.eval();
@@ -47,8 +60,7 @@ static void tick(Vbench_mii_tx &dut) {
   dut.eval();
 }
 
-int main(int argc, char **argv) {
-  Verilated::commandArgs(argc, argv);
+int MiiTxTagHarness::run() {
   append_frame(0x3, 0x1234);
   append_frame(0xA, 0xBEEF);
 
@@ -57,8 +69,8 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 3; ++i) tick(dut);
   dut.rst_n = 1;
 
-  const uint8_t expect_type[2] = {0x3, 0xA};
-  const uint16_t expect_seq[2] = {0x1234, 0xBEEF};
+  const std::array<uint8_t, 2> expect_type = {0x3, 0xA};
+  const std::array<uint16_t, 2> expect_seq = {0x1234, 0xBEEF};
   uint8_t last_done = dut.done_toggle_o;
   int seen = 0;
   for (int cycle = 0; cycle < 2000 && seen != 2; ++cycle) {
@@ -84,4 +96,12 @@ int main(int argc, char **argv) {
   }
   std::printf("PASS: two MII done toggles carried tags {3,1234}, {a,beef}\n");
   return 0;
+}
+
+}  // namespace
+
+int main(int argc, char **argv) {
+  Verilated::commandArgs(argc, argv);
+  MiiTxTagHarness harness;
+  return harness.run();
 }
