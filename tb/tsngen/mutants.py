@@ -32,9 +32,7 @@ there is nothing to prove and the arm says so rather than inventing a pass.
 
 from __future__ import annotations
 
-import os
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -45,10 +43,6 @@ RTL = (HERE / "../../hdl").resolve()
 sys.path.insert(0, str((HERE / "../").resolve()))
 
 from mutation_verdict import verdict  # noqa: E402
-
-#: One scenario run takes a few seconds; a mutant still running well past that
-#: is livelocked, and is reported as a hang rather than counted as a catch.
-MUTANT_RUN_TIMEOUT_S = 600
 
 #: the engine sources the suite elaborates, in the Makefile's order
 SOURCES = (
@@ -111,32 +105,26 @@ def build(suite):
 
 
 def run_harness(suite):
-    """(rc, stdout) of the staged run_tsngen.py; rc is "TIMEOUT" when killed."""
-    proc = subprocess.Popen([sys.executable, "run_tsngen.py"], cwd=suite,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, start_new_session=True)
-    try:
-        out, _ = proc.communicate(timeout=MUTANT_RUN_TIMEOUT_S)
-        return proc.returncode, out
-    except subprocess.TimeoutExpired:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        out, _ = proc.communicate()
-        return "TIMEOUT", out
-    finally:
-        if proc.poll() is None:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            proc.wait()
+    """(rc, stdout) of the staged run_tsngen.py.
+
+    No host deadline: tsngen_main.cpp puts an explicit tick ceiling on every
+    wait, so a mutant that stops the engine advancing still returns a verdict
+    rather than hanging.
+    """
+    out = subprocess.run([sys.executable, "run_tsngen.py"], cwd=suite,
+                         capture_output=True, text=True)
+    return out.returncode, out.stdout + out.stderr
+
 
 
 def main():
     passes = fails = 0
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     with tempfile.TemporaryDirectory(prefix="tsngen-mutants-") as td:
         work = Path(td)
 
         # -- positive control: the real RTL must still pass -------------------
         suite = stage(work, "clean")
-        answer = verdict(*run_harness(suite), MUTANT_RUN_TIMEOUT_S) \
+        answer = verdict(*run_harness(suite)) \
             if build(suite) else "did not compile"
         if answer == "skipped":
             print("SKIP: the suite itself skips here (no tsn-gen checkout), "
@@ -168,7 +156,7 @@ def main():
                 print(f"[FAIL] mutation {name!r} did not compile; a mutant "
                       f"that cannot build proves nothing about the harness")
                 continue
-            answer = verdict(*run_harness(suite), MUTANT_RUN_TIMEOUT_S)
+            answer = verdict(*run_harness(suite))
             if answer == "caught":
                 passes += 1
                 print(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")
