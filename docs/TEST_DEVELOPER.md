@@ -96,6 +96,8 @@ Prefer independent protocol formulas and frame builders.
 - Checks Pdelay, Announce, Sync, and servo behavior.
 - Exercises reset, backpressure, ordering, and timeouts.
 - Reorders and withholds timestamp returns.
+- Sweeps every transmitted flags word by message type.
+- Pairs received frames differing only in ignored flag bits.
 
 ### Bench-tag suite
 

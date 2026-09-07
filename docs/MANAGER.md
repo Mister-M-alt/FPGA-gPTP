@@ -39,7 +39,7 @@ Measurements finished on 2026-08-27.
 | Complete engine | 4,719 | 3,639 | 1.5 | 4 | +2.249 ns |
 | Standalone microCPU | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
 
-The shipping image uses 932 words.
+The shipping image uses 931 words.
 
 The ROM capacity is 1,024 words.
 

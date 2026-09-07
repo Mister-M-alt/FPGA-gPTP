@@ -393,6 +393,36 @@ TX_CONTROL_BY_TYPE_C = {
     0xB: 0x5,  # Announce
 }
 
+# The 802.1AS-2011 flags word every message this plane transmits carries, in
+# wire order: flagField octet 0 in bits 15:8, octet 1 in bits 7:0.
+#
+# 11.4.2 takes the common header of 10.5.2 for Sync, Follow_Up, Pdelay_Req,
+# Pdelay_Resp and Pdelay_Resp_Follow_Up "except as noted in the following
+# subclauses", and 11.4.2.3 is such a note for the whole flags field:
+# Table 11-4 defines twoStepFlag for Sync and Pdelay_Resp alone, and "for
+# message types where the bit is not defined in Table 11-4, the value of the
+# bit is set to FALSE". So the media-dependent table REPLACES Table 10-6 for
+# those five, including its all-message ptpTimescale entry, and each of them
+# transmits 0x0200 or 0x0000 and nothing else. Announce is not in 11.4.1's
+# list and keeps the common 10.5.2.2.6 value.
+#
+# Cor1-2013 renumbers twoStepFlag to octet 0 bit 2 and ptpTimescale to octet 1
+# bit 4. Under the 6.3.4.2 numbering, where bit 1 is the least significant of
+# an octet, both wire masks are the ones below (FPGA-gPTP #64).
+#
+# One entry per type, like the control map above, so the wire value is stated
+# once: this defect was two header call sites restating the rule and getting
+# it wrong. 11.4.1 also requires reserved fields transmitted zero and IGNORED
+# on reception, so nothing here is a receive predicate.
+TX_FLAGS_BY_TYPE_C = {
+    0x0: 0x0200,  # Sync: twoStepFlag
+    0x2: 0x0000,  # Pdelay_Req
+    0x3: 0x0200,  # Pdelay_Resp: twoStepFlag
+    0x8: 0x0000,  # Follow_Up
+    0xA: 0x0000,  # Pdelay_Resp_Follow_Up
+    0xB: 0x0008,  # Announce: ptpTimescale, the common Table 10-6 entry
+}
+
 # ---- register conventions --------------------------------------------------
 R0, RA, RB, RC, RD_, RT, RU, RSEC, RNS, RP = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
 RV, RW = 10, 11
@@ -525,10 +555,16 @@ def e_flag_gate(p: Prog, mask: int, want: int, tag: str,
     p.label(f"fg_{tag}")
 
 
-def e_hdr(p: Prog, mtype: int, flags: int, seq_reg: int, logint: int,
+def e_hdr(p: Prog, mtype: int, seq_reg: int, logint: int,
           msglen: int) -> None:
-    """Bytes 0..47: eth + 802.1AS common header."""
+    """Bytes 0..47: eth + 802.1AS common header.
+
+    controlField and the flags word are both properties of the message type,
+    so both are read from their maps rather than passed: a call site cannot
+    hand this builder a flags word the standard does not allow for the type
+    it is building."""
     control = TX_CONTROL_BY_TYPE_C[mtype]
+    flags = TX_FLAGS_BY_TYPE_C[mtype]
     p.emit("RDST", rd=RC, imm=RG_SCR | S_HDR8, fmt=FMT_Q)
     p.emit("BFLD", ra=RC, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_SALO, fmt=FMT_Q)
@@ -836,7 +872,7 @@ def prog_rx_pdreq(base: int) -> Prog:
     p.emit("WRST", ra=RB, imm=RG_SCR | S_RQCID, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_BANK | 3, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_RQPN, fmt=FMT_Q)
-    e_hdr(p, 0x3, 0x0200, RA, 0x7F, 54)
+    e_hdr(p, 0x3, RA, 0x7F, 54)
     e_ts_fields(p, RTS0)
     p.emit("RDST", rd=RB, imm=RG_SCR | S_RQCID, fmt=FMT_Q)
     p.emit("BFLD", ra=RB, fmt=FMT_Q)
@@ -1194,7 +1230,7 @@ def _tmr_pdelay_request(p):
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)  # no arm yet
     p.emit("RDST", rd=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
-    e_hdr(p, 0x2, 0x0000, RA, 0x00, 54)
+    e_hdr(p, 0x2, RA, 0x00, 54)
     p.emit("BFLD", ra=0, fmt=FMT_Q)
     p.emit("BFLD", ra=0, fmt=FMT_Q)
     p.emit("BFLD", ra=0, fmt=FMT_D)
@@ -1544,7 +1580,7 @@ def prog_leg_rfu(base: int) -> Prog:
     we just sent, addressed to the stored requestingPortIdentity."""
     p = Prog(base)
     p.emit("RDST", rd=RA, imm=RG_SCR | S_RQSEQ, fmt=FMT_Q)
-    e_hdr(p, 0xA, 0x0000, RA, 0x7F, 54)
+    e_hdr(p, 0xA, RA, 0x7F, 54)
     e_ts_fields(p, RTS0)
     p.emit("RDST", rd=RB, imm=RG_SCR | S_RQCID, fmt=FMT_Q)
     p.emit("BFLD", ra=RB, fmt=FMT_Q)
@@ -1560,7 +1596,7 @@ def prog_leg_syncfu(base: int) -> Prog:
     preciseOriginTimestamp, plus the 802.1AS information TLV."""
     p = Prog(base)
     p.emit("RDST", rd=RA, imm=RG_SCR | S_SSEQFLY, fmt=FMT_Q)
-    e_hdr(p, 0x8, 0x0008, RA, 0xFD, 76)
+    e_hdr(p, 0x8, RA, 0xFD, 76)
     e_ts_fields(p, RTS0)                             # preciseOrigin = t1
     p.emit("MOVE", rd=RT, ra=0, imm=0x03001C)        # TLV type 3, len 28
     p.emit("BFLD", ra=RT, fmt=FMT_D)
@@ -1600,7 +1636,7 @@ def prog_leg_synctx(base: int) -> Prog:
     # no type-0 timestamp can clear the claim (#39).
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=0xFFFF)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_SSEQFLY, fmt=FMT_Q)
-    e_hdr(p, 0x0, 0x0208, RA, 0xFD, 44)
+    e_hdr(p, 0x0, RA, 0xFD, 44)
     # 802.1AS-2011 Table 11-8: a two-step Sync carries ten reserved
     # bytes, all zero. The actual egress time arrives through the TX
     # timestamp event and is written into the paired Follow_Up.
@@ -1630,7 +1666,7 @@ def prog_leg_anntx(base: int) -> Prog:
     p.emit("END")
     p.label("go")
     p.emit("RDST", rd=RA, imm=RG_SCR | S_ASEQ, fmt=FMT_Q)
-    e_hdr(p, 0xB, 0x0008, RA, 0x00, 76)
+    e_hdr(p, 0xB, RA, 0x00, 76)
     p.emit("BFLD", ra=0, fmt=FMT_Q)                  # 10 reserved bytes
     p.emit("BFLD", ra=0, fmt=FMT_W)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_ANNBODY, fmt=FMT_Q)

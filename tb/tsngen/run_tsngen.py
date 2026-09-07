@@ -73,14 +73,21 @@ IFACE = {
 # The values 802.1AS-2011 pins on the wire, by clause — cross-checked
 # below against the YAMLs' own `expected: value` entries so neither
 # copy can drift.
+#
+# The flags words are 11.4.2.3 and Table 11-4, which override the common
+# flags field of 10.5.2.2.6 for the five Ethernet messages of 11.4.1:
+# twoStepFlag for Sync and Pdelay_Resp, every other bit FALSE. Announce is
+# outside that list and keeps the common ptpTimescale. These are TRANSMIT
+# values; the received frames built further down deliberately carry the
+# reserved bit, which 11.4.1 has the receiver ignore (FPGA-gPTP #64).
 HDR_COMMON = {"transport_specific": 1, "reserved0": 0, "version_ptp": 2,
               "domain_number": 0, "reserved1": 0, "reserved2": 0}
 SPEC = {
     "sync": dict(HDR_COMMON, message_type=0x0, message_length=44,
-                 flags=0x0208, correction_field=0, control=0x00,
+                 flags=0x0200, correction_field=0, control=0x00,
                  log_message_interval=0xFD, origin_timestamp=0),
     "fu": dict(HDR_COMMON, message_type=0x8, message_length=76,
-               flags=0x0008, control=0x02, log_message_interval=0xFD,
+               flags=0x0000, control=0x02, log_message_interval=0xFD,
                tlv_type=0x0003, tlv_length=28, tlv_org_id=0x0080C2,
                tlv_org_subtype=1),
     "ann_pt1": dict(HDR_COMMON, message_type=0xB, message_length_pt1=76,
@@ -189,10 +196,12 @@ for key, svc in (("sync", "as_sync"), ("fu", "as_follow_up"),
                  ("pdresp", "as_pdelay_resp"),
                  ("pdrfu", "as_pdelay_resp_fu")):
     got = PINS.get(svc, {})
-    # the YAMLs pin fewer fields than they used to (flags moved to a
-    # documented two-value exception); agreement is enforced on the
+    # the YAMLs pin fewer fields than they used to (the Sync and Follow_Up
+    # flags moved to a documented two-value exception, which is a tsn-gen
+    # question and not this repository's); agreement is enforced on the
     # intersection, and a floor on the pin count catches a YAML whose
-    # expectations vanish entirely
+    # expectations vanish entirely. SPEC above states the strict clause
+    # values, so a YAML that pins `flags` again is compared against them
     shared = [f for f in SPEC[key] if f in got]
     tally.expect(f"yaml pin coverage {svc}", len(shared) >= 5, True)
     for f in shared:
@@ -358,10 +367,14 @@ expected_offsets = []
 for seed in FU_SEEDS:
     syehex, _ = eth(seed)
     syhex, _ = pg_gen("sync", seed)
-    # flags are PDU bytes 6..7; the YAML allows one-step 0x0200 and
-    # two-step 0x0208, and one-step reception is deliberately not
-    # implemented, so pin the two-step shape and re-decode. The engine
-    # pairs a Follow_Up with its pending Sync by sequenceId AND
+    # flags are PDU bytes 6..7. These are RECEIVED frames, and 11.4.1 has
+    # the receiver ignore reserved fields, so they deliberately carry
+    # 0x0208 and 0x0008 - twoStepFlag plus the bit 11.4.2.3 takes out of a
+    # transmitted Sync, and the shape a peer was captured sending. The
+    # suite therefore keeps a receive-tolerance input while SPEC above
+    # stays strict about what this plane transmits.
+    #
+    # The engine pairs a Follow_Up with its pending Sync by sequenceId AND
     # sourcePortIdentity (11.2.14), and two independently generated
     # frames carry unrelated random sources, so pin both (PDU bytes
     # 20..29) to one identity - the adopted parent, the identity a
@@ -370,7 +383,7 @@ for seed in FU_SEEDS:
     syhex = patch(patch(syhex, 6, 0x02), 7, 0x08)
     syhex = syhex[:2 * 20] + src_hex + syhex[2 * 30:]
     syf = pg_decode("sync", syhex)
-    tally.expect(f"sync twoStep pinned [{seed}]", syf["flags"], 0x0208)
+    tally.expect(f"sync rx flags pinned [{seed}]", syf["flags"], 0x0208)
     tally.expect(f"sync from parent [{seed}]",
            syf["source_clock_identity"], bmca.parent)
     fuehex, _ = eth(seed + 50)
@@ -381,6 +394,7 @@ for seed in FU_SEEDS:
     seq = syf["sequence_id"]
     fuhex = patch(patch(fuhex, 30, seq >> 8), 31, seq & 0xFF)
     fuf = pg_decode("fu", fuhex)
+    tally.expect(f"fu rx flags pinned [{seed}]", fuf["flags"], 0x0008)
     tally.expect(f"fu seq paired [{seed}]", fuf["sequence_id"], seq)
     trx = rxts
     script.append(f"RX {syehex}{syhex} {trx}")
