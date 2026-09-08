@@ -34,6 +34,13 @@
 //         phase 7 holds an equal-sequence Sync and Pdelay_Resp, returns
 //         the response stamp first, stamps its unclaimed Resp_FU, then
 //         proves the Sync still receives its own timestamp (#28)
+//  7c     802.1AS-2011 11.4.1/11.4.2.3: the Pdelay flag bits a receiver
+//         ignores. Three exchanges differing only in the flags word --
+//         0200/0000, the captured 0208/0008, and twoStep flipped -- each
+//         compute the same modelled delay, while a cut response, one at a
+//         neighbour's requesting clockIdentity and a Follow_Up at a
+//         foreign requesting portNumber stay refused while carrying the
+//         reserved bit (#64)
 //  7b     802.1AS-2011 11.2.15.3: a Pdelay_Resp_Follow_Up pairs with one
 //         Pdelay_Resp for the outstanding request only -- before any
 //         Resp, with a stale sequenceId, behind a stale Resp (0xEEEE,
@@ -69,6 +76,9 @@
 //         not consume the pending Sync; the complete one pairs (#11)
 // 11d     a Sync padded to the 60-byte Ethernet minimum, and one padded
 //         to 74, still pair
+// 11e     three Sync/Follow_Up pairs differing only in their flags word
+//         -- 0200/0000, 0208/0008 and twoStep flipped -- pair, steer and
+//         re-base the PHC alike (Table 11-4 ignored on reception, #64)
 // 13..15  the servo: step-vs-slew at 20 us, the PI addend against an
 //         exact-integer mirror, closed-loop lock on a +140 ppm master
 //         (one re-base carrying the surviving integrator)
@@ -95,6 +105,11 @@
 // 32      start, middle, one-cycle and long TX backpressure preserve bytes;
 //         two peer requests wait behind one response claim and each gets
 //         its own response Follow_Up after its own boundary stamp (#40/#33)
+// 33      every frame the run transmitted, swept by messageType against
+//         11.4.2.3/Table 11-4: Pdelay_Req, Follow_Up and
+//         Pdelay_Resp_Follow_Up carry 0x0000, Sync and Pdelay_Resp carry
+//         0x0200, none of the five carries the reserved 0x0008, and
+//         Announce keeps the common 10.5.2.2.6 ptpTimescale (#64)
 //
 // All frames and expectations built independently from 802.1AS-2011 +
 // Milan v1.2 4.2.6. The pdelay model mirrors the SPEC formula in exact
@@ -187,6 +202,7 @@ class GptpEngineHarness {
     check_our_announce();
     check_our_sync_and_follow_up();
     pair_a_follow_up_only_with_the_outstanding_resp();
+    pair_a_pdelay_exchange_whose_flag_bits_are_ignored();
     stay_master_against_a_worse_announce();
     refuse_a_better_announce_in_a_foreign_domain();
     refuse_unqualified_announces_and_admit_the_controls();
@@ -202,6 +218,7 @@ class GptpEngineHarness {
     never_steer_from_a_foreign_domain_sync_pair();
     never_steer_from_a_follow_up_without_its_tlv();
     pair_a_padded_sync();
+    pair_a_sync_whose_flag_bits_are_ignored();
     drop_sync_ok_at_the_receipt_timeout();
     step_the_phc_on_a_one_millisecond_offset();
     slew_on_a_five_microsecond_offset();
@@ -231,6 +248,7 @@ class GptpEngineHarness {
     recover_the_response_claim_across_reset();
     recover_the_sync_cadence_across_reset();
     hold_two_response_claims_under_backpressure();
+    hold_the_media_dependent_transmit_flags();
 
     printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
     return fails ? 1 : 0;
@@ -286,9 +304,11 @@ class GptpEngineHarness {
   // and scaledLastGmFreqChange). Until #11 every Follow_Up this suite sent
   // stopped after the timestamp: the shape the parser wrongly accepted was
   // the shape the bench called valid
+  //! `flags` is 11.4.2.3's transmitted value by default. A probe passes
+  //! another only to prove the receiver ignores those bits (11.4.1).
   Frame follow_up(uint16_t seq, uint64_t corr, uint64_t origin,
-                  uint64_t src = PEER_CID) {
-    Frame g = ptp(0x8, seq, corr, 0x0000, 42, src);
+                  uint64_t src = PEER_CID, uint16_t flags = 0x0000) {
+    Frame g = ptp(0x8, seq, corr, flags, 42, src);
     g.ts(origin);
     g.u16(0x0003); g.u16(28);
     g.u8(0x00); g.u8(0x80); g.u8(0xC2);
@@ -704,6 +724,14 @@ class GptpEngineHarness {
     // 802.1AS-2011 Table 11-7: Sync and Follow_Up have their own control
     // values; Announce and every Pdelay message use the delay-management
     // value. Keep this oracle independent from the µcode header builder.
+    //
+    // The caller's `flags` is checked byte-exact for the same reason. For
+    // the five Ethernet messages of 11.4.1 that value comes from 11.4.2.3
+    // and Table 11-4, which override the common flags field of 10.5.2.2.6:
+    // twoStepFlag for Sync and Pdelay_Resp, every other bit FALSE. Announce
+    // is outside that list and keeps the common ptpTimescale. The whole
+    // transmitted set is swept once more in
+    // hold_the_media_dependent_transmit_flags below (#64).
     uint8_t control = 0x05;
     if (mtype == 0x0) control = 0x00;
     if (mtype == 0x8) control = 0x02;
@@ -1354,7 +1382,7 @@ class GptpEngineHarness {
     std::vector<uint8_t> sy = wait_tx(0x0, 800000, &sidx);
     uint16_t sseq = 0;
     if (!sy.empty()) {
-      check_common("sync", sy, 0x0, 0x0208, 44, 0xFD);
+      check_common("sync", sy, 0x0, 0x0200, 44, 0xFD);
       uint8_t reserved = 0;
       for (int i = 48; i < 58; i++) reserved |= sy[i];
       expect("sync reserved body zero", reserved, 0);
@@ -1422,7 +1450,7 @@ class GptpEngineHarness {
     expect("sync collision: own stamp still builds Sync FU",
            fu.empty() ? 0 : 1, 1);
     if (!fu.empty()) {
-      check_common("syncfu", fu, 0x8, 0x0008, 76, 0xFD);
+      check_common("syncfu", fu, 0x8, 0x0000, 76, 0xFD);
       expect("syncfu seq", fld16(fu, 44), sseq);
       expect("syncfu origin", fld48(fu, 48) * 1000000000ull + fld32(fu, 54),
              SYNC_COLLISION_TS);
@@ -1433,19 +1461,23 @@ class GptpEngineHarness {
     pd_seen = txf.size();
   }
 
-  // the last argument is requestingPortIdentity.portNumber: ours
-  // unless a probe addresses the frame to another port of this clock
+  // rpn is requestingPortIdentity.portNumber: ours unless a probe
+  // addresses the frame to another port of this clock. `flags` is
+  // 11.4.2.3's transmitted value by default; a probe passes another only
+  // to prove the receiver ignores those bits (11.4.1)
   void resp(uint16_t s, uint64_t src, uint64_t t2v, uint64_t rx,
-            uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID) {
-    Frame f = ptp(0x3, s, 0, 0x0200, 20, src);
+            uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID,
+            uint16_t flags = 0x0200) {
+    Frame f = ptp(0x3, s, 0, flags, 20, src);
     f.ts(t2v); f.u64(rcid); f.u16(rpn);
     send_frame(f.b, rx);
     run(2000);
   }
 
   void rfu(uint16_t s, uint64_t src, uint64_t t3v, uint64_t rx,
-           uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID) {
-    Frame g = ptp(0xA, s, 0, 0x0000, 20, src);
+           uint16_t rpn = OUR_PN, uint64_t rcid = OUR_CID,
+           uint16_t flags = 0x0000) {
+    Frame g = ptp(0xA, s, 0, flags, 20, src);
     g.ts(t3v); g.u64(rcid); g.u16(rpn);
     send_frame(g.b, rx);
     run(6000);
@@ -1591,6 +1623,144 @@ class GptpEngineHarness {
            static_cast<uint32_t>(pdm.d));
     expect("still capable after the probes",
            dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    pd_seen = txf.size();                  // the peer answers fresh ones only
+    pd_mode = PD_NORMAL;
+  }
+
+  // ---- 7c: the Pdelay flag bits a receiver must ignore ------------------
+  // 802.1AS-2011 Table 11-4 makes Pdelay_Resp's twoStepFlag "reserved as
+  // TRUE, ignored on reception", and 11.4.1 makes every reserved field
+  // "transmitted with all bits of the field 0 and ignored by the receiver".
+  // So an otherwise qualifying exchange must reach the SAME verdict
+  // whatever those bits carry: the 0x0208 shape a peer was captured
+  // transmitting, and the shape with twoStepFlag cleared, must compute the
+  // same delay as the conformant 0x0200/0x0000 pair (#64).
+  //
+  // Each variant answers a FRESH request, because a completed exchange
+  // cannot complete twice (Figure 11-8 as corrected by Cor2), and each is
+  // graded against the independent model rather than against the previous
+  // variant's published value.
+  //
+  // Every variant also carries its OWN turnaround residency, so the delay
+  // it should publish is ~200 ns from the one standing before it -- phase
+  // 7b's +600 included, which is why the ladder starts at +500 -- and all
+  // of them sit inside the Milan window that keeps asCapable up. Without
+  // that a dropped variant would leave a stale delay the model happened to
+  // predict anyway: three exchanges of identical shape compute the same
+  // value, and the check would have passed on a receiver that refused the
+  // frame outright. That was measured, not assumed: with one residency for
+  // all three, the reserved-bit parser mutant in this lane's evidence
+  // satisfied the delay check anyway and was caught by the drop counter
+  // alone; against the ladder it fails the delay check by its own name as
+  // well. The ladder is not left to inspection either: each
+  // variant first asserts that its own prediction differs from the value
+  // already published, so an edit that flattens it fails here by name
+  // instead of quietly weakening the check behind it.
+  //
+  // The controls afterwards carry the reserved bit too. Tolerating an
+  // ignored bit must not have become a blanket acceptance, so a malformed
+  // response, a response at a neighbour's requesting clockIdentity and a
+  // Follow_Up at a foreign requesting portNumber are all still refused
+  // while carrying it, and the correct pair behind them still computes.
+  void pair_a_pdelay_exchange_whose_flag_bits_are_ignored() {
+    struct Variant {
+      const char *tag;
+      uint16_t resp;
+      uint16_t rfu;
+      uint64_t resid;            // D is about (t4 - t1 - resid) / 2
+    };
+    const Variant variants[] = {
+      {"pdelay flags 0200/0000", 0x0200, 0x0000, 20200},  // conformant, ~500
+      {"pdelay flags 0208/0008", 0x0208, 0x0008, 20600},  // captured, ~300
+      {"pdelay flags 0000/0200", 0x0000, 0x0200, 21000},  // flipped, ~100
+    };
+    pd_mode = PD_SKIP;
+    int computed = 0;
+    uint32_t previous = dut->pub_pdelay_ns_o;
+    for (const Variant &v : variants) {
+      char n[96];
+      tx_seen = txf.size();
+      std::vector<uint8_t> rq = wait_tx(0x2, 4000000);
+      snprintf(n, sizeof n, "%s: a request to answer", v.tag);
+      expect(n, rq.empty() ? 0 : 1, 1);
+      if (rq.empty()) continue;
+      const uint16_t seq = fld16(rq, 44);
+      const size_t rqi = tx_seen - 1;
+      for (int k = 0; k < 400 && txns[rqi] == 0; k++) tick();
+      const uint64_t t1 = txns[rqi];
+      const uint64_t t2 = peer_ns(t1 + 300);
+      const uint64_t t3 = t2 + v.resid;
+      const uint64_t t4 = t1 + 21200;
+      const uint16_t drops = dut->dbg_rx_drop_o;
+      resp(seq, PEER_CID, t2, t4, OUR_PN, OUR_CID, v.resp);
+      rfu(seq, PEER_CID, t3, t4 + 1000, OUR_PN, OUR_CID, v.rfu);
+      model_exchange(t1, t2, t3, t4);
+      // the guard on the check below, and it grades the BENCH: an
+      // expectation equal to the delay already published would be met by a
+      // frame that never arrived, so each variant must predict one of its
+      // own before its published value is allowed to satisfy anything
+      snprintf(n, sizeof n, "%s: a delay of its own", v.tag);
+      expect(n, static_cast<uint32_t>(pdm.d) != previous, 1);
+      snprintf(n, sizeof n, "%s: the exchange computes", v.tag);
+      expect(n, dut->pub_pdelay_ns_o, static_cast<uint32_t>(pdm.d));
+      previous = dut->pub_pdelay_ns_o;
+      snprintf(n, sizeof n, "%s: not a parser drop", v.tag);
+      expect(n, dut->dbg_rx_drop_o, drops);
+      snprintf(n, sizeof n, "%s: keeps capable", v.tag);
+      expect(n, dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+      computed++;
+    }
+    expect("every ignored-flag pdelay variant ran", computed, 3);
+    refuse_bad_pdelay_frames_carrying_the_reserved_bit();
+  }
+
+  void refuse_bad_pdelay_frames_carrying_the_reserved_bit() {
+    tx_seen = txf.size();
+    std::vector<uint8_t> rq = wait_tx(0x2, 4000000);
+    expect("7c: a request for the controls", rq.empty() ? 0 : 1, 1);
+    if (rq.empty()) { pd_seen = txf.size(); pd_mode = PD_NORMAL; return; }
+    const uint16_t seq = fld16(rq, 44);
+    const size_t rqi = tx_seen - 1;
+    for (int k = 0; k < 400 && txns[rqi] == 0; k++) tick();
+    const uint64_t t1 = txns[rqi];
+    const uint64_t t2 = peer_ns(t1 + 300);
+    const uint64_t t3 = t2 + 20000;
+    const uint64_t t4 = t1 + 21200;
+    pd0 = dut->pub_pdelay_ns_o;
+    fl0 = dut->pub_flags_o;
+
+    // (a) malformed: a 54-octet Pdelay_Resp declared and cut at 53, with
+    // the reserved bit set. The parser refuses the frame and counts it
+    const uint16_t drops = dut->dbg_rx_drop_o;
+    Frame cut = ptp(0x3, seq, 0, 0x0208, 20, PEER_CID);
+    cut.ts(t2); cut.u64(OUR_CID); cut.u16(OUR_PN);
+    cut.b.resize(67);
+    send_frame(cut.b, t4);
+    run(2000);
+    expect("reserved-bit cut Resp: dropped and counted", dut->dbg_rx_drop_o,
+           static_cast<uint16_t>(drops + 1));
+    unmoved("reserved-bit cut Resp");
+
+    // (b) wrong identity: every other gate admits it, and NEAR_CID shares
+    // OUR_CID's low half, so a compare narrowed to that half takes it
+    resp(seq, PEER_CID, t2, t4, OUR_PN, NEAR_CID, 0x0208);
+    rfu(seq, PEER_CID, t3, t4 + 1000, OUR_PN, OUR_CID, 0x0008);
+    unmoved("reserved-bit Resp at a neighbour's identity");
+
+    // (c) the legitimate response arms the pairing; a Follow_Up addressed
+    // to another port of this clock is still not its partner
+    resp(seq, PEER_CID, t2, t4, OUR_PN, OUR_CID, 0x0208);
+    rfu(seq, PEER_CID, t3, t4 + 1100, FOREIGN_PN, OUR_CID, 0x0008);
+    unmoved("reserved-bit Follow_Up at a foreign port");
+
+    // (d) the pair that is wrong in nothing but those ignored bits still
+    // computes, so none of the refusals above passed vacuously
+    rfu(seq, PEER_CID, t3, t4 + 1200, OUR_PN, OUR_CID, 0x0008);
+    model_exchange(t1, t2, t3, t4);
+    expect("reserved-bit pair still computes", dut->pub_pdelay_ns_o,
+           static_cast<uint32_t>(pdm.d));
+    expect("reserved-bit pair keeps capable", dut->pub_flags_o & FL_ASCAP,
+           FL_ASCAP);
     pd_seen = txf.size();                  // the peer answers fresh ones only
     pd_mode = PD_NORMAL;
   }
@@ -2475,6 +2645,72 @@ class GptpEngineHarness {
       snprintf(n, sizeof n, "%s pairs: re-bases the phc", p.tag);
       expect(n, !steps_seen.empty() && svm.stepped &&
                     steps_seen.back() == svm.step_val, 1);
+    }
+  }
+
+  // ---- 11e: the Sync flag bits a receiver must ignore -------------------
+  // 802.1AS-2011 Table 11-4 makes Sync's twoStepFlag "reserved as TRUE,
+  // ignored on reception" and defines no other bit for Sync or Follow_Up,
+  // and 11.4.1 makes reserved fields "ignored by the receiver". Three
+  // pairs differing ONLY in that flags word must therefore steer alike:
+  // the conformant 0x0200/0x0000 shapes, the same pair with the reserved
+  // 0x0008 added, and the pair with twoStepFlag cleared and set on the
+  // wrong message. A receiver that read those bits would refuse one of
+  // them, or would pick a one-step path and steer from the Sync (#64).
+  //
+  // Each pair carries its own sequenceId, ingress stamp and origin skew,
+  // so its offset is a value the previous pair cannot leave behind, and
+  // the outcome tuple of every variant is compared against the conformant
+  // one: same drop count, same pairing, same sync-ok, same PHC re-base.
+  void pair_a_sync_whose_flag_bits_are_ignored() {
+    struct Variant {
+      const char *tag;
+      uint16_t seq;
+      uint16_t sync_flags;
+      uint16_t fu_flags;
+      uint64_t skew;
+    };
+    const std::array<Variant, 3> variants = {{
+      {"sync flags 0200/0000", 0x0140, 0x0200, 0x0000, 444ull},
+      {"sync flags 0208/0008", 0x0141, 0x0208, 0x0008, 666ull},
+      {"sync flags 0000/0200", 0x0142, 0x0000, 0x0200, 888ull},
+    }};
+    //! {dropped nothing, paired exactly, sync-ok, re-based} per variant
+    unsigned reference = 0;
+    for (size_t i = 0; i < variants.size(); i++) {
+      const Variant &v = variants[i];
+      char n[96];
+      const uint16_t drops = dut->dbg_rx_drop_o;
+      const uint64_t TRXV =
+          TRX2 + 1400000000ull + static_cast<uint64_t>(v.seq) * 1000ull;
+      const uint64_t ORGV =
+          ORIGIN2 + 1400000000ull + static_cast<uint64_t>(v.seq) * 1000ull
+          - v.skew;
+      Frame f = ptp(0x0, v.seq, 0, v.sync_flags, 10);
+      f.ts(0);
+      send_frame(f.b, TRXV);
+      run(2000);
+      Frame g = follow_up(v.seq, CORR_NS << 16, ORGV, PEER_CID, v.fu_flags);
+      send_frame(g.b, TRXV + 500);
+      run(6000);
+      const uint64_t OFFV =
+          TRXV - (ORGV + CORR_NS + static_cast<uint64_t>(pdm.d));
+      servo_mirror(static_cast<int64_t>(OFFV));
+      const unsigned outcome =
+          (dut->dbg_rx_drop_o == drops ? 1u : 0u)
+          | (static_cast<uint32_t>(dut->pub_offset_o)
+                 == static_cast<uint32_t>(OFFV) ? 2u : 0u)
+          | ((dut->pub_flags_o & FL_SYNCOK) ? 4u : 0u)
+          | (!steps_seen.empty() && svm.stepped &&
+             steps_seen.back() == svm.step_val ? 8u : 0u);
+      snprintf(n, sizeof n, "%s: pairs and steers", v.tag);
+      expect(n, outcome, 15u);
+      if (i == 0) {
+        reference = outcome;
+      } else {
+        snprintf(n, sizeof n, "%s: same outcome as conformant", v.tag);
+        expect(n, outcome, reference);
+      }
     }
   }
 
@@ -3437,6 +3673,68 @@ class GptpEngineHarness {
     dut->tx_ready_i = 1;
     auto_txts = true;
     pd_mode = PD_NORMAL;
+  }
+
+  // ---- 33: the flags word of every frame this run transmitted -----------
+  // The per-phase checks above grade one frame of each kind at one moment.
+  // This grades EVERY frame the plane put on the wire during the whole
+  // run, against a table written from the clauses rather than from the
+  // generator, so a message built correctly in the phase that inspects it
+  // and wrongly anywhere else still fails here.
+  //
+  // 11.4.2 takes the common header of 10.5.2 for the five Ethernet
+  // messages of 11.4.1 "except as noted in the following subclauses", and
+  // 11.4.2.3 is such a note for the whole flags field: Table 11-4 defines
+  // twoStepFlag for Sync and Pdelay_Resp alone, and every bit it does not
+  // define for a message type is FALSE. That override removes the
+  // all-message ptpTimescale entry of Table 10-6 from those five, so each
+  // transmits 0x0200 or 0x0000. Announce is not one of them and keeps the
+  // common value. Cor1-2013 renumbers both bits without moving either
+  // mask, under the 6.3.4.2 numbering where bit 1 is least significant.
+  //
+  // The reserved-bit arm is named separately from the value arm so the
+  // transcript distinguishes "this message carries 0x0008" from "this
+  // message carries some other wrong word" (#64).
+  void hold_the_media_dependent_transmit_flags() {
+    struct Rule {
+      const char *name;
+      uint8_t mtype;
+      uint16_t flags;
+      bool media_dependent;      // 11.4.1's five, whose octet 1 is FALSE
+    };
+    const std::array<Rule, 6> rules = {{
+      {"Pdelay_Req TX",     0x2, 0x0000, true},
+      {"Pdelay_Resp TX",    0x3, 0x0200, true},
+      {"Pdelay_Resp_FU TX", 0xA, 0x0000, true},
+      {"Sync TX",           0x0, 0x0200, true},
+      {"Follow_Up TX",      0x8, 0x0000, true},
+      {"Announce TX",       0xB, 0x0008, false},
+    }};
+    for (const Rule &r : rules) {
+      char n[96];
+      size_t seen = 0, wrong = 0, reserved = 0;
+      uint16_t first_wrong = r.flags;
+      for (const std::vector<uint8_t> &f : txf) {
+        if (f.size() < 22 || (f[14] & 0xF) != r.mtype) continue;
+        seen++;
+        const uint16_t got = fld16(f, 20);
+        if (got != r.flags) {
+          if (!wrong) first_wrong = got;
+          wrong++;
+        }
+        if (r.media_dependent && (got & 0x0008)) reserved++;
+      }
+      snprintf(n, sizeof n, "%s frames seen", r.name);
+      expect(n, seen != 0, 1);
+      snprintf(n, sizeof n, "%s flags", r.name);
+      expect(n, first_wrong, r.flags);
+      snprintf(n, sizeof n, "%s flags on every frame", r.name);
+      expect(n, wrong, 0);
+      if (r.media_dependent) {
+        snprintf(n, sizeof n, "%s reserved bit 0x0008 clear", r.name);
+        expect(n, reserved, 0);
+      }
+    }
   }
 };
 
