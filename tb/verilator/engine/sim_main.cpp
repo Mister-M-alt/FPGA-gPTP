@@ -3712,7 +3712,9 @@ class GptpEngineHarness {
     }};
     for (const Rule &r : rules) {
       char n[96];
-      size_t seen = 0, wrong = 0, reserved = 0;
+      size_t seen = 0;
+      size_t wrong = 0;
+      size_t reserved = 0;
       uint16_t first_wrong = r.flags;
       for (const std::vector<uint8_t> &f : txf) {
         if (f.size() < 22 || (f[14] & 0xF) != r.mtype) continue;
