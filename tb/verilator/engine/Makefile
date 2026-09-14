@@ -17,6 +17,10 @@ CPP  = sim_main.cpp
 GEN = $(RTL_DIR)/ucode/gen_gptp_ucode.py
 GENARGS = --clk-hz 2000000 --cease-ms 3000
 
+.PHONY: all run mutants clean
+.DEFAULT_GOAL := all
+all: run mutants
+
 # The suite runs THREE times against the same build. Regression images seed
 # the request and Sync counters independently above 16 bits, where an
 # unbounded counter aliases into the claim's flags or messageType. Ordinary
@@ -35,6 +39,14 @@ run: gptp_ucode.hex
 	@python3 $(GEN) $(GENARGS) --sync-seq-seed 0x10000 -o syncseedrun/gptp_ucode.hex >/dev/null
 	@echo "-- again, with the Sync counter seeded above 16 bits --"
 	@cd syncseedrun && ../obj_dir/Vengine_sim
+
+# Rule 8: prove the checks above are load-bearing. Defects are injected into
+# the real engine RTL and the real micro-code generator, one at a time, and
+# each must make the SAME harness fail; the unmutated build must still pass.
+# Everything is staged into a temporary directory, so nothing is written into
+# the tree.
+mutants: gptp_ucode.hex
+	python3 mutants.py
 
 gptp_ucode.hex: $(GEN)
 	python3 $< $(GENARGS) -o $@

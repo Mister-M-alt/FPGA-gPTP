@@ -31,6 +31,7 @@ Parent integration owns these surrounding services:
 - Reset clears queues, timers, and pending events.
 - Scratch memory preserves warm-reset protocol state.
 - Reset invalidates outstanding timestamp claims.
+- Reset invalidates retained Pdelay pairing state.
 - Bootstrap microcode rearms required cadences.
 
 Keep every input synchronous to `clk_i`.
@@ -78,20 +79,71 @@ Outputs remain stable while ready stays low.
 
 The serializer blocks new event dispatches.
 
-## Egress timestamps
+## Egress timestamp results
 
-| Signal | Meaning |
-|---|---|
-| `txts_valid_i` | Qualifies one returned timestamp |
-| `txts_ns_i[63:0]` | Carries boundary time |
-| `txts_seq_i[15:0]` | Carries PTP sequence identifier |
-| `txts_type_i[3:0]` | Carries PTP message type |
+| Signal | Direction | Contract |
+|---|---|---|
+| `txts_valid_i` | Input | Offers one complete result |
+| `txts_ready_o` | Output | Accepts the offered result |
+| `txts_ns_i[63:0]` | Input | Carries boundary time |
+| `txts_seq_i[15:0]` | Input | Carries PTP sequence identifier |
+| `txts_type_i[3:0]` | Input | Carries PTP message type |
+| `txts_ok_i` | Input | Marks a measured result |
+| `txts_gen_i[3:0]` | Input | Carries the producer generation |
+
+A transfer needs both valid and ready.
+
+Hold every offered field stable until acceptance.
+
+Never replace an unaccepted offer.
+
+Ready stays low throughout reset.
+
+Ready stays low until dispatch consumes the result.
 
 Return tags must match transmitted headers.
 
-One pending timestamp register currently exists.
+Provide bounded result storage upstream of this interface.
 
-[Issue #31](https://github.com/Mister-M-alt/FPGA-gPTP/issues/31) tracks overwrite exposure.
+This interface never assumes elapsed time supplies space.
+
+### Lost results
+
+A cleared `txts_ok_i` reports an explicitly lost result.
+
+Such a result carries no usable time.
+
+It retires only the claim its tag names.
+
+It builds no timestamped Follow_Up companion.
+
+A lost request result cancels that request's pairing.
+
+A lost Sync result leaves that pairing untouched.
+
+A lost response result leaves that pairing untouched.
+
+Current microcode reads no generation field.
+
+## Transmit admission credit
+
+| Signal | Direction | Contract |
+|---|---|---|
+| `tx_credit_i` | Input | Permits initiating transmissions |
+
+Drive credit as a level, never a pulse.
+
+Low credit postpones three initiating beats.
+
+Those beats are Pdelay_Req, Sync and Announce.
+
+Each postponed beat retries at its next cadence.
+
+Responses and both companions always keep service.
+
+Low credit also postpones request interval bookkeeping.
+
+Restore credit to resume every normal cadence.
 
 ## PHC control
 
@@ -151,7 +203,10 @@ Set `CLK_HZ_P` to the actual engine frequency.
 - Preserve byte order and frame markers.
 - Hold transmit readiness correctly.
 - Return exact timestamp tags.
+- Hold result offers until acceptance.
+- Report unmeasured results explicitly.
+- Drive admission credit as a level.
 - Apply PHC pulses once.
 - Capture publication only on commit.
-- Review both open interface risks.
+- Review the open interface risk.
 - Run every repository gate.

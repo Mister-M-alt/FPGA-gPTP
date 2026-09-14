@@ -248,6 +248,11 @@ class GptpEngineHarness {
     recover_the_response_claim_across_reset();
     recover_the_sync_cadence_across_reset();
     hold_two_response_claims_under_backpressure();
+    deliver_two_results_at_every_separation();
+    retire_only_the_lost_result_s_own_claim();
+    hold_a_complete_pair_until_its_own_t1();
+    postpone_only_the_initiating_beats_without_credit();
+    stall_every_byte_position_of_one_frame();
     hold_the_media_dependent_transmit_flags();
 
     printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
@@ -357,6 +362,74 @@ class GptpEngineHarness {
   bool auto_txts = false;
   int auto_pend = -1;
 
+  // ---- the egress result face: valid/ready, the whole tuple held ------------
+  //! The engine takes a result only on a beat where valid and ready are both
+  //! high, so this harness models a PRODUCER: it offers one complete tuple
+  //! and holds every field of it stable until that beat happens. A one-cycle
+  //! pulse would be a silently lost transfer, and replacing an unaccepted
+  //! offer is exactly the defect under repair, so offer_result refuses to do
+  //! either rather than hide them.
+  bool ts_offer = false;
+  uint64_t ts_offer_ns = 0;
+  uint16_t ts_offer_seq = 0;
+  uint8_t ts_offer_type = 0;
+  bool ts_offer_ok = true;
+  uint8_t ts_offer_gen = 1;
+  uint64_t ts_beats = 0;          //!< accepted beats seen by the harness
+  uint64_t ts_offer_waits = 0;    //!< cycles an offer waited for ready
+  //! the value the last accepted beat carried, kept so a test can prove the
+  //! engine did not resample a later offer into an earlier result
+  uint64_t ts_last_taken_ns = 0;
+
+  void drive_result_face() {
+    dut->txts_valid_i = ts_offer ? 1 : 0;
+    dut->txts_ns_i    = ts_offer_ns;
+    dut->txts_seq_i   = ts_offer_seq;
+    dut->txts_type_i  = ts_offer_type;
+    dut->txts_ok_i    = ts_offer_ok ? 1 : 0;
+    dut->txts_gen_i   = ts_offer_gen;
+  }
+
+  //! Frames whose result this phase delivers by hand, named by the tag the
+  //! parent stamper would report. The automatic producer skips exactly
+  //! these, so withholding one frame's result never silences the stamps of
+  //! unrelated frames: that would leave a claim standing for the wrong
+  //! reason and make a later assertion pass or fail by accident.
+  std::vector<std::pair<uint8_t, uint16_t>> withheld;
+
+  void withhold(uint8_t type, uint16_t seq) {
+    withheld.emplace_back(type, seq);
+  }
+
+  void release_withheld() { withheld.clear(); }
+
+  void release_withheld(uint8_t type, uint16_t seq) {
+    for (size_t i = 0; i < withheld.size(); i++)
+      if (withheld[i].first == type && withheld[i].second == seq) {
+        withheld.erase(withheld.begin() + static_cast<long>(i));
+        return;
+      }
+  }
+
+  bool is_withheld(size_t idx) {
+    for (const std::pair<uint8_t, uint16_t> &w : withheld)
+      if (w.first == type_of(txf[idx]) && w.second == seq_of(txf[idx]))
+        return true;
+    return false;
+  }
+
+  void offer_result(uint64_t ns, uint16_t seq, uint8_t type,
+                    bool ok = true, uint8_t gen = 1) {
+    if (ts_offer)
+      expect("producer never replaces an unaccepted result", 1, 0);
+    ts_offer = true;
+    ts_offer_ns = ns;
+    ts_offer_seq = seq;
+    ts_offer_type = type;
+    ts_offer_ok = ok;
+    ts_offer_gen = gen;
+  }
+
   // ---- the PHC: a live timestamp_counter model the servo can steer ----------
   // Q24 accumulator, 500 ns nominal per tick (2 MHz); adjfine addend and
   // adjtime steps applied exactly as the parent counter would
@@ -368,16 +441,20 @@ class GptpEngineHarness {
   uint64_t phc() { return static_cast<uint64_t>(phc_acc >> 24); }
 
   void tick() {
-    if (auto_pend >= 0 && !dut->txts_valid_i) {
-      uint64_t ns = phc() + 200;                   // MAC pipeline latency
-      dut->txts_valid_i = 1;
-      dut->txts_ns_i = ns;
-      dut->txts_seq_i = seq_of(txf[auto_pend]);
-      dut->txts_type_i = type_of(txf[auto_pend]);
-      txns[auto_pend] = ns;
-      auto_pend = -1;
+    if (auto_pend >= 0 && !ts_offer) {
+      if (is_withheld(static_cast<size_t>(auto_pend))) {
+        auto_pend = -1;                            // this phase delivers it
+      } else {
+        uint64_t ns = phc() + 200;                 // MAC pipeline latency
+        offer_result(ns, seq_of(txf[auto_pend]), type_of(txf[auto_pend]));
+        txns[auto_pend] = ns;
+        auto_pend = -1;
+      }
     }
+    drive_result_face();
     dut->clk_i = 0; dut->eval();
+    //! the accepted beat is sampled where the engine samples it
+    const bool ts_beat = ts_offer && dut->txts_ready_o;
     const bool tx_fire = dut->tx_valid_o && dut->tx_ready_i;
     const uint8_t tx_data = dut->tx_data_o;
     const bool tx_sof = dut->tx_sof_o;
@@ -415,11 +492,27 @@ class GptpEngineHarness {
         in_tx = false;
       }
     }
-    dut->txts_valid_i = 0;                 // a pulse lasts exactly one edge
+    if (ts_beat) {
+      ts_offer = false;
+      ts_beats++;
+      ts_last_taken_ns = ts_offer_ns;
+    } else if (ts_offer) {
+      ts_offer_waits++;
+    }
     cyc++;
   }
 
   void run(uint64_t n) { while (n--) tick(); }
+
+  //! Settle whatever result the automatic producer still owes, BOUNDED in
+  //! DUT cycles. A result face that stops accepting must fail this suite,
+  //! not hang it: an unbounded drain would turn a wedged result path into
+  //! a stalled process, and a stalled process is not a verdict.
+  void drain_automatic_results() {
+    for (int k = 0; k < 200000 && (auto_pend >= 0 || ts_offer); k++) tick();
+    if (auto_pend >= 0 || ts_offer)
+      expect("the result face keeps accepting", 0, 1);
+  }
 
   void send_frame(const std::vector<uint8_t> &bytes, uint64_t rx_ts) {
     dut->rx_ts_i = rx_ts;
@@ -434,15 +527,20 @@ class GptpEngineHarness {
     dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
   }
 
-  //! stamp one CHOSEN transmitted frame, reporting its own header identity
-  //! the way KL_gptp_txstamp does
-  void txts_idx(size_t idx, uint64_t ns) {
-    dut->txts_valid_i = 1; dut->txts_ns_i = ns;
-    dut->txts_seq_i = idx < txf.size() ? seq_of(txf[idx]) : 0;
-    dut->txts_type_i = idx < txf.size() ? type_of(txf[idx]) : 0;
-    tick();
-    dut->txts_valid_i = 0;
+  //! Offer one CHOSEN transmitted frame's result, reporting its own header
+  //! identity the way the parent boundary stamper does, and run until the
+  //! engine takes it. Bounded: a face that never accepts must fail the
+  //! suite rather than hang it.
+  void deliver_result(size_t idx, uint64_t ns, bool ok = true,
+                      uint8_t gen = 1) {
+    if (idx < txf.size()) release_withheld(type_of(txf[idx]), seq_of(txf[idx]));
+    offer_result(ns, idx < txf.size() ? seq_of(txf[idx]) : 0,
+                 idx < txf.size() ? type_of(txf[idx]) : 0, ok, gen);
+    for (int n = 0; n < 200000 && ts_offer; n++) tick();
+    if (ts_offer) expect("offered result was accepted", 0, 1);
   }
+
+  void txts_idx(size_t idx, uint64_t ns) { deliver_result(idx, ns); }
 
   //! stamp the frame last sent, the common case
   void txts(uint64_t ns) {
@@ -807,9 +905,13 @@ class GptpEngineHarness {
     dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
     dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
     dut->tx_ready_i = 1;
-    dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
-    dut->txts_type_i = 0;
+    ts_offer = false;
+    drive_result_face();
+    dut->tx_credit_i = 1;
     for (int i = 0; i < 8; i++) tick();
+    //! ready is low through reset: a beat the engine would not record must
+    //! not look accepted to the producer
+    expect("reset holds the result face closed", dut->txts_ready_o, 0);
     dut->rst_n = 1;
 
     // Before the ROM init leg has written S_CID, no complete all-hop loop
@@ -3410,7 +3512,7 @@ class GptpEngineHarness {
   // word read as empty until a post-reset transmitter writes a new one.
   void recover_the_request_cadence_across_reset() {
     pd_mode = PD_SKIP;
-    while (auto_pend >= 0) tick();
+    drain_automatic_results();
     auto_txts = true;
     tx_seen = txf.size();
     size_t pre_reset_idx = 0;
@@ -3430,7 +3532,7 @@ class GptpEngineHarness {
     tx_seen = txf.size();
     std::vector<uint8_t> post_reset_req = wait_tx(0x2, 4000000);
     expect("reset claim: cadence restarts", post_reset_req.empty() ? 0 : 1, 1);
-    while (auto_pend >= 0) tick();
+    drain_automatic_results();
   }
 
   void recover_the_response_claim_across_reset() {
@@ -3483,7 +3585,7 @@ class GptpEngineHarness {
            post_reset_resp >= 0 ? 1 : 0, 1);
     expect("reset response claim: fresh Follow_Up sent",
            post_reset_fu >= 0 ? 1 : 0, 1);
-    while (auto_pend >= 0) tick();
+    drain_automatic_results();
   }
 
   void recover_the_sync_cadence_across_reset() {
@@ -3496,7 +3598,7 @@ class GptpEngineHarness {
            wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
     expect("reset Sync claim: master setup",
            wait_flags(FL_AMGM, FL_AMGM, 12000000ull), 1);
-    while (auto_pend >= 0) tick();
+    drain_automatic_results();
     auto_txts = true;
     size_t pre_reset_sync_idx = 0;
     std::vector<uint8_t> pre_reset_sync =
@@ -3517,7 +3619,7 @@ class GptpEngineHarness {
     std::vector<uint8_t> post_sync_reset_req = wait_tx(0x2, 4000000);
     expect("reset Sync claim: cadence restarts",
            post_sync_reset_req.empty() ? 0 : 1, 1);
-    while (auto_pend >= 0) tick();
+    drain_automatic_results();
   }
 
   // ---- 32: two response claims survive downstream backpressure ----------
@@ -3530,7 +3632,7 @@ class GptpEngineHarness {
   // many cycles; only valid/ready handshakes enter the captured frame.
   void hold_two_response_claims_under_backpressure() {
     pd_mode = PD_SKIP;
-    while (auto_pend >= 0) tick();
+    drain_automatic_results();
     auto_txts = false;
     for (int k = 0; k < 20000 && (dut->dbg_busy_o || dut->tx_valid_o); k++)
       tick();
@@ -3673,6 +3775,696 @@ class GptpEngineHarness {
     dut->tx_ready_i = 1;
     auto_txts = true;
     pd_mode = PD_NORMAL;
+  }
+
+  // =====================================================================
+  //  FPGA-gPTP #31: the egress RESULT face, its message-scoped loss, the
+  //  retained Pdelay pairing context and the three admission gates.
+  //
+  //  Everything below grades the plane through its own wire and publish
+  //  faces: which frames it transmits, what timestamps they carry and what
+  //  peer delay it publishes. Nothing reads a scratch word or a µPC, so a
+  //  micro-code layout change cannot make these arms pass by accident, and
+  //  an implementation that satisfies them has satisfied the protocol.
+  // =====================================================================
+
+  //! index of the first transmitted frame at or after `from` with this
+  //! messageType and sequenceId, or -1
+  int find_tx(size_t from, uint8_t mt, uint16_t seq) {
+    for (size_t i = from; i < txf.size(); i++)
+      if (type_of(txf[i]) == mt && seq_of(txf[i]) == seq)
+        return static_cast<int>(i);
+    return -1;
+  }
+
+  //! the PTP timestamp field every message of this plane carries at frame
+  //! offset 48: 48-bit seconds then 32-bit nanoseconds
+  uint64_t origin_ts(const std::vector<uint8_t> &f) {
+    return fld48(f, 48) * 1000000000ull + fld32(f, 54);
+  }
+
+  //! A neighbour's Pdelay_Req addressed to us.
+  void send_peer_request(uint16_t seq, uint64_t rx_ts,
+                         uint64_t src = PEER_CID) {
+    Frame q = ptp(0x2, seq, 0, 0x0000, 20, src);
+    q.u64(0); q.u16(0); q.ts(0);
+    q.b.resize(68);
+    send_frame(q.b, rx_ts);
+  }
+
+  //! The neighbour's Pdelay_Resp for OUR request `seq`, carrying t2.
+  void send_peer_response(uint16_t seq, uint64_t t2, uint64_t t4,
+                          uint64_t src = PEER_CID) {
+    Frame f = ptp(0x3, seq, 0, 0x0200, 20, src);
+    f.ts(t2); f.u64(OUR_CID); f.u16(1);
+    send_frame(f.b, t4);
+    run(400);
+  }
+
+  //! Its Pdelay_Resp_Follow_Up, carrying t3.
+  void send_peer_follow_up(uint16_t seq, uint64_t t3, uint64_t rx,
+                           uint64_t src = PEER_CID) {
+    Frame g = ptp(0xA, seq, 0, 0x0000, 20, src);
+    g.ts(t3); g.u64(OUR_CID); g.u16(1);
+    send_frame(g.b, rx);
+    run(400);
+  }
+
+  //! Four accepted frames, each with its own ingress time. The message
+  //! banks and the receive-timestamp banks both ping-pong on an accepted
+  //! event, so four successors reuse each of them twice: any pairing
+  //! operand still living in a bank rather than in its own scratch cell is
+  //! destroyed by this traffic.
+  void admit_successor_traffic(uint16_t tag) {
+    for (int k = 0; k < 4; k++) {
+      Frame s = ptp(0xC, static_cast<uint16_t>(tag + k), 0, 0x0000, 0);
+      send_frame(s.b, phc() + 1000 + 137 * k);
+      run(600);
+    }
+  }
+
+  //! Re-earn asCapable and mastership before an arm that needs a Sync or
+  //! an Announce cadence of our own.
+  void settle_as_capable_master(const char *tag) {
+    char n[96];
+    dut->tx_ready_i = 1;
+    dut->tx_credit_i = 1;
+    auto_txts = true;
+    pd_mode = PD_NORMAL;
+    pd_seen = txf.size();
+    snprintf(n, sizeof n, "%s: asCapable settled", tag);
+    expect(n, wait_flags(FL_ASCAP, FL_ASCAP, 20000000ull), 1);
+    snprintf(n, sizeof n, "%s: grandmaster settled", tag);
+    expect(n, wait_flags(FL_AMGM, FL_AMGM, 20000000ull), 1);
+    drain_automatic_results();
+  }
+
+  //! Catch the next Sync and keep its result: the shared timer claim is
+  //! then held by a real outstanding frame, which is the only way a second
+  //! claimed frame can be outstanding at the same time. Returns its
+  //! sequenceId, or 0xFFFF when no Sync came.
+  uint16_t hold_a_sync_unstamped(const char *tag) {
+    char n[96];
+    auto_txts = true;
+    tx_seen = txf.size();
+    size_t idx = 0;
+    std::vector<uint8_t> sync = wait_tx(0x0, 2000000, &idx);
+    snprintf(n, sizeof n, "%s: Sync outstanding", tag);
+    expect(n, sync.empty() ? 0 : 1, 1);
+    if (sync.empty()) return 0xFFFF;
+    withhold(0x0, seq_of(sync));
+    auto_pend = -1;                       // discard its automatic result
+    return seq_of(sync);
+  }
+
+  // ---- D1: two results at every separation, while dispatch is blocked ---
+  // Issue #31 measured the defect as a sweep: two stamps arriving with a
+  // separation shorter than the dispatch latency, and the first one lost.
+  // The repaired face makes the separation irrelevant, so the sweep is kept
+  // and the engine is held BUSY throughout it, which is the state the issue
+  // could not bound: a response is stalled at its first byte, so dispatch
+  // cannot pop anything until the stall is released.
+  //
+  // Two claimed frames are outstanding at once: a Sync, whose result is the
+  // Follow_Up's preciseOriginTimestamp, and a Pdelay_Resp, whose result is
+  // its Resp_FU's responseOriginTimestamp. Both companions are byte-exact
+  // records of which value reached the micro-code, so an engine that let the
+  // second result overwrite the first publishes the wrong time on the wire.
+  void deliver_two_results_at_every_separation() {
+    settle_as_capable_master("D1");
+    const std::array<long, 9> gaps = {0, 1, 2, 3, 5, 8, 12, 20, 50};
+    uint16_t qseq = 0xD100;
+    uint64_t ts_resp = 40000000ull;
+    for (long gap : gaps) {
+      const uint16_t sync_seq = hold_a_sync_unstamped("D1");
+      if (sync_seq == 0xFFFF) return;
+      const uint64_t ts_sync = ts_resp + 7000ull;
+
+      // stall the byte face first, so the response the peer request draws
+      // stops at its own first byte and the dispatch gate stays shut
+      dut->tx_ready_i = 0;
+      const size_t mark = txf.size();
+      withhold(0x3, qseq);
+      send_peer_request(qseq, phc() + 1000);
+      for (int k = 0; k < 40000 && !(dut->tx_valid_o && dut->tx_sof_o); k++)
+        tick();
+      expect("D1 response stalled at its first byte",
+             (dut->tx_valid_o && dut->tx_sof_o) ? 1 : 0, 1);
+
+      const uint64_t beats0 = ts_beats;
+      offer_result(ts_resp, qseq, 0x3);
+      tick();
+      expect("D1 first result accepted while busy", ts_beats, beats0 + 1);
+      expect("D1 face closes behind the accepted result",
+             dut->txts_ready_o, 0);
+
+      run(static_cast<uint64_t>(gap));
+      offer_result(ts_sync, sync_seq, 0x0);
+      run(64);
+      expect("D1 second result waits for the first to dispatch",
+             ts_offer ? 1 : 0, 1);
+      expect("D1 face stays closed while a result is owed",
+             dut->txts_ready_o, 0);
+
+      dut->tx_ready_i = 1;
+      int rfu = -1;
+      int fu = -1;
+      for (int k = 0; k < 400000 && (rfu < 0 || fu < 0); k++) {
+        tick();
+        rfu = find_tx(mark, 0xA, qseq);
+        fu = find_tx(mark, 0x8, sync_seq);
+      }
+      expect("D1 response Follow_Up sent", rfu >= 0 ? 1 : 0, 1);
+      expect("D1 Sync Follow_Up sent", fu >= 0 ? 1 : 0, 1);
+      if (rfu >= 0)
+        expect("D1 response keeps its own t3", origin_ts(txf[rfu]), ts_resp);
+      if (fu >= 0)
+        expect("D1 Sync keeps its own t1", origin_ts(txf[fu]), ts_sync);
+      expect("D1 the held result was finally taken", ts_offer ? 1 : 0, 0);
+
+      qseq++;
+      ts_resp += 100000ull;
+      release_withheld();
+      auto_txts = true;
+      pd_seen = txf.size();
+    }
+  }
+
+  // ---- D2: an explicitly lost result retires its own claim, and only it -
+  // A lost result carries no time. The three claimed message types must
+  // each retire exactly their own claim: a lost Sync or Pdelay_Resp result
+  // cannot cancel a requester exchange that is waiting for its own t1, and
+  // a lost t1 must cancel that exchange rather than let a later Follow_Up
+  // compute a delay from a time that was never measured.
+  void retire_only_the_lost_result_s_own_claim() {
+    // -- (a) a lost Pdelay_Resp result, with a complete pair frozen -------
+    settle_as_capable_master("D2");
+    pd_mode = PD_SKIP;
+    pd_seen = txf.size();
+    auto_txts = false;
+    drain_automatic_results();
+
+    const uint16_t our_seq = start_one_request_unstamped("D2a");
+    const uint64_t t1 = 60000000ull;
+    const uint64_t t2 = peer_ns(t1 + 300);
+    const uint64_t t4 = t1 + 21200;
+    const uint64_t t3 = t2 + 20600;               // its own residence
+    const uint32_t delay_before = dut->pub_pdelay_ns_o;
+    send_peer_response(our_seq, t2, t4);
+    send_peer_follow_up(our_seq, t3, t4 + 1000);
+    run(20000);
+    expect("D2a the pair publishes nothing without its t1",
+           dut->pub_pdelay_ns_o, delay_before);
+
+    // a neighbour's request is answered while our pair waits; its own
+    // result is then explicitly lost
+    const uint16_t rq = 0xD2A1;
+    size_t mark = txf.size();
+    withhold(0x3, rq);
+    send_peer_request(rq, phc() + 1000);
+    int resp = -1;
+    for (int k = 0; k < 200000 && resp < 0; k++) {
+      tick();
+      resp = find_tx(mark, 0x3, rq);
+    }
+    expect("D2a neighbour request answered", resp >= 0 ? 1 : 0, 1);
+    deliver_result(static_cast<size_t>(resp), 0, false);
+    run(20000);
+    expect("D2a lost response builds no Follow_Up",
+           find_tx(mark, 0xA, rq) < 0 ? 1 : 0, 1);
+
+    // the response claim was retired, so a later request is still answered
+    const uint16_t rq2 = 0xD2A2;
+    size_t mark2 = txf.size();
+    withhold(0x3, rq2);
+    send_peer_request(rq2, phc() + 1000);
+    int resp2 = -1;
+    for (int k = 0; k < 200000 && resp2 < 0; k++) {
+      tick();
+      resp2 = find_tx(mark2, 0x3, rq2);
+    }
+    expect("D2a lost response retired its own claim", resp2 >= 0 ? 1 : 0, 1);
+    if (resp2 >= 0) deliver_result(static_cast<size_t>(resp2),
+                                   phc() + 500, true);
+    run(20000);
+
+    // our own t1 now arrives: the frozen pair is still this exchange's
+    model_exchange(t1, t2, t3, t4);
+    deliver_result_by_tag(t1, our_seq, 0x2, true);
+    run(40000);
+    expect_new_delay("D2a lost response left the frozen pair alone",
+                     delay_before);
+
+    // -- (b) a lost Sync result, with a recorded t1 outstanding ----------
+    settle_as_capable_master("D2b");
+    pd_mode = PD_SKIP;
+    pd_seen = txf.size();
+    auto_txts = false;
+    drain_automatic_results();
+
+    const uint16_t bseq = start_one_request_unstamped("D2b");
+    const uint64_t b1 = 80000000ull;
+    const uint64_t b2 = peer_ns(b1 + 300);
+    const uint64_t b4 = b1 + 21200;
+    const uint64_t b3 = b2 + 19800;               // its own residence
+    const uint32_t before_b2 = dut->pub_pdelay_ns_o;
+    deliver_result_by_tag(b1, bseq, 0x2, true);   // t1 recorded, claim free
+    run(20000);
+
+    const uint16_t sync_seq = hold_a_sync_unstamped("D2b");
+    size_t smark = txf.size();
+    if (sync_seq != 0xFFFF) {
+      deliver_result_by_tag(0, sync_seq, 0x0, false);
+      run(20000);
+      expect("D2b lost Sync builds no Follow_Up",
+             find_tx(smark, 0x8, sync_seq) < 0 ? 1 : 0, 1);
+    }
+
+    // the answer arrives after the lost Sync: the retained t1 must still be
+    // this exchange's, so the delay computes at once
+    model_exchange(b1, b2, b3, b4);
+    send_peer_response(bseq, b2, b4);
+    send_peer_follow_up(bseq, b3, b4 + 1000);
+    run(40000);
+    expect_new_delay("D2b lost Sync left the recorded t1 alone", before_b2);
+
+    // the timer claim was retired: the Sync cadence continues
+    auto_txts = true;
+    tx_seen = txf.size();
+    expect("D2b lost Sync retired its own claim",
+           wait_tx(0x0, 2000000).empty() ? 0 : 1, 1);
+    drain_automatic_results();
+
+    // -- (c) a lost t1 cancels its own exchange and nothing else ---------
+    pd_mode = PD_SKIP;
+    pd_seen = txf.size();
+    auto_txts = false;
+    drain_automatic_results();
+
+    const uint16_t cseq = start_one_request_unstamped("D2c");
+    const uint64_t c2 = peer_ns(100000000ull);
+    const uint64_t c4 = 100021200ull;
+    const uint32_t delay_frozen = dut->pub_pdelay_ns_o;
+    send_peer_response(cseq, c2, c4);
+    send_peer_follow_up(cseq, c2 + 20000, c4 + 1000);
+    run(20000);
+    expect("D2c the pair publishes nothing without its t1",
+           dut->pub_pdelay_ns_o, delay_frozen);
+    size_t cmark = txf.size();
+    deliver_result_by_tag(0, cseq, 0x2, false);
+    run(60000);
+    expect("D2c lost t1 publishes no delay",
+           dut->pub_pdelay_ns_o, delay_frozen);
+    expect("D2c lost t1 builds no companion",
+           find_tx(cmark, 0x8, cseq) < 0 ? 1 : 0, 1);
+
+    // a duplicate Follow_Up afterwards cannot resurrect the cancelled pair
+    send_peer_follow_up(cseq, c2 + 20000, c4 + 2000);
+    run(40000);
+    expect("D2c cancelled pair stays cancelled",
+           dut->pub_pdelay_ns_o, delay_frozen);
+
+    // -- (d) a lost result no claim owns retires nothing -----------------
+    const uint16_t dseq = start_one_request_unstamped("D2d");
+    const uint32_t before_d = dut->pub_pdelay_ns_o;
+    deliver_result_by_tag(0, static_cast<uint16_t>(dseq + 0x100), 0xA, false);
+    run(20000);
+    const uint64_t d1 = 120000000ull;
+    const uint64_t d2 = peer_ns(d1 + 300);
+    const uint64_t d4 = d1 + 21200;
+    const uint64_t d3 = d2 + 20200;               // its own residence
+    deliver_result_by_tag(d1, dseq, 0x2, true);
+    run(20000);
+    model_exchange(d1, d2, d3, d4);
+    send_peer_response(dseq, d2, d4);
+    send_peer_follow_up(dseq, d3, d4 + 1000);
+    run(40000);
+    expect_new_delay("D2d unclaimed lost result retires nothing", before_d);
+    auto_txts = true;
+    pd_seen = txf.size();
+  }
+
+  //! Wait for our own next Pdelay_Req and withhold its result, so the
+  //! requester exchange it opens has no t1 yet. Returns its sequenceId.
+  uint16_t start_one_request_unstamped(const char *tag) {
+    char n[96];
+    auto_txts = true;
+    tx_seen = txf.size();
+    size_t idx = 0;
+    std::vector<uint8_t> req = wait_tx(0x2, 4000000, &idx);
+    snprintf(n, sizeof n, "%s: request outstanding", tag);
+    expect(n, req.empty() ? 0 : 1, 1);
+    if (req.empty()) return 0;
+    withhold(0x2, seq_of(req));
+    auto_pend = -1;
+    return seq_of(req);
+  }
+
+  //! An exchange must publish ITS OWN delay, so grade two things: that the
+  //! value matches the independently computed model, and that it MOVED from
+  //! the previous publication. Without the second half a handler that
+  //! quietly publishes nothing passes on the previous exchange's number,
+  //! which is why every arm below gives its exchange its own residence.
+  void expect_new_delay(const char *what, uint32_t previous) {
+    char n[96];
+    snprintf(n, sizeof n, "%s value", what);
+    expect(n, dut->pub_pdelay_ns_o, static_cast<uint32_t>(pdm.d));
+    snprintf(n, sizeof n, "%s moved", what);
+    expect(n, dut->pub_pdelay_ns_o != previous ? 1 : 0, 1);
+  }
+
+  //! One warm reset, and the settling run behind it.
+  void warm_reset() {
+    dut->rst_n = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->rst_n = 1;
+    dut->tx_ready_i = 1;
+    run(4000);
+  }
+
+  //! Offer one result named by its own tag rather than by a captured frame,
+  //! and run until the engine takes it.
+  void deliver_result_by_tag(uint64_t ns, uint16_t seq, uint8_t type,
+                             bool ok, uint8_t gen = 1) {
+    release_withheld(type, seq);
+    offer_result(ns, seq, type, ok, gen);
+    for (int n = 0; n < 200000 && ts_offer; n++) tick();
+    if (ts_offer) expect("tagged result was accepted", 0, 1);
+  }
+
+  // ---- D3: a complete pair keeps its own operands until its own t1 ------
+  // A Pdelay_Resp and its Follow_Up can both arrive before the requester's
+  // own t1 comes back: the result path can be back-pressured, and the
+  // parent can hold a result behind other frames. Before this repair the
+  // tail simply ran with whatever S_T1 held, which is another request's
+  // measurement. The exchange's identity, t2, t3 and t4 must therefore stay
+  // this exchange's until its t1 arrives, survive successor traffic that
+  // reuses every bank, refuse a later response's operands, and be cancelled
+  // by the events that really do end the exchange.
+  void hold_a_complete_pair_until_its_own_t1() {
+    settle_as_capable_master("D3");
+    pd_mode = PD_SKIP;
+    pd_seen = txf.size();
+    auto_txts = false;
+    drain_automatic_results();
+
+    // -- (a) successor traffic and a later response leave the pair alone --
+    const uint16_t s1 = start_one_request_unstamped("D3a");
+    const uint64_t a1 = 140000000ull;
+    const uint64_t a2 = peer_ns(a1 + 300);
+    const uint64_t a4 = a1 + 21200;
+    const uint64_t a3 = a2 + 20400;               // its own residence
+    const uint32_t before_a = dut->pub_pdelay_ns_o;
+    send_peer_response(s1, a2, a4);
+    send_peer_follow_up(s1, a3, a4 + 1000);
+    run(20000);
+    expect("D3a the pair publishes nothing without its t1",
+           dut->pub_pdelay_ns_o, before_a);
+    admit_successor_traffic(0xD3A0);
+    expect("D3a successor traffic publishes nothing either",
+           dut->pub_pdelay_ns_o, before_a);
+    // a later response for the same request, with different operands, and
+    // its Follow_Up: neither may re-arm or overwrite the frozen pair
+    send_peer_response(s1, a2 + 500000, a4 + 400000);
+    send_peer_follow_up(s1, a3 + 500000, a4 + 401000);
+    admit_successor_traffic(0xD3B0);
+    model_exchange(a1, a2, a3, a4);
+    deliver_result_by_tag(a1, s1, 0x2, true);
+    run(60000);
+    expect_new_delay("D3a the pair computes from its own operands", before_a);
+
+    // -- (b) a numeric-zero t1 is a measurement, not an absent one --------
+    const uint16_t s2 = start_one_request_unstamped("D3b");
+    const uint64_t b1 = 0ull;
+    const uint64_t b2 = 500ull;
+    const uint64_t b4 = 21200ull;
+    const uint64_t b3 = b2 + 20000ull;
+    const uint32_t before_b = dut->pub_pdelay_ns_o;
+    send_peer_response(s2, b2, b4);
+    send_peer_follow_up(s2, b3, b4 + 1000);
+    run(20000);
+    expect("D3b the pair publishes nothing without its zero t1",
+           dut->pub_pdelay_ns_o, before_b);
+    admit_successor_traffic(0xD3C0);
+    model_exchange(b1, b2, b3, b4);
+    deliver_result_by_tag(b1, s2, 0x2, true);
+    run(60000);
+    expect_new_delay("D3b a zero t1 completes its exchange", before_b);
+
+    // -- (c) a warm reset invalidates a pair that is still waiting --------
+    // Scratch is LUTRAM and survives, so the pair's operands are still
+    // sitting there after the reset. Only the reset-backed validity makes
+    // the engine read them as absent; without it the next request's t1
+    // would consume a pre-reset pair and publish a delay nobody measured.
+    const uint16_t s3 = start_one_request_unstamped("D3c");
+    const uint64_t c2 = peer_ns(160000000ull);
+    const uint64_t c4 = 160021200ull;
+    const uint32_t before_c = dut->pub_pdelay_ns_o;
+    send_peer_response(s3, c2, c4);
+    send_peer_follow_up(s3, c2 + 20000, c4 + 1000);
+    run(20000);
+    expect("D3c the pair publishes nothing before the reset",
+           dut->pub_pdelay_ns_o, before_c);
+    warm_reset();
+    release_withheld();          // that request's result can never arrive
+    expect("D3c reset clears the published delay", dut->pub_pdelay_ns_o, 0);
+
+    // the next request's own t1, with no pair of its own waiting: a pair
+    // left over in surviving scratch must not be consumed by it
+    const uint16_t s4 = start_one_request_unstamped("D3c post");
+    const uint64_t d1 = 180000000ull;
+    deliver_result_by_tag(d1, s4, 0x2, true);
+    run(60000);
+    expect("D3c a pre-reset pair cannot complete after reset",
+           dut->pub_pdelay_ns_o, 0);
+
+    const uint64_t d2 = peer_ns(d1 + 300);
+    const uint64_t d4 = d1 + 21200;
+    const uint64_t d3 = d2 + 20500;               // its own residence
+    model_exchange(d1, d2, d3, d4);
+    send_peer_response(s4, d2, d4);
+    send_peer_follow_up(s4, d3, d4 + 1000);
+    run(60000);
+    expect_new_delay("D3c a real exchange after reset still computes", 0);
+
+    // the mirror case: a recorded t1 and an armed response, whose Follow_Up
+    // only arrives after the reset. Both pairing cells survive in LUTRAM, so
+    // the pair forms -- and must WAIT, because the t1 validity beside them
+    // did not survive and the exchange's own t1 can never arrive again.
+    const uint16_t s5 = start_one_request_unstamped("D3c armed");
+    const uint64_t f1 = 300000000ull;
+    const uint64_t f2 = peer_ns(f1 + 300);
+    const uint64_t f4 = f1 + 21200;
+    deliver_result_by_tag(f1, s5, 0x2, true);
+    run(20000);
+    send_peer_response(s5, f2, f4);
+    warm_reset();
+    release_withheld();
+    send_peer_follow_up(s5, f2 + 20000, f4 + 1000);
+    run(60000);
+    expect("D3c a pre-reset t1 cannot pair after reset",
+           dut->pub_pdelay_ns_o, 0);
+
+    // -- (d) the distinct-responder verdict still runs behind the freeze --
+    // Milan 4.2.6.2.5 counts a SECOND responder identity inside one request
+    // interval. The freeze refuses that response's OPERANDS, never its
+    // bookkeeping, so three successive multi-answered intervals must still
+    // cease the requester exactly as they do without a freeze.
+    for (int iv = 0; iv < 3; iv++) {
+      char n[96];
+      const uint16_t sq = start_one_request_unstamped("D3d");
+      const uint64_t e1 = 200000000ull + 1000000ull * static_cast<uint64_t>(iv);
+      const uint64_t e2 = peer_ns(e1 + 300);
+      const uint64_t e4 = e1 + 21200;
+      // one residence per interval, so an interval that publishes nothing
+      // cannot pass on its predecessor's number
+      const uint64_t e3 = e2 + 20000 - 100 * static_cast<uint64_t>(iv);
+      const uint32_t before_e = dut->pub_pdelay_ns_o;
+      send_peer_response(sq, e2, e4);
+      send_peer_follow_up(sq, e3, e4 + 1000);
+      // a second identity answers the same request while the pair is frozen
+      send_peer_response(sq, e2 + 40, e4 + 80, NEAR_CID);
+      run(20000);
+      snprintf(n, sizeof n, "D3d interval %d waits for its own t1", iv);
+      expect(n, dut->pub_pdelay_ns_o, before_e);
+      model_exchange(e1, e2, e3, e4);
+      deliver_result_by_tag(e1, sq, 0x2, true);
+      run(60000);
+      snprintf(n, sizeof n, "D3d interval %d keeps its frozen operands", iv);
+      expect_new_delay(n, before_e);
+    }
+    // 4.2.6.2.5 stops Pdelay_Req transmission, which is the effect a lost
+    // response can never produce, so the next whole interval must be silent
+    auto_txts = true;
+    pd_mode = PD_NORMAL;
+    pd_seen = txf.size();
+    const size_t cease_mark = txf.size();
+    run_svc(2600000);
+    int ceased_reqs = 0;
+    for (size_t i = cease_mark; i < txf.size(); i++)
+      if (type_of(txf[i]) == 0x2) ceased_reqs++;
+    expect("D3d three multi-answered intervals cease the requester",
+           ceased_reqs, 0);
+    expect("D3d the cease clears the capability verdict",
+           dut->pub_flags_o & FL_ASCAP, 0);
+    settle_as_capable_master("D3 resume");
+  }
+
+  // ---- D4: admission credit postpones the three initiating beats -------
+  // The parent withholds credit when its bounded result storage is full or
+  // sealed. Only the legs that START an exchange may be postponed by it: a
+  // Pdelay_Resp answers a neighbour's request, and both Follow_Up kinds
+  // complete a frame that is already on the wire, so gating either would
+  // drop mandatory service instead of deferring optional service. The gate
+  // sits after each leg's own timer re-arm, so a withheld beat is retried
+  // at the next cadence rather than lost.
+  void postpone_only_the_initiating_beats_without_credit() {
+    settle_as_capable_master("D4");
+    pd_mode = PD_SKIP;
+    pd_seen = txf.size();
+    auto_txts = true;
+
+    dut->tx_credit_i = 0;
+    const size_t mark = txf.size();
+    run(2600000);            // longer than one Announce and one Pdelay_Req beat
+    int reqs = 0;
+    int syncs = 0;
+    int anns = 0;
+    for (size_t i = mark; i < txf.size(); i++) {
+      if (type_of(txf[i]) == 0x2) reqs++;
+      if (type_of(txf[i]) == 0x0) syncs++;
+      if (type_of(txf[i]) == 0xB) anns++;
+    }
+    expect("D4 Pdelay_Req beats are withheld", reqs, 0);
+    expect("D4 Sync beats are withheld", syncs, 0);
+    expect("D4 Announce beats are withheld", anns, 0);
+
+    // mandatory service is untouched: a neighbour's request is answered and
+    // its companion is built, all without credit and without a new request
+    const uint16_t rq = 0xD401;
+    const size_t rmark = txf.size();
+    send_peer_request(rq, phc() + 1000);
+    int resp = -1;
+    for (int k = 0; k < 200000 && resp < 0; k++) {
+      tick();
+      resp = find_tx(rmark, 0x3, rq);
+    }
+    expect("D4 a neighbour request is answered without credit",
+           resp >= 0 ? 1 : 0, 1);
+    int rfu = -1;
+    for (int k = 0; k < 200000 && rfu < 0; k++) {
+      tick();
+      rfu = find_tx(rmark, 0xA, rq);
+    }
+    expect("D4 the response companion is built without credit",
+           rfu >= 0 ? 1 : 0, 1);
+    if (rfu >= 0 && resp >= 0)
+      expect("D4 the companion carries its own t3", origin_ts(txf[rfu]),
+             txns[resp]);
+
+    // each initiating leg retries at its own next beat once credit returns
+    dut->tx_credit_i = 1;
+    tx_seen = txf.size();
+    expect("D4 the Sync beat retries", wait_tx(0x0, 800000).empty() ? 0 : 1, 1);
+    drain_automatic_results();
+    tx_seen = txf.size();
+    expect("D4 the Announce beat retries",
+           wait_tx(0xB, 2600000).empty() ? 0 : 1, 1);
+    tx_seen = txf.size();
+    expect("D4 the Pdelay_Req beat retries",
+           wait_tx(0x2, 2600000).empty() ? 0 : 1, 1);
+    drain_automatic_results();
+
+    // the Sync companion is never gated either: withhold credit between the
+    // Sync and its result, and the Follow_Up must still be built
+    const uint16_t sseq = hold_a_sync_unstamped("D4");
+    if (sseq != 0xFFFF) {
+      dut->tx_credit_i = 0;
+      const size_t smark = txf.size();
+      const uint64_t sts = 240000000ull;
+      deliver_result_by_tag(sts, sseq, 0x0, true);
+      int fu = -1;
+      for (int k = 0; k < 200000 && fu < 0; k++) {
+        tick();
+        fu = find_tx(smark, 0x8, sseq);
+      }
+      expect("D4 the Sync companion is built without credit",
+             fu >= 0 ? 1 : 0, 1);
+      if (fu >= 0)
+        expect("D4 the Sync companion carries its own t1",
+               origin_ts(txf[fu]), sts);
+      dut->tx_credit_i = 1;
+    }
+    auto_txts = true;
+    pd_seen = txf.size();
+  }
+
+  // ---- D5: a stalled byte face delivers each frame exactly once ---------
+  // tx_eof_o is a LEVEL, held for as long as the final byte waits for
+  // ready. A consumer that counts the level rather than the accepted beat
+  // allocates twice for one frame, which is what the parent's ticket
+  // allocation depends on not happening. Every byte of one frame is stalled
+  // for a cycle on the way, and the final byte for many.
+  void stall_every_byte_position_of_one_frame() {
+    pd_mode = PD_SKIP;
+    pd_seen = txf.size();
+    auto_txts = true;
+    drain_automatic_results();
+    for (int k = 0; k < 40000 && (dut->dbg_busy_o || dut->tx_valid_o); k++)
+      tick();
+
+    const uint16_t rq = 0xD501;
+    const size_t mark = txf.size();
+    dut->tx_ready_i = 0;
+    withhold(0x3, rq);
+    send_peer_request(rq, phc() + 1000);
+    for (int k = 0; k < 200000 && !(dut->tx_valid_o && dut->tx_sof_o); k++)
+      tick();
+    expect("D5 the first byte waits for ready",
+           (dut->tx_valid_o && dut->tx_sof_o) ? 1 : 0, 1);
+
+    // one accepted byte at a time: every intermediate byte is stalled for a
+    // cycle, and the loop leaves the final byte presented but not accepted
+    int guard = 0;
+    while (!(dut->tx_valid_o && dut->tx_eof_o) && guard++ < 4000) {
+      dut->tx_ready_i = 1;
+      tick();
+      dut->tx_ready_i = 0;
+      tick();
+    }
+    expect("D5 the final byte is reached", guard < 4000 ? 1 : 0, 1);
+    expect("D5 the final byte waits for ready",
+           (dut->tx_valid_o && dut->tx_eof_o) ? 1 : 0, 1);
+
+    const uint8_t last = dut->tx_data_o;
+    const size_t frames0 = txf.size();
+    int held = 0;
+    for (int k = 0; k < 64; k++) {
+      tick();
+      if (dut->tx_valid_o && dut->tx_eof_o && dut->tx_data_o == last) held++;
+    }
+    expect("D5 the held final byte is stable", held, 64);
+    expect("D5 a held end of frame delivers nothing", txf.size(), frames0);
+
+    dut->tx_ready_i = 1;
+    run(8);
+    expect("D5 the released end of frame delivers one frame",
+           txf.size(), frames0 + 1);
+    const int resp = find_tx(mark, 0x3, rq);
+    expect("D5 the delivered frame is the response", resp >= 0 ? 1 : 0, 1);
+    if (resp >= 0) {
+      expect("D5 the response is byte complete", txf[resp].size(), 68);
+      expect("D5 the response requester", fld64(txf[resp], 58), PEER_CID);
+    }
+    run(2000);
+    expect("D5 no second frame follows the held level",
+           txf.size(), frames0 + 1);
+    // leave the response claim retired behind this phase
+    if (resp >= 0) deliver_result(static_cast<size_t>(resp), phc() + 200);
+    run(20000);
+    release_withheld();
+    auto_txts = true;
+    pd_seen = txf.size();
   }
 
   // ---- 33: the flags word of every frame this run transmitted -----------

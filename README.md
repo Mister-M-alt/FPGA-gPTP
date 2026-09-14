@@ -25,6 +25,8 @@ The engine keeps protocol work inside programmable logic.
 - TX honors downstream byte-level backpressure.
 - Microcode owns protocol decisions and servo arithmetic.
 - RTL owns parsing, queues, timers, and serialization.
+- Egress timestamp results arrive on accepted beats.
+- Admission credit postpones only initiating transmissions.
 - Publication outputs expose committed protocol state.
 
 ## Verify quickly
@@ -41,7 +43,6 @@ Detailed commands appear in the [test guide](docs/TEST_DEVELOPER.md).
 
 ## Known risks
 
-- [Issue #31](https://github.com/Mister-M-alt/FPGA-gPTP/issues/31) tracks timestamp overwrite exposure.
 - [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) tracks mid-frame error handling.
 
 No certification claim is made.

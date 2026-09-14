@@ -298,6 +298,24 @@ S_RSPSEQ, S_RSPSRC = 39, 40              # the armed Pdelay_Resp: its
                                          # sequenceId | RSP_ARMED_C, and
                                          # its sourcePortIdentity (written
                                          # before it is ever read: no init)
+# ---- the requester's own pairing state (FPGA-gPTP #31) ---------------------
+S_T1V = 37       # "S_T1 holds this request's own t1". A measured t1 may be
+                 # numeric zero, so the value cannot carry its own validity.
+S_PDWAIT = 38    # "a complete Pdelay pair is waiting for that t1"
+S_T3 = 42        # the waiting pair's t3, guarded by S_PDWAIT
+# S_T1V and S_PDWAIT get RESET-BACKED validity in the engine
+# (KL_gptp_engine.sv region 2, the idiom S_TXQ_TMR and S_TXQ_RESP already
+# run): scratch is LUTRAM with no reset and a warm reset does not run the
+# init leg at all, so without it a retained cell would present a pre-reset
+# t1, or a pre-reset deferred pair, as live. S_T1V is in the init clear
+# list below for the cold path as well.
+#
+# INVARIANT for S_T3, the same one S_CEASE/S_CEASECNT and S_IVMULTI/S_MULTI
+# carry: it is read only behind the S_PDWAIT gate, and the ONE writer that
+# can set that gate writes S_T3 in the same straight-line block (the PDPOST
+# deferral arm). Gate and guarded cell therefore carry over a warm reset
+# together, and S_PDWAIT's reset-backed validity closes the cell for the
+# reset case. ADDING A SECOND WRITER to either breaks this.
 # S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
 # (steps ranks BELOW the identity in 10.3.5, so it never joins the
 # packed compare -- the pv compare masks the low 16 first)
@@ -322,6 +340,13 @@ TXP_SYNC_C = 0x200000           # for the timer-driven claim, "the frame
                                 # compared: the sequenceId is 16 bits on
                                 # the wire, the counters behind it are not
 TXQ_MASK_C = 0xFFFF | TXT_TYPE_MASK_C | TXP_PEND_C | TXP_SYNC_C
+TXT_OK_C = 0x800000             # the dispatched result's outcome bit. It
+                                # and the producer's generation at bits
+                                # 27:24 sit ABOVE TXQ_MASK_C, so neither
+                                # disturbs a masked claim compare. ok low
+                                # is an explicit LOST result: it retires
+                                # its own claim, writes no time and builds
+                                # no companion
 RSP_ARMED_C = 0x10000           # set above the 16-bit sequenceId in
                                 # S_RSPSEQ: a zero word is "no response"
 OUR_PORTNUM_C = 1               # thisPort. ONE definition, read by both
@@ -953,6 +978,17 @@ def prog_rx_pdresp(base: int) -> Prog:
     p.emit("BRS", cnd=BRS_Z, label="arm")
     p.emit("BR", label="multi")                                   # completed
     p.label("arm")
+    # A complete pair is already frozen, waiting only for its own t1
+    # (FPGA-gPTP #31). Its identity and its t2/t3/t4 are THIS exchange's
+    # operands and must not be rewritten: a later response carries another
+    # exchange's times, and the deferred tail would compute from a mixture.
+    # Fall through to the 4.2.6.2.5 bookkeeping, which still sees every
+    # matching response, so the distinct-responder verdict is unchanged
+    p.emit("RDST", rd=RU, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="arm_go")
+    p.emit("BR", label="multi")                                   # frozen
+    p.label("arm_go")
     # arm the Follow_Up pairing: this sequence, this responder. The LAST
     # matching response before the Follow_Up owns the stored t2/t4, so
     # the Follow_Up must come from it; a second identity is the Milan
@@ -1008,8 +1044,31 @@ def prog_rx_signal(base: int) -> Prog:
     return p
 
 
+def e_txq_match(p: Prog, t1: str, sync: str, resp: str) -> None:
+    """Route one dispatched result to the claim it names, or fall through.
+
+    ONE source for the routing rule, read by both the valid handler and the
+    lost arm below, so the two can never disagree about which claim a
+    result owns. Clobbers RU, RA and RB; leaves the fall-through case (a
+    result no outstanding frame claims) to the caller."""
+    p.emit("ALU", rd=RU, ra=REV, rb=0, cnd=ALU_AND,
+           imm=0xFFFF | TXT_TYPE_MASK_C)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_OR, imm=TXP_PEND_C)
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=TXQ_MASK_C)
+    p.emit("CMP", ra=RA, rb=RU, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label=t1)
+    p.emit("ALU", rd=RB, ra=RU, rb=0, cnd=ALU_OR, imm=TXP_SYNC_C)
+    p.emit("CMP", ra=RA, rb=RB, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label=sync)
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)
+    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=TXQ_MASK_C)
+    p.emit("CMP", ra=RA, rb=RU, fmt=FMT_Q)
+    p.emit("BRS", cnd=BRS_Z, label=resp)
+
+
 def prog_tx_ts(base: int) -> Prog:
-    """Match the stamp to a claim by {messageType, sequenceId}.
+    """Match the result to a claim by {messageType, sequenceId}.
 
     The parent stamper returns both fields from the PTP header beside the
     timestamp. The engine packs messageType in REV[19:16] and sequenceId
@@ -1021,25 +1080,18 @@ def prog_tx_ts(base: int) -> Prog:
     never outstanding at once; the transmitter-side claim gates establish
     that invariant.
 
-    The engine still has one timestamp holding register, so two returns
-    arriving before the first dispatch can overwrite it; that independent
-    buffering defect remains FPGA-gPTP #31."""
+    REV[23] is the outcome. A result with it clear carries no time: it goes
+    to TXLOST, which retires the SAME claim this routing names and touches
+    nothing else (FPGA-gPTP #31). The valid t1 tail is TXT1OK, and the
+    lost arm is TXLOST, because entry 448 is a 64-word slot shared with the
+    packer's first-fit space; keeping both tails packable is what lets the
+    ROM hold the whole result face."""
     p = Prog(base)
-    p.emit("ALU", rd=RU, ra=REV, rb=0, cnd=ALU_AND,
-           imm=0xFFFF | TXT_TYPE_MASK_C)
-    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_OR, imm=TXP_PEND_C)
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
-    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=TXQ_MASK_C)
-    p.emit("CMP", ra=RA, rb=RU, fmt=FMT_Q)
-    p.emit("BRS", cnd=BRS_Z, label="t1")
-    p.emit("ALU", rd=RB, ra=RU, rb=0, cnd=ALU_OR, imm=TXP_SYNC_C)
-    p.emit("CMP", ra=RA, rb=RB, fmt=FMT_Q)
-    p.emit("BRS", cnd=BRS_Z, label="sync")
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)
-    p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_AND, imm=TXQ_MASK_C)
-    p.emit("CMP", ra=RA, rb=RU, fmt=FMT_Q)
-    p.emit("BRS", cnd=BRS_Z, label="resp")
-    p.emit("END")                      # a stamp no outstanding frame claims
+    p.emit("ALU", rd=RW, ra=REV, rb=0, cnd=ALU_AND, imm=TXT_OK_C)
+    p.emit("CMP", ra=RW, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label=LB["TXLOST"])
+    e_txq_match(p, "t1", "sync", "resp")
+    p.emit("END")                      # a result no outstanding frame claims
     p.label("resp")
     p.emit("WRST", ra=0, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)
     p.emit("BR", label=LB["RFU"])
@@ -1048,7 +1100,56 @@ def prog_tx_ts(base: int) -> Prog:
     p.emit("BR", label=LB["SYNCFU"])
     p.label("t1")
     p.emit("WRST", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
+    p.emit("BR", label=LB["TXT1OK"])
+    return p
+
+
+def prog_leg_txlost(base: int) -> Prog:
+    """An explicitly lost result: retire its own claim and nothing else.
+
+    Scope is the whole point. A lost Pdelay_Req stamp is the only one that
+    owns the requester's pairing state, so it alone clears S_T1V and
+    S_PDWAIT; a lost Sync or Pdelay_Resp stamp retires its own claim, sends
+    no companion and must leave an unrelated requester exchange exactly
+    where it was. No arm writes a time: a fabricated t1 is worse than a
+    missing one, because the delay it computes looks ordinary."""
+    p = Prog(base)
+    e_txq_match(p, "t1", "sync", "resp")
+    p.emit("END")                      # a result no outstanding frame claims
+    p.label("sync")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
+    p.emit("END")                      # no SYNCFU: there is no origin time
+    p.label("resp")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)
+    p.emit("END")                      # no RFU: there is no t3 to carry
+    p.label("t1")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_T1V, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)
+    p.emit("END")
+    return p
+
+
+def prog_leg_txt1ok(base: int) -> Prog:
+    """A valid t1: record it, declare it valid, and release any pair that
+    has been waiting for it.
+
+    S_T1 may be numeric zero, which is why the validity is its own cell.
+    A Pdelay_Resp_Follow_Up that completed its pairing before this result
+    arrived left its whole exchange frozen behind S_PDWAIT; consuming the
+    gate here is what makes the deferred tail run exactly once, and it is
+    consumed BEFORE the tail reads the operands."""
+    p = Prog(base)
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_T1, fmt=FMT_Q)
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_T1V, fmt=FMT_Q)
+    p.emit("RDST", rd=RA, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)
+    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="out")            # nothing deferred
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_T3, fmt=FMT_Q)
+    p.emit("BR", label=LB["PDPAIR"])
+    p.label("out")
     p.emit("END")
     return p
 
@@ -1056,13 +1157,13 @@ def prog_tx_ts(base: int) -> Prog:
 def prog_tmr(base: int, mac: int, seq_seed: int = 0,
              sync_seq_seed: int = 0) -> Prog:
     """The 1 s timer program: the event-slot dispatch, the one-shot init, the
-    cadence gate, the Milan cease rule and the next Pdelay_Req."""
+    cadence gate and the Milan cease rule, then the packed request leg."""
     p = Prog(base)
     _tmr_slot_dispatch(p)
     _tmr_init_once(p, mac, seq_seed, sync_seq_seed)
     _tmr_cadence_gate(p)
     _tmr_cease_rule(p)
-    _tmr_pdelay_request(p)
+    p.emit("BR", label=LB["PDREQ"])
     return p
 
 
@@ -1120,8 +1221,11 @@ def _tmr_init_once(p, mac, seq_seed, sync_seq_seed):
               S_T1, S_T4, S_TXQ_TMR, S_TXQ_RESP,
               S_ASEQ,
               S_RSP1, S_IVMULTI, S_CEASE,
-              S_RSPSEQ)):
+              S_RSPSEQ, S_T1V)):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
+    # S_PDWAIT is deliberately NOT in that list either: it is the gate of
+    # the S_T3 invariant recorded at the scratch map, and its own RTL
+    # validity register clears at every reset, cold or warm.
     # S_CEASECNT and S_MULTI are deliberately NOT in that list, which is
     # where the words for the mask below and for the seeded regression
     # image came from. Each is read only behind a gate cell, and the one
@@ -1144,14 +1248,29 @@ def _tmr_init_once(p, mac, seq_seed, sync_seq_seed):
     p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)   # announce receipt
 
 
+def e_credit_gate(p: Prog, skip_label: str) -> None:
+    """Skip this initiating beat while the transmit path has no credit.
+
+    Placed AFTER the leg's own timer re-arm, so a withheld beat is retried
+    at the next cadence rather than lost. Only the three INITIATING legs
+    carry this gate: a Pdelay_Resp answers a neighbour's request, and both
+    Follow_Up companions complete a frame already on the wire, so gating
+    any of them would drop mandatory service rather than postpone it."""
+    p.emit("RDST", rd=RB, imm=RG_TS | 2, fmt=FMT_Q)
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label=skip_label)
+
+
 def _tmr_cadence_gate(p):
-    """Re-arm the 1 s beat, then run only when the TX queue is free."""
+    """Re-arm the 1 s beat, then run only with credit and a free TX queue."""
     p.label("cadence")
     p.emit("MOVE", rd=RT, ra=0, imm=1000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 0, fmt=FMT_Q)
+    e_credit_gate(p, "beat_off")
     p.emit("RDST", rd=RB, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="send")
+    p.label("beat_off")
     p.emit("END")
     p.label("send")
 
@@ -1202,6 +1321,21 @@ def _tmr_cease_rule(p):
     p.emit("WRST", ra=0, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
 
 
+def prog_leg_pdreq(base: int) -> Prog:
+    """The request leg of the 1 s beat, reached only from the cease rule's
+    fall-through.
+
+    It is a packed leg rather than the tail of the fixed timer entry for
+    one measured reason: entry 512 is a 192-word slot, the dispatch, init,
+    cadence gate and cease rule above it already fill 139 words (140 in a
+    seeded regression image), and this leg is 59 words with its pairing
+    clears. Left in place it would run past entry 704. The packer puts it
+    in free space instead, which is what that two-pass assembler is for."""
+    p = Prog(base)
+    _tmr_pdelay_request(p)
+    return p
+
+
 def _tmr_pdelay_request(p):
     """Judge the previous request (802.1AS-2011 10.2.4.1 lost-response
     accounting), then queue this interval's Pdelay_Req."""
@@ -1229,6 +1363,12 @@ def _tmr_pdelay_request(p):
     p.label("pd_go")
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)  # no arm yet
+    # A new request supersedes the previous one whole: its t1 is no longer
+    # this exchange's, and a pair still waiting for that t1 can never be
+    # completed. Cancel both here, where the commitment is made, so no
+    # later result or Follow_Up can pair across the interval boundary
+    p.emit("WRST", ra=0, imm=RG_SCR | S_T1V, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
     e_hdr(p, 0x2, RA, 0x00, 54)
     p.emit("BFLD", ra=0, fmt=FMT_Q)
@@ -1406,10 +1546,54 @@ def prog_become(base: int) -> Prog:
 
 
 def prog_leg_pdpost(base: int) -> Prog:
-    """Pdelay exchange complete; RC = t3. neighborRateRatio, corrected
-    link delay, the threshold verdict and the asCapable ladder."""
+    """Pdelay exchange complete; RC = t3. The pairing gates, then either
+    the arithmetic tail or the wait for this exchange's own t1.
+
+    The Follow_Up's own dispatch consumes its bank words inside the gates
+    above, while its event still owns that bank. Only the bank-independent
+    tail is deferred, so nothing here outlives the bank it reads."""
     p = Prog(base)
     _pdpost_pairing_gates(p)
+    _pdpost_defer_until_t1(p)
+    p.emit("BR", label=LB["PDPAIR"])
+    return p
+
+
+def _pdpost_defer_until_t1(p):
+    """Freeze this complete pair when its own t1 has not arrived yet.
+
+    The requester's t1 is the egress timestamp of the Pdelay_Req this
+    exchange answers. It can arrive after the Follow_Up: the result path
+    can be back-pressured, and the parent may hold a result behind other
+    frames. Before FPGA-gPTP #31 the tail simply ran with whatever S_T1
+    held, which is a delay computed from another request's time.
+
+    S_T3 is written only on the deferring arm, two instructions before the
+    gate it is guarded by and in the same straight-line block, so it is
+    never read without S_PDWAIT standing (see the invariant at the scratch
+    map). S_T2, S_T4, S_RSPSEQ and S_RSPSRC are already this pair's own and
+    are frozen against a later response by the S_PDWAIT test in
+    prog_rx_pdresp; a later Follow_Up finds S_RSPSEQ already cleared by
+    `paired`, so nothing can overwrite the frozen pair either."""
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_T1V, fmt=FMT_Q)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=1)
+    p.emit("BRS", cnd=BRS_Z, label="t1_here")
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_T3, fmt=FMT_Q)
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)
+    p.emit("END")
+    p.label("t1_here")
+
+
+def prog_leg_pdpair(base: int) -> Prog:
+    """The bank-independent tail of a complete Pdelay exchange; RC = t3.
+
+    Entered from the Follow_Up's own dispatch when t1 was already here, and
+    from the TXT1OK arm when the t1 result arrives afterwards. It reads
+    only scratch and the publish bank, never a message bank, which is what
+    makes the deferred entry safe (verified by inspection: every read below
+    is RG_SCR or RG_PUB)."""
+    p = Prog(base)
     _pdpost_neighbor_rate_ratio(p)
     _pdpost_corrected_delay(p)
     _pdpost_verdict(p)
@@ -1623,6 +1807,7 @@ def prog_leg_synctx(base: int) -> Prog:
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)
     e_flag_gate(p, FL_AMGM_C, FL_AMGM_C, "gm", "skip")
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "skip")
+    e_credit_gate(p, "skip")
     p.emit("RDST", rd=RB, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="build")
@@ -1654,17 +1839,17 @@ def prog_leg_synctx(base: int) -> Prog:
 
 def prog_leg_anntx(base: int) -> Prog:
     """The 1 s Announce cadence: our priority vector, grandmasterIdentity
-    and a one-hop path trace, sent only while an asCapable grandmaster.
+    and a one-hop path trace, sent only while an asCapable grandmaster with
+    transmit credit. The skipped beat now ends the program rather than
+    sitting between the gates and the body, so the gates fall straight
+    through into the build and no branch around them is needed.
     """
     p = Prog(base)
     p.emit("MOVE", rd=RT, ra=0, imm=1000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)
     e_flag_gate(p, FL_AMGM_C, FL_AMGM_C, "gm", "skip")
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "skip")
-    p.emit("BR", label="go")
-    p.label("skip")
-    p.emit("END")
-    p.label("go")
+    e_credit_gate(p, "skip")
     p.emit("RDST", rd=RA, imm=RG_SCR | S_ASEQ, fmt=FMT_Q)
     e_hdr(p, 0xB, RA, 0x00, 76)
     p.emit("BFLD", ra=0, fmt=FMT_Q)                  # 10 reserved bytes
@@ -1686,6 +1871,8 @@ def prog_leg_anntx(base: int) -> Prog:
     p.emit("WRST", ra=RA, imm=RG_SCR | S_ASEQ, fmt=FMT_Q)
     p.emit("SEND")
     p.emit("END")
+    p.label("skip")
+    p.emit("END")                                    # skip this beat
     return p
 
 
@@ -1695,9 +1882,11 @@ LEG_FNS = [
     ("BTCA", prog_btca), ("BECOME", prog_become), ("BECGATE", prog_becgate),
     ("RFU", prog_leg_rfu), ("SYNCFU", prog_leg_syncfu),
     ("SYNCTX", prog_leg_synctx), ("ANNTX", prog_leg_anntx),
-    ("PDPOST", prog_leg_pdpost), ("SRTO", prog_leg_srto),
+    ("PDPOST", prog_leg_pdpost), ("PDPAIR", prog_leg_pdpair),
+    ("SRTO", prog_leg_srto),
     ("FUTO", prog_leg_futo), ("SERVO", prog_leg_servo),
-    ("RESUME", prog_leg_resume),
+    ("RESUME", prog_leg_resume), ("PDREQ", prog_leg_pdreq),
+    ("TXLOST", prog_leg_txlost), ("TXT1OK", prog_leg_txt1ok),
 ]
 
 

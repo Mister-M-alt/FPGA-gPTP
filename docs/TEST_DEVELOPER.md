@@ -8,7 +8,8 @@ This guide explains every verification layer.
 | Layer | Files | Purpose |
 |---|---|---|
 | Python | `hdl/ucode/gen_gptp_ucode.py` | Generates configuration-specific ROM images |
-| Python | `tb/check_phc_contract.py` | Guards the PHC source boundary |
+| Python | `tb/check_phc_contract.py` | Guards the PHC and result boundaries |
+| Python | `tb/verilator/*/mutants.py` | Plants defects that suites must catch |
 | C | None | No first-party C harness exists |
 | C++ | `tb/verilator/*/sim_main.cpp` | Drives and checks Verilated RTL |
 | C++ | `bench/arty/bench_mii_tx_tag_test.cpp` | Checks timestamp-tag transport |
@@ -30,6 +31,7 @@ No handwritten C harness exists.
 | `make -C tb/verilator/ucpu` | Arithmetic and microCPU behavior |
 | `make -C tb/verilator/parser` | Frame parsing and refusal paths |
 | `make -C tb/verilator/engine` | Whole-plane protocol behavior |
+| `make -C tb/verilator/engine mutants` | Engine mutation controls |
 | `make -C bench/arty test` | MII timestamp-tag transport |
 | `make lint` | Engine and bench lint |
 | `make` | Every required local gate |
@@ -95,9 +97,15 @@ Prefer independent protocol formulas and frame builders.
 - Runs shipping and seeded ROM images.
 - Checks Pdelay, Announce, Sync, and servo behavior.
 - Exercises reset, backpressure, ordering, and timeouts.
-- Reorders and withholds timestamp returns.
+- Reorders and withholds timestamp results.
+- Holds every result offer until acceptance.
+- Sweeps result separations while dispatch stays blocked.
+- Drives explicitly lost results of each claimed type.
+- Delays a complete Pdelay pair past successor traffic.
+- Withholds transmit credit at every initiating leg.
 - Sweeps every transmitted flags word by message type.
 - Pairs received frames differing only in ignored flag bits.
+- Proves its own checks through planted defects.
 
 ### Bench-tag suite
 

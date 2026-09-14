@@ -23,7 +23,8 @@
 //                                            event names, so a handler
 //                                            delayed behind another never
 //                                            reads a successor's frame)
-//                  1  timestamp regs    RO  (0 ingress ts, 1 egress ts)
+//                  1  timestamp regs    RO  (0 ingress ts, 1 egress ts,
+//                                            2 transmit admission credit)
 //                  2  scratch RAM       RW  (64 x 64, protocol state)
 //                  3  publish bank      RW  (0 gm id, 1 parent id,
 //                                            2 flags, 3 pdelay ns,
@@ -40,7 +41,9 @@
 //
 //                Parser and timer events dispatch through a 4-deep queue;
 //                parser wins a same-cycle push and the timer waits on its
-//                ready. One egress timestamp pends on a priority side path.
+//                ready. One egress timestamp RESULT pends on a priority
+//                side path, taken from the producer on a valid/ready beat
+//                and held whole until that dispatch consumes it.
 //                A later Pdelay_Req stays queued while a response owns the
 //                only requester context, but that owner's stamp bypasses it
 //                and releases the claim before the later request dispatches.
@@ -75,11 +78,25 @@ module KL_gptp_engine
     output logic        tx_eof_o,
     input  wire         tx_ready_i,
 
-    //! egress timestamp return, identified by the stamped PTP header
+    //! egress timestamp result return, identified by the stamped PTP header.
+    //! valid/ready: the producer offers the WHOLE tuple and holds it until
+    //! txts_ready_o is high in the same cycle. The engine refuses a new
+    //! offer while one accepted result is still owed to the µcode, so an
+    //! accepted result keeps its own value, tag, outcome and generation
+    //! until its own dispatch consumes it (FPGA-gPTP #31). txts_ok_i low is
+    //! an explicit lost result: it retires its own claim and nothing else.
     input  wire         txts_valid_i,
+    output logic        txts_ready_o,
     input  wire  [63:0] txts_ns_i,
     input  wire  [15:0] txts_seq_i,
     input  wire   [3:0] txts_type_i,
+    input  wire         txts_ok_i,
+    input  wire   [3:0] txts_gen_i,
+
+    //! transmit admission credit, a level. Low postpones the Pdelay_Req,
+    //! Sync and Announce initiating beats to their next cadence; mandatory
+    //! responses and both Follow_Up companions are never gated.
+    input  wire         tx_credit_i,
 
     //! PHC face (the parent timestamp_counter's knobs)
     output logic        phc_addend_we_o,
@@ -210,6 +227,14 @@ module KL_gptp_engine
   //! protocol state (notably the Milan cease countdown) still survives.
   logic tmr_claim_valid_r, resp_claim_valid_r;
 
+  //! The same idiom for the requester's own pairing state, scratch words 37
+  //! (S_T1V) and 38 (S_PDWAIT) in gen_gptp_ucode.py. S_T1 may legitimately
+  //! be numeric zero, so "have we a t1" cannot be read off its value, and a
+  //! warm reset skips the µcode init leg entirely: without resettable
+  //! validity the retained LUTRAM contents would present a pre-reset t1 or
+  //! a pre-reset deferred pair as live. Validity is bit 0 of the write.
+  logic t1v_valid_r, pdwait_valid_r;
+
   //! LUTRAM has no reset; the bitstream's initial state is the reset.
   //! µcode's init-once flag (scratch S_INIT) DEPENDS on this being zero.
   initial begin : ram_poweron
@@ -304,6 +329,22 @@ module KL_gptp_engine
   logic [63:0] rxts_bank_r [0:1];
   logic [63:0] txts_r;
   logic [1:0]  rxts_len_r;
+
+  //! The accepted egress result tuple. Its five fields are written by ONE
+  //! condition, txts_accept_w, so an accepted result is atomic; ready stays
+  //! low from that edge until the dispatch that consumes it, so a later
+  //! offer waits at the producer instead of replacing an earlier result.
+  //! Ready is also low through reset: a transfer the engine would not
+  //! record must not look accepted to the producer.
+  logic        txts_pend_r;
+  logic [15:0] txts_pend_seq_r;
+  logic  [3:0] txts_pend_type_r;
+  logic        txts_pend_ok_r;
+  logic  [3:0] txts_pend_gen_r;
+  logic        txts_accept_w;
+  assign txts_ready_o  = !txts_pend_r && rst_n;
+  assign txts_accept_w = txts_valid_i && txts_ready_o;
+
   always_ff @(posedge clk_i) begin : ts_latch
     if (!rst_n) begin
       rxts_stage_r   <= '0;
@@ -322,7 +363,9 @@ module KL_gptp_engine
         rxts_bank_r[bank_sel_r] <= rxts_stage_r;
         rxts_commit_r           <= rxts_stage_r;
       end
-      if (txts_valid_i)           txts_r <= txts_ns_i;
+      //! one field of the accepted tuple; the tag fields are written from
+      //! the same condition beside the pending flag below
+      if (txts_accept_w)          txts_r <= txts_ns_i;
     end
   end
 
@@ -370,9 +413,7 @@ module KL_gptp_engine
   logic [1:0]  evq_wp_r, evq_rp_r;
   logic [2:0]  evq_lvl_r;
   logic [15:0] ev_drop_r;
-  logic        txts_pend_r;
-  logic [15:0] txts_pend_seq_r;
-  logic  [3:0] txts_pend_type_r;
+  //! the accepted result tuple is declared beside the timestamp it carries
 
   logic evq_empty_w;
   assign evq_full_w  = (evq_lvl_r == 3'd4);
@@ -412,6 +453,8 @@ module KL_gptp_engine
       txts_pend_r     <= 1'b0;
       txts_pend_seq_r <= '0;
       txts_pend_type_r <= '0;
+      txts_pend_ok_r  <= 1'b0;
+      txts_pend_gen_r <= '0;
     end else begin
       if (push_w) begin
         evq_r[evq_wp_r] <= push_data_w;
@@ -429,10 +472,17 @@ module KL_gptp_engine
         ev_drop_r <= ev_drop_r + 16'd1;
 
 
-      if (txts_valid_i) begin
+      //! An offer is taken only on an accepted beat, and the pending flag
+      //! keeps ready low until the dispatch below pops it: a second result
+      //! offered meanwhile waits at the producer and cannot replace this
+      //! one. The pop cycle still reads ready low, so the result the
+      //! dispatch samples is the one that was accepted (FPGA-gPTP #31).
+      if (txts_accept_w) begin
         txts_pend_r     <= 1'b1;
         txts_pend_seq_r <= txts_seq_i;
         txts_pend_type_r <= txts_type_i;
+        txts_pend_ok_r  <= txts_ok_i;
+        txts_pend_gen_r <= txts_gen_i;
       end else if (txts_pop_w) begin
         txts_pend_r <= 1'b0;
       end
@@ -457,9 +507,12 @@ module KL_gptp_engine
 
   //! TX events repack the complete claim tag into aux[19:0]:
   //! {messageType, sequenceId}. The handler compares it in one masked read.
+  //! The outcome and the producer's generation ride ABOVE that tag, at bit
+  //! 23 and bits 27:24, outside TXQ_MASK_C in gen_gptp_ucode.py, so the
+  //! masked claim compare is untouched by either field.
   logic [39:0] txts_ev_w;
-  assign txts_ev_w = {EV_TX_TS_C, 12'd0, txts_pend_type_r,
-                      txts_pend_seq_r};
+  assign txts_ev_w = {EV_TX_TS_C, 4'd0, txts_pend_gen_r, txts_pend_ok_r,
+                      3'd0, txts_pend_type_r, txts_pend_seq_r};
 
   //! µPC entry table — matches hdl/ucode/gen_gptp_ucode.py
   logic [UPC_W_C-1:0] entry_w;
@@ -657,12 +710,24 @@ module KL_gptp_engine
           st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
         end
       end
-      4'd1: st_rd_mux_w = st_addr_w[0] ? txts_r
-                                       : rxts_bank_r[disp_bank_r];
+      //! word 0 ingress, word 1 egress, word 2 the transmit admission
+      //! credit. The credit arm is selected by addr[1] alone, so neither
+      //! timestamp read moves off its original one-bit select.
+      4'd1: begin
+        if (st_addr_w[1])
+          st_rd_mux_w = {63'd0, tx_credit_i};
+        else
+          st_rd_mux_w = st_addr_w[0] ? txts_r
+                                     : rxts_bank_r[disp_bank_r];
+      end
       4'd2: begin
         if ((st_addr_w[5:0] == 6'd18) && !tmr_claim_valid_r)
           st_rd_mux_w = 64'd0;
         else if ((st_addr_w[5:0] == 6'd41) && !resp_claim_valid_r)
+          st_rd_mux_w = 64'd0;
+        else if ((st_addr_w[5:0] == 6'd37) && !t1v_valid_r)
+          st_rd_mux_w = 64'd0;
+        else if ((st_addr_w[5:0] == 6'd38) && !pdwait_valid_r)
           st_rd_mux_w = 64'd0;
         else
           st_rd_mux_w = scratch_r[st_addr_w[5:0]];
@@ -722,6 +787,8 @@ module KL_gptp_engine
       tmr_arm_delta_w <= '0;
       tmr_claim_valid_r  <= 1'b0;
       resp_claim_valid_r <= 1'b0;
+      t1v_valid_r        <= 1'b0;
+      pdwait_valid_r     <= 1'b0;
 `ifndef SYNTHESIS
       path_stage_pending_r <= 1'b0;
 `endif
@@ -778,6 +845,13 @@ module KL_gptp_engine
               tmr_claim_valid_r <= st_wdata_w[20];
             if (st_addr_w[5:0] == 6'd41)
               resp_claim_valid_r <= st_wdata_w[20];
+            // Slots mirror S_T1V=37 and S_PDWAIT=38 in the generator. Both
+            // cells are written 0 or 1, so bit 0 of the write IS the flag
+            // and carries the resettable validity with it.
+            if (st_addr_w[5:0] == 6'd37)
+              t1v_valid_r <= st_wdata_w[0];
+            if (st_addr_w[5:0] == 6'd38)
+              pdwait_valid_r <= st_wdata_w[0];
           end
           4'd3: begin
             unique case (st_addr_w[3:0])

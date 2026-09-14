@@ -202,8 +202,20 @@ module bench_arty_top (
   logic txsfd_q3_r, txdone_q3_r;
   logic [63:0] txts_r;
   logic        txts_v_r;
+  logic [63:0] txts_ns_r;
   logic [15:0] txts_seq_r;
   logic  [3:0] txts_type_r;
+  logic        txts_ready_w;
+  //! The engine takes a result on a valid/ready beat, so the offer is HELD
+  //! rather than pulsed: a one-cycle pulse while the engine still owes the
+  //! micro-code an earlier result would be a silently lost transfer. The
+  //! whole tuple is copied out of the crossing registers at the done edge,
+  //! so a later frame's SFD capture cannot disturb an offer in flight.
+  //! This bench keeps ONE offer. A done edge arriving while an earlier
+  //! offer is unaccepted drops the new stamp instead of replacing it; the
+  //! engine's own lost-response accounting then shows that exchange as
+  //! unanswered, which is the honest outcome for a bench that cannot
+  //! buffer. The parent supplies the bounded storage this bench does not.
   always_ff @(posedge clk100_i) begin : txts
     if (!rst_n) begin
       txsfd_q1_r  <= 1'b0;
@@ -218,6 +230,7 @@ module bench_arty_top (
       txtype_q2_r <= '0;
       txts_r      <= '0;
       txts_v_r    <= 1'b0;
+      txts_ns_r   <= '0;
       txts_seq_r  <= '0;
       txts_type_r <= '0;
     end else begin
@@ -232,10 +245,13 @@ module bench_arty_top (
       txtype_q1_r <= tx_frame_type_w;
       txtype_q2_r <= txtype_q1_r;
       if (txsfd_q2_r != txsfd_q3_r) txts_r <= phc_ns_w;
-      txts_v_r <= (txdone_q2_r != txdone_q3_r);
-      if (txdone_q2_r != txdone_q3_r) begin
+      if ((txdone_q2_r != txdone_q3_r) && !txts_v_r) begin
+        txts_v_r    <= 1'b1;
+        txts_ns_r   <= txts_r;
         txts_seq_r  <= txseq_q2_r;
         txts_type_r <= txtype_q2_r;
+      end else if (txts_v_r && txts_ready_w) begin
+        txts_v_r <= 1'b0;
       end
     end
   end
@@ -263,9 +279,17 @@ module bench_arty_top (
       .tx_eof_o           (txe_eof_w),
       .tx_ready_i         (txe_rdy_w),
       .txts_valid_i       (txts_v_r),
-      .txts_ns_i          (txts_r),
+      .txts_ready_o       (txts_ready_w),
+      .txts_ns_i          (txts_ns_r),
       .txts_seq_i         (txts_seq_r),
       .txts_type_i        (txts_type_r),
+      //! This bench stamps every frame it transmits, so every offered
+      //! result is a good one and one generation covers the whole run.
+      .txts_ok_i          (1'b1),
+      .txts_gen_i         (4'd1),
+      //! No admission control exists here: nothing downstream of the MII
+      //! gasket can refuse a frame, so the initiating legs keep credit.
+      .tx_credit_i        (1'b1),
       .phc_addend_we_o    (phc_add_we_w),
       .phc_addend_o       (phc_add_w),
       .phc_step_we_o      (phc_step_we_w),
