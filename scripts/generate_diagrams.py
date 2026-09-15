@@ -54,6 +54,8 @@ EVIDENCE = {
         ") u_ucpu (",
         "KL_gptp_tx_slot u_txslot",
         "logic        txts_pend_r;",
+        "output logic        txts_ready_o,",
+        "input  wire         tx_credit_i,",
         "output logic        pub_commit_o",
     ),
     "hdl/wire/KL_gptp_rx_parser.sv": (
@@ -80,6 +82,7 @@ DRAWIO_LABELS = (
     "Message storage",
     "Event arbitration",
     "Priority timestamp return",
+    "Transmit admission credit",
     "Committed publication",
     "Parent PHC",
 )
