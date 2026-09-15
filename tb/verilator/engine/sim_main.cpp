@@ -3956,8 +3956,18 @@ class GptpEngineHarness {
   // cannot cancel a requester exchange that is waiting for its own t1, and
   // a lost t1 must cancel that exchange rather than let a later Follow_Up
   // compute a delay from a time that was never measured.
+  // The four arms run in this order and in no other: each opens from the
+  // plane the one before it left behind, so each is its own member below
+  // rather than a block a later edit could reorder silently.
   void retire_only_the_lost_result_s_own_claim() {
-    // -- (a) a lost Pdelay_Resp result, with a complete pair frozen -------
+    retire_a_lost_response_beside_a_frozen_pair();
+    retire_a_lost_sync_beside_a_recorded_t1();
+    cancel_the_exchange_whose_own_t1_was_lost();
+    retire_nothing_for_a_lost_result_no_claim_owns();
+  }
+
+  //! D2 (a): a lost Pdelay_Resp result, with a complete pair frozen.
+  void retire_a_lost_response_beside_a_frozen_pair() {
     settle_as_capable_master("D2");
     pd_mode = PD_SKIP;
     pd_seen = txf.size();
@@ -4014,8 +4024,10 @@ class GptpEngineHarness {
     run(40000);
     expect_new_delay("D2a lost response left the frozen pair alone",
                      delay_before);
+  }
 
-    // -- (b) a lost Sync result, with a recorded t1 outstanding ----------
+  //! D2 (b): a lost Sync result, with a recorded t1 outstanding.
+  void retire_a_lost_sync_beside_a_recorded_t1() {
     settle_as_capable_master("D2b");
     pd_mode = PD_SKIP;
     pd_seen = txf.size();
@@ -4054,8 +4066,10 @@ class GptpEngineHarness {
     expect("D2b lost Sync retired its own claim",
            wait_tx(0x0, 2000000).empty() ? 0 : 1, 1);
     drain_automatic_results();
+  }
 
-    // -- (c) a lost t1 cancels its own exchange and nothing else ---------
+  //! D2 (c): a lost t1 cancels its own exchange and nothing else.
+  void cancel_the_exchange_whose_own_t1_was_lost() {
     pd_mode = PD_SKIP;
     pd_seen = txf.size();
     auto_txts = false;
@@ -4083,8 +4097,11 @@ class GptpEngineHarness {
     run(40000);
     expect("D2c cancelled pair stays cancelled",
            dut->pub_pdelay_ns_o, delay_frozen);
+  }
 
-    // -- (d) a lost result no claim owns retires nothing -----------------
+  //! D2 (d): a lost result no claim owns retires nothing. It opens on the
+  //! plane arm (c) left behind, which holds no claim of its own.
+  void retire_nothing_for_a_lost_result_no_claim_owns() {
     const uint16_t dseq = start_one_request_unstamped("D2d");
     const uint32_t before_d = dut->pub_pdelay_ns_o;
     deliver_result_by_tag(0, static_cast<uint16_t>(dseq + 0x100), 0xA, false);
@@ -4161,6 +4178,8 @@ class GptpEngineHarness {
   // this exchange's until its t1 arrives, survive successor traffic that
   // reuses every bank, refuse a later response's operands, and be cancelled
   // by the events that really do end the exchange.
+  // The settle below opens all four arms, which then run in this order and
+  // in no other: each opens from the plane the one before it left behind.
   void hold_a_complete_pair_until_its_own_t1() {
     settle_as_capable_master("D3");
     pd_mode = PD_SKIP;
@@ -4168,7 +4187,14 @@ class GptpEngineHarness {
     auto_txts = false;
     drain_automatic_results();
 
-    // -- (a) successor traffic and a later response leave the pair alone --
+    hold_the_pair_against_successors_and_a_later_response();
+    complete_an_exchange_whose_own_t1_is_zero();
+    invalidate_a_waiting_pair_across_a_warm_reset();
+    cease_on_multiple_responders_behind_the_freeze();
+  }
+
+  //! D3 (a): successor traffic and a later response leave the pair alone.
+  void hold_the_pair_against_successors_and_a_later_response() {
     const uint16_t s1 = start_one_request_unstamped("D3a");
     const uint64_t a1 = 140000000ull;
     const uint64_t a2 = peer_ns(a1 + 300);
@@ -4192,8 +4218,10 @@ class GptpEngineHarness {
     deliver_result_by_tag(a1, s1, 0x2, true);
     run(60000);
     expect_new_delay("D3a the pair computes from its own operands", before_a);
+  }
 
-    // -- (b) a numeric-zero t1 is a measurement, not an absent one --------
+  //! D3 (b): a numeric-zero t1 is a measurement, not an absent one.
+  void complete_an_exchange_whose_own_t1_is_zero() {
     const uint16_t s2 = start_one_request_unstamped("D3b");
     const uint64_t b1 = 0ull;
     const uint64_t b2 = 500ull;
@@ -4210,12 +4238,14 @@ class GptpEngineHarness {
     deliver_result_by_tag(b1, s2, 0x2, true);
     run(60000);
     expect_new_delay("D3b a zero t1 completes its exchange", before_b);
+  }
 
-    // -- (c) a warm reset invalidates a pair that is still waiting --------
-    // Scratch is LUTRAM and survives, so the pair's operands are still
-    // sitting there after the reset. Only the reset-backed validity makes
-    // the engine read them as absent; without it the next request's t1
-    // would consume a pre-reset pair and publish a delay nobody measured.
+  //! D3 (c): a warm reset invalidates a pair that is still waiting.
+  //! Scratch is LUTRAM and survives, so the pair's operands are still
+  //! sitting there after the reset. Only the reset-backed validity makes
+  //! the engine read them as absent; without it the next request's t1
+  //! would consume a pre-reset pair and publish a delay nobody measured.
+  void invalidate_a_waiting_pair_across_a_warm_reset() {
     const uint16_t s3 = start_one_request_unstamped("D3c");
     const uint64_t c2 = peer_ns(160000000ull);
     const uint64_t c4 = 160021200ull;
@@ -4264,12 +4294,14 @@ class GptpEngineHarness {
     run(60000);
     expect("D3c a pre-reset t1 cannot pair after reset",
            dut->pub_pdelay_ns_o, 0);
+  }
 
-    // -- (d) the distinct-responder verdict still runs behind the freeze --
-    // Milan 4.2.6.2.5 counts a SECOND responder identity inside one request
-    // interval. The freeze refuses that response's OPERANDS, never its
-    // bookkeeping, so three successive multi-answered intervals must still
-    // cease the requester exactly as they do without a freeze.
+  //! D3 (d): the distinct-responder verdict still runs behind the freeze.
+  //! Milan 4.2.6.2.5 counts a SECOND responder identity inside one request
+  //! interval. The freeze refuses that response's OPERANDS, never its
+  //! bookkeeping, so three successive multi-answered intervals must still
+  //! cease the requester exactly as they do without a freeze.
+  void cease_on_multiple_responders_behind_the_freeze() {
     for (int iv = 0; iv < 3; iv++) {
       char n[96];
       const uint16_t sq = start_one_request_unstamped("D3d");
