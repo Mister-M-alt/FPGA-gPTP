@@ -920,6 +920,21 @@ def prog_rx_pdresp(base: int) -> Prog:
     Milan 4.2.6.2.5 count of distinct responders in this interval."""
     p = Prog(base)
     e_guard_init(p, "out")
+    _pdresp_addressed_to_us(p)
+    _pdresp_answers_the_outstanding_request(p)
+    _pdresp_arm_the_pairing(p)
+    _pdresp_count_distinct_responders(p)
+    p.label("out")
+    p.emit("END")
+    return p
+
+
+def _pdresp_addressed_to_us(p):
+    """Every reason this response is not ours, ahead of any write: the two
+    halves of its requestingPortIdentity, and our own frame reflected back.
+
+    Leaves RB holding thisClock and RC the responder's clockIdentity; both
+    are read by the arm and by the bookkeeping further down."""
     # 11.2.15.3 (Figure 11-8, WAITING_FOR_PDELAY_RESP): the response is
     # ours only when its requestingPortIdentity is THIS PORT'S -- both
     # halves. The clockIdentity is bank word 6, the 16-bit portNumber
@@ -950,6 +965,13 @@ def prog_rx_pdresp(base: int) -> Prog:
     p.emit("RDST", rd=RC, imm=RG_BANK | 2, fmt=FMT_Q)            # their source
     p.emit("CMP", ra=RC, rb=RB, fmt=FMT_Q)
     p.emit("BRS", cnd=BRS_Z, label="out")
+
+
+def _pdresp_answers_the_outstanding_request(p):
+    """The sequenceId arm of the same figure, on the wire's 16 bits.
+
+    Leaves RT holding the response's own sequenceId, which the arm below
+    writes back with its armed bit set."""
     # 11.2.15.3 (Figure 11-8, WAITING_FOR_PDELAY_RESP): the response must
     # carry the sequenceId of OUR outstanding request, S_MYSEQ - 1 on the
     # wire's 16 bits (S_MYSEQ is never 0 here: the init leg sends the
@@ -965,6 +987,14 @@ def prog_rx_pdresp(base: int) -> Prog:
     p.emit("BRS", cnd=BRS_Z, label="rs_ok")
     p.emit("BR", label="out")
     p.label("rs_ok")
+
+
+def _pdresp_arm_the_pairing(p):
+    """Arm the Follow_Up pairing and store t2/t4, unless this interval's
+    exchange is already complete or its pair already frozen.
+
+    Both refusals branch to the bookkeeping rather than to the exit, so the
+    4.2.6.2.5 count still sees a response whose operands are refused."""
     # Figure 11-8 (as corrected by Cor2-2015): once the outstanding
     # request's pair has completed, the machine waits for the interval
     # timer, and a further Pdelay_Resp for that sequenceId is not an
@@ -999,6 +1029,11 @@ def prog_rx_pdresp(base: int) -> Prog:
     e_full_ts(p, RA)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_T2, fmt=FMT_Q)
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_T4, fmt=FMT_Q)
+
+
+def _pdresp_count_distinct_responders(p):
+    """The Milan 4.2.6.2.5 identity bookkeeping for this interval, reached
+    by every matching response: the armed one and the two refused above."""
     p.label("multi")
     # 4.2.6.2.5 bookkeeping: a SECOND distinct responder identity in
     # one request interval marks it multi (duplicates are not a storm)
@@ -1012,9 +1047,6 @@ def prog_rx_pdresp(base: int) -> Prog:
     p.emit("BR", label="out")
     p.label("rsp1")
     p.emit("WRST", ra=RC, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
-    p.label("out")
-    p.emit("END")
-    return p
 
 
 def prog_rx_pdrfu(base: int) -> Prog:
