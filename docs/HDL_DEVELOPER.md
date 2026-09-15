@@ -53,11 +53,45 @@ The accepted event follows finalization.
 - Four entries buffer parser and timer events.
 - Parser events win simultaneous queue pushes.
 - Timer expiry waits using valid-ready flow control.
-- Timestamp returns use a priority side path.
+- Timestamp results use a priority side path.
 - Dispatch waits until serialization becomes idle.
 - Later requests wait behind response ownership.
 
 Never bypass ownership without preserving context.
+
+## Egress result ownership
+
+One result is accepted per valid-ready beat.
+
+Its value, tag, outcome and generation latch together.
+
+Readiness falls until that result dispatches.
+
+A later offer therefore waits at its producer.
+
+Backpressure can never replace an earlier result.
+
+The dispatched word carries outcome and generation.
+
+Both ride above the masked claim comparison.
+
+## Retained pairing context
+
+A peer answer can precede our own transmit time.
+
+The completed pair then waits for that time.
+
+Its identity and measurements stay in scratch.
+
+A later response cannot rewrite the waiting pair.
+
+Responder bookkeeping still counts every matching response.
+
+Only the waiting pair's own arrival releases it.
+
+Reset-backed validity guards both retained pairing cells.
+
+A measured zero remains a valid time.
 
 ## State regions
 
@@ -66,7 +100,7 @@ The microCPU uses `st_addr_o[19:16]` for selection.
 | Region | Access | Contents |
 |---:|---|---|
 | 0 | Read-only | Ping-pong message banks |
-| 1 | Read-only | Ingress and egress timestamps |
+| 1 | Read-only | Ingress time, egress time, credit |
 | 2 | Read-write | Sixty-four protocol scratch words |
 | 3 | Read-write | Publication staging bank |
 | 4 | Write-only | PHC rate and phase controls |
@@ -75,6 +109,8 @@ The microCPU uses `st_addr_o[19:16]` for selection.
 Scratch storage survives warm resets.
 
 Resettable claim-valid bits do not survive.
+
+Pairing validity bits do not survive either.
 
 ## MicroCPU shape
 
@@ -118,6 +154,9 @@ Inactive path entries must remain zero.
 - Preserve bank and timestamp pairing.
 - Preserve event ownership snapshots.
 - Preserve reset-validity separation.
+- Preserve accepted-result immutability.
+- Preserve message scope on every cancellation.
+- Gate only the three initiating legs.
 - Update microcode and tests together.
 - Add negative and boundary tests.
 - Update both WaveDrom sources when timing changes.

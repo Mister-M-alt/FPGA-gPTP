@@ -105,10 +105,15 @@ class TsnGenHarness {
       dut->txts_seq_i =
           f.size() > 45 ? static_cast<uint16_t>((f[44] << 8) | f[45]) : 0;
       dut->txts_type_i = f.size() > 14 ? (f[14] & 0xF) : 0;
+      dut->txts_ok_i = 1;
+      dut->txts_gen_i = 1;
       txns[auto_pend] = ns;
       auto_pend = -1;
     }
     dut->clk_i = 0; dut->eval();
+    // the result face is valid/ready: hold the offer until the engine takes
+    // it on an accepted beat, never for one edge (FPGA-gPTP #31)
+    const bool ts_beat = dut->txts_valid_i && dut->txts_ready_o;
     dut->clk_i = 1; dut->eval();
     if (dut->tx_valid_o) {
       if (dut->tx_sof_o) { cur.clear(); in_tx = true; }
@@ -120,7 +125,7 @@ class TsnGenHarness {
         in_tx = false;
       }
     }
-    dut->txts_valid_i = 0;
+    if (ts_beat) dut->txts_valid_i = 0;
   }
 
   void run(uint64_t n) { while (n--) tick(); }
@@ -204,7 +209,8 @@ class TsnGenHarness {
     dut->rx_err_i = 0; dut->rx_data_i = 0; dut->rx_ts_i = 0;
     dut->tx_ready_i = 1;
     dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
-    dut->txts_type_i = 0;
+    dut->txts_type_i = 0; dut->txts_ok_i = 0; dut->txts_gen_i = 0;
+    dut->tx_credit_i = 1;
     for (int i = 0; i < 8; i++) tick();
     dut->rst_n = 1;
   }

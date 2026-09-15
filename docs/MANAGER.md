@@ -49,7 +49,6 @@ See the [historical resource record](history/v1/RESOURCE_VALIDATION.md).
 
 ## Open risks
 
-- [Issue #31](https://github.com/Mister-M-alt/FPGA-gPTP/issues/31) covers timestamp overwrite risk.
 - [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) covers mid-frame receive errors.
 - Parent gitlink updates require separate review.
 - Physical acceptance remains product-specific.
@@ -58,7 +57,7 @@ See the [historical resource record](history/v1/RESOURCE_VALIDATION.md).
 
 - Keep product integration enabled.
 - Retain disabled builds for comparisons only.
-- Track both open correctness issues explicitly.
+- Track every open correctness issue explicitly.
 - Require exact-head verification before parent updates.
 - Preserve dated campaigns within versioned history.
 

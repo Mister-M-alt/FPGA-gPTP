@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""Pin the engine PHC boundary after removal of the unused ns input."""
+"""Pin the engine PHC boundary and the egress result face.
+
+The PHC half records the removal of the unused ns input. The result half
+records FPGA-gPTP #31: the egress return is a valid/ready face carrying an
+outcome and a generation beside the timestamp, and the transmit admission
+credit is an engine input. A caller that drops one of those ports, or an
+engine that goes back to taking a result without an accepted beat, is named
+here by file and token instead of being found later by a wrong exchange.
+"""
 
 from pathlib import Path
 
@@ -23,6 +31,13 @@ REQUIRED = {
         "phc_addend_we_o",
         "phc_step_we_o",
         "gx_data_r <= {32'd0, ms_now_w};",
+        # the accepted-beat result face and the admission credit (#31)
+        "txts_ready_o",
+        "txts_ok_i",
+        "txts_gen_i",
+        "tx_credit_i",
+        "txts_accept_w = txts_valid_i && txts_ready_o",
+        "if (txts_accept_w) begin",
     ),
     "bench/arty/bench_arty_top.sv": (
         "rxts_r <= phc_ns_w;",
@@ -31,6 +46,18 @@ REQUIRED = {
         ".txts_ns_i",
         ".phc_addend_we_o",
         ".phc_step_we_o",
+        ".txts_ready_o",
+        ".txts_ok_i",
+        ".txts_gen_i",
+        ".tx_credit_i",
+    ),
+    "hdl/ucode/gen_gptp_ucode.py": (
+        # the lost arm, the retained pair and the three gated legs
+        "TXT_OK_C",
+        "S_T1V",
+        "S_PDWAIT",
+        "e_credit_gate(p, \"skip\")",
+        "e_credit_gate(p, \"beat_off\")",
     ),
 }
 
