@@ -12,6 +12,18 @@ The Sync leg now bounds the counter before it builds the frame/claim and before
 write-back. A separate regression image seeds S_SSEQ at 0x10000; the existing
 high-bit S_MYSEQ image remains independent so both counter paths are proved.
 
+FPGA-gPTP #68, the step-versus-slew policy the parent's media plane relies
+on (docs/INTEGRATION.md): a Sync/Follow_Up pair steps the PHC only when it
+is a FIRST synchronization -- it finds the sync-ok verdict clear, as after
+asCapable returns, a grandmaster identity change, a receipt timeout or a
+reset -- AND its |offset| exceeds one second (STEP_NS_C). Every other pair
+slews, so a grandmaster change alone never steps and a synchronized servo
+never steps at all. The rate path's input saturates at +-SLEW_NS_C, the
+retired 20 us step threshold: inside it the PI is the v5 loop bit for bit,
+beyond it the trim never exceeds what that loop could program, and MULS
+never sees a truncated offset. The v5 notes below describe the rule #68
+retires.
+
 FPGA-gPTP #7, found by the parent's field campaign: the announce handler
 fed BTCA every well-formed Announce, so a better vector that 802.1AS-2011
 10.3.10.2.1 (qualifyAnnounce) disqualifies still moved the grandmaster.
@@ -147,7 +159,7 @@ lands and observe-only retires. On every accepted Sync + Follow_Up as
 slave, the measured offset drives the parent `timestamp_counter`'s two
 knobs through the engine's PHC region:
 
-  * |offset| > 20 us (the established step threshold):
+  * |offset| > 20 us (the step threshold until #68, above):
     STEP -- one adjtime write of -offset re-bases the clock at once,
     and the addend is rewritten to the bare integrator: the rate
     estimate survives the step while the stale proportional term (moot
@@ -375,7 +387,9 @@ CEASE_MS_C = 300_000            # resume after 5 min (--cease-ms overrides)
                                 # counted down in 1 s cadence beats
 
 # ---- servo constants (clock-aware, set by set_servo_gains) -----------------
-STEP_NS_C = 20000               # established step threshold, ns
+STEP_NS_C = 1000000000          # a first synchronization steps above this, ns
+SLEW_NS_C = 20000               # PI input saturation, ns: the pre-#68 step
+                                # threshold, so the loop inside it is unchanged
 GAIN_S_C = 6                    # ns -> addend units: (off * GAIN_M) >> 6
 GAIN_M_C = 86                   # for the 100 MHz default; see set_servo_gains
 ILIM_C = 33554                  # integrator clamp = +-200 ppm at that clock
@@ -663,6 +677,23 @@ def e_ult64(p: Prog, ra: int, rb: int, less_label: str, geq_label: str,
     p.label(f"eq_{tag}")
 
 
+def e_sat(p: Prog, reg: int, lim: int, tag: str) -> None:
+    """Saturate the signed rf[reg] to [-lim, +lim] in place (clobbers RU and
+    RW). In range exactly when (reg + lim) u<= 2 lim, i.e. when that sum
+    divided by 2 lim + 1 is zero; out of range, the sum's sign picks the
+    bound: s = sum >>a 63 is 0 or -1, and (lim ^ s) - s is +lim or -lim."""
+    assert 0 < 2 * lim + 1 < (1 << 24), lim
+    p.emit("ALU", rd=RW, ra=reg, rb=0, cnd=ALU_ADD, imm=lim)
+    p.emit("MD", rd=RU, ra=RW, rb=0, cnd=MD_DIVU, imm=2 * lim + 1)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_Q, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label=f"{tag}_ok")
+    p.emit("ALU", rd=RU, ra=RW, rb=0, cnd=ALU_SAR, imm=63)
+    p.emit("MOVE", rd=reg, ra=0, imm=lim)
+    p.emit("ALU", rd=reg, ra=reg, rb=RU, cnd=ALU_XOR)
+    p.emit("ALU", rd=reg, ra=reg, rb=RU, cnd=ALU_SUB)
+    p.label(f"{tag}_ok")
+
+
 # ---- RX handlers -----------------------------------------------------------
 
 def prog_rx_sync(base: int) -> Prog:
@@ -735,60 +766,35 @@ def prog_rx_followup(base: int) -> Prog:
 
 def prog_leg_servo(base: int) -> Prog:
     """Accepted Sync+FU as slave; RA = offset (local minus master).
-    Step-vs-slew into the PHC region, then the receipt-timeout tail."""
+    The #68 step-vs-slew policy into the PHC region, then the
+    receipt-timeout tail."""
     p = Prog(base)
     # ---- the servo: offset is local minus master, correction negates --
-    # step when |offset| > 20 us, i.e. (offset + 20000) u> 40000
-    p.emit("ALU", rd=RT, ra=RA, rb=0, cnd=ALU_ADD, imm=STEP_NS_C)
-    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
-    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
-    p.emit("BRS", cnd=BRS_Z, label="sv_lo")
-    p.emit("BR", label="sv_step")
-    p.label("sv_lo")
-    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=2 * STEP_NS_C + 1)
-    p.emit("BRS", cnd=BRS_LT, label="sv_slew")
-    p.label("sv_step")
-    p.emit("ALU", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          # -offset
-    p.emit("WRST", ra=RB, imm=RG_PHC | 1, fmt=FMT_Q)         # adjtime
-    # the rate estimate survives the step AND becomes the whole addend:
-    # the re-base just made the stale proportional term moot
-    p.emit("RDST", rd=RC, imm=RG_SCR | S_INTG, fmt=FMT_Q)
-    p.emit("ALU", rd=RC, ra=R0, rb=RC, cnd=ALU_SUB)
-    p.emit("WRST", ra=RC, imm=RG_PHC | 0, fmt=FMT_Q)
-    p.emit("BR", label="sv_done")
+    # FPGA-gPTP #68: only a FIRST synchronization, one that finds the
+    # sync-ok verdict still clear, may step; a synchronized servo slews
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=FL_SYNCOK_C)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="sv_first")
     p.label("sv_slew")
+    # the PI input saturates at +-SLEW_NS_C: inside it the loop is the
+    # pre-#68 one bit for bit, beyond it the slew programs no rate that
+    # loop could not, and MULS (32 x 32) never sees a truncated offset
+    e_sat(p, RA, SLEW_NS_C, "sv_in")
     p.emit("MOVE", rd=RB, ra=0, imm=RUNTIME["gain_m"])
     p.emit("MD", rd=RT, ra=RA, rb=RB, cnd=MD_MULS)           # off * M
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SAR, imm=GAIN_S_C)
     p.emit("ALU", rd=RB, ra=RT, rb=0, cnd=ALU_SAR, imm=2)    # ki term
     p.emit("RDST", rd=RC, imm=RG_SCR | S_INTG, fmt=FMT_Q)
     p.emit("ALU", rd=RC, ra=RC, rb=RB, cnd=ALU_ADD)
-    # clamp the integrator to +-ILIM: (I + ILIM) u<= 2*ILIM
-    p.emit("MOVE", rd=RU, ra=0, imm=RUNTIME["ilim"])
-    p.emit("ALU", rd=RB, ra=RC, rb=RU, cnd=ALU_ADD)
-    p.emit("ALU", rd=RW, ra=RB, rb=0, cnd=ALU_SHR, imm=32)
-    p.emit("CMP", ra=RW, rb=0, fmt=FMT_D, imm=0)
-    p.emit("BRS", cnd=BRS_Z, label="sv_cl")
-    p.emit("BR", label="sv_sat")
-    p.label("sv_cl")
-    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=2 * RUNTIME["ilim"] + 1)
-    p.emit("BRS", cnd=BRS_LT, label="sv_iok")
-    p.label("sv_sat")
-    p.emit("ALU", rd=RW, ra=RC, rb=0, cnd=ALU_SHR, imm=63)
-    p.emit("CMP", ra=RW, rb=0, fmt=FMT_D, imm=1)
-    p.emit("BRS", cnd=BRS_Z, label="sv_neg")
-    p.emit("MOVE", rd=RC, ra=0, imm=RUNTIME["ilim"])
-    p.emit("BR", label="sv_iok")
-    p.label("sv_neg")
-    p.emit("ALU", rd=RC, ra=R0, rb=RU, cnd=ALU_SUB)          # -ILIM
-    p.label("sv_iok")
+    e_sat(p, RC, RUNTIME["ilim"], "sv_i")                    # +-ILIM
     p.emit("WRST", ra=RC, imm=RG_SCR | S_INTG, fmt=FMT_Q)
     p.emit("ALU", rd=RB, ra=RT, rb=0, cnd=ALU_SAR, imm=2)
     p.emit("ALU", rd=RT, ra=RT, rb=RB, cnd=ALU_SUB)          # kp = 3/4
     p.emit("ALU", rd=RT, ra=RT, rb=RC, cnd=ALU_ADD)          # + I
+    p.label("sv_rate")
     p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)          # negate
     p.emit("WRST", ra=RT, imm=RG_PHC | 0, fmt=FMT_Q)         # adjfine
-    p.label("sv_done")
     p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   # consumed
     p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
     p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)         # sync watch
@@ -796,6 +802,24 @@ def prog_leg_servo(base: int) -> Prog:
     e_flags(p, orm=FL_SYNCOK_C)
     p.emit("COMMIT")
     p.emit("END")
+    p.label("sv_first")
+    # ... and a first synchronization steps only when |offset| > 1 s, i.e.
+    # (offset + 1 s) u> 2 s: exactly when that sum divided by 2 s + 1 is
+    # nonzero. S_1E9 already holds the second
+    assert STEP_NS_C == 1_000_000_000, "load the new threshold explicitly"
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_1E9, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RA, rb=RB, cnd=ALU_ADD)
+    p.emit("ALU", rd=RB, ra=RB, rb=RB, cnd=ALU_ADD)
+    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=1)
+    p.emit("MD", rd=RU, ra=RT, rb=RB, cnd=MD_DIVU)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_Q, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="sv_slew")
+    p.emit("ALU", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          # -offset
+    p.emit("WRST", ra=RB, imm=RG_PHC | 1, fmt=FMT_Q)         # adjtime
+    # the rate estimate survives the step AND becomes the whole addend:
+    # the re-base just made the stale proportional term moot
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
+    p.emit("BR", label="sv_rate")
     return p
 
 

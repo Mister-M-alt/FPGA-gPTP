@@ -68,7 +68,8 @@
 //         hop differing from ours in one 32-bit half) adopt, and a
 //         degrade hands mastership back each time (#7)
 // 10..12  slave sync path: offset, sync-ok verdict, the 125 ms
-//         Follow_Up and 375 ms sync receipt timeouts (Table 4.2)
+//         Follow_Up and 375 ms sync receipt timeouts (Table 4.2); the
+//         first pair after asCapable, about 1 ms off, slews (#68)
 // 11b     a Sync/Follow_Up pair in a foreign domain never steers: the
 //         offset, the PHC writes and the flags hold, and the foreign
 //         Sync leaves no pending slot for a domain-0 Follow_Up (#6)
@@ -79,16 +80,24 @@
 // 11e     three Sync/Follow_Up pairs differing only in their flags word
 //         -- 0200/0000, 0208/0008 and twoStep flipped -- pair, steer and
 //         re-base the PHC alike (Table 11-4 ignored on reception, #64)
-// 13..15  the servo: step-vs-slew at 20 us, the PI addend against an
-//         exact-integer mirror, closed-loop lock on a +140 ppm master
+// 13..15  the servo under the #68 policy: only a first synchronization
+//         whose offset exceeds one second steps. A first 900 ms pair slews
+//         and synchronized ones walk the integrator rail to rail inside
+//         the pre-#68 rate envelope; a first 1.1 s pair steps exactly
+//         once and the same offset synchronized slews; -1.1 s steps, +-1 s
+//         slews, +-(1 s + 1 ns) steps; the PI addend against an
+//         exact-integer mirror; closed-loop lock on a +140 ppm master
 //         (one re-base carrying the surviving integrator)
 // 16..17  Sync/Follow_Up pairing by sequenceId AND source (11.4.4)
 // 18,18b  BTCA tie-breaks: steps then source switch the parent with no
 //         sync-ok flicker; a delayed dispatch reads the complete frozen epoch
 //         its event names, so a worse announce rejects cleanly
+// 18c     #68: a grandmaster identity change makes the next pair first,
+//         yet 300 us off it slews; a second change 1.5 s off steps once
 // 19..21  parent degradation yields mastership immediately (10.3.5);
 //         the Sync body stays zero while its Follow_Up carries the live
-//         egress stamp; an asCapable fall stops consumption and steering
+//         egress stamp; an asCapable fall stops consumption and steering,
+//         and the first pair after it returns, 1.2 s off, steps once (#68)
 // 21b,21c become resets the best record (no ghost GM after a quiet
 //         ride to mastership); the priority vector outranks the
 //         identity in the compare order
@@ -220,13 +229,15 @@ class GptpEngineHarness {
     pair_a_padded_sync();
     pair_a_sync_whose_flag_bits_are_ignored();
     drop_sync_ok_at_the_receipt_timeout();
-    step_the_phc_on_a_one_millisecond_offset();
+    slew_a_first_offset_under_one_second();
+    step_a_first_offset_over_one_second_once();
     slew_on_a_five_microsecond_offset();
     converge_the_closed_loop_on_a_fast_master();
     pair_nothing_with_a_wrong_sequence_follow_up();
     pair_nothing_with_a_follow_up_from_the_wrong_source();
     break_btca_ties_on_steps_then_source();
     read_a_complete_frozen_epoch_in_a_delayed_dispatch();
+    never_step_on_a_grandmaster_change_alone();
     take_mastership_when_the_parent_degrades();
     keep_the_two_step_sync_body_zero();
     stop_consuming_sync_when_ascapable_falls();
@@ -437,6 +448,10 @@ class GptpEngineHarness {
   int32_t phc_adj = 0;
   std::vector<uint64_t> steps_seen;         // every adjtime write
   std::vector<uint32_t> adj_seen;           // every adjfine write
+  //! the cycle of each of those write-enable samples: a pulse held for two
+  //! cycles is two entries, and a step's order against its addend is here
+  std::vector<uint64_t> step_cyc;
+  std::vector<uint64_t> adj_cyc;
 
   uint64_t phc() { return static_cast<uint64_t>(phc_acc >> 24); }
 
@@ -474,9 +489,11 @@ class GptpEngineHarness {
     if (dut->phc_addend_we_o) {
       phc_adj = static_cast<int32_t>(dut->phc_addend_o);
       adj_seen.push_back(dut->phc_addend_o);
+      adj_cyc.push_back(cyc);
     }
     if (dut->phc_step_we_o) {
       steps_seen.push_back(dut->phc_step_o);
+      step_cyc.push_back(cyc);
       phc_acc += static_cast<unsigned __int128>(
           static_cast<__int128>(static_cast<int64_t>(dut->phc_step_o)) << 24);
     }
@@ -585,9 +602,15 @@ class GptpEngineHarness {
     pdm.count++;
   }
 
-  // ---- servo mirror: the ROM's step-vs-slew in exact integer form -----------
-  // constants match gen_gptp_ucode.py at --clk-hz 2000000
-  static constexpr int64_t SV_STEP_NS = 20000;
+  // ---- servo mirror: the #68 step-vs-slew policy in exact integer form -----
+  // The policy as docs/INTEGRATION.md records it, not as the ROM encodes it:
+  // a FIRST synchronization (sync-ok still clear) whose |offset| exceeds one
+  // second steps; every other pair slews, the PI input saturated at 20 us
+  // so the loop inside that band is the pre-#68 one. The caller says
+  // whether the pair is first, from the phase it scripted, never from the
+  // DUT. Constants match gen_gptp_ucode.py at --clk-hz 2000000
+  static constexpr int64_t SV_STEP_NS = 1000000000;
+  static constexpr int64_t SV_SLEW_NS = 20000;
   static constexpr int64_t SV_GAIN_M = 4295;
   static constexpr int64_t SV_GAIN_S = 6;
   static constexpr int64_t SV_ILIM = 1677722;              // 200 ppm at 2 MHz
@@ -599,20 +622,38 @@ class GptpEngineHarness {
   };
   ServoModelState svm;
 
-  void servo_mirror(int64_t off) {
-    uint64_t mag = static_cast<uint64_t>(off + SV_STEP_NS);
-    if (mag > static_cast<uint64_t>(2 * SV_STEP_NS)) {
+  //! the PI output for an input already inside the saturation band
+  static int64_t pi_out(int64_t t, int64_t intg) {
+    return (t - (t >> 2)) + intg;
+  }
+
+  //! the largest rate trim the pre-#68 loop could program: a full-band
+  //! input with the integrator on its rail
+  static int64_t slew_envelope() {
+    return pi_out((SV_SLEW_NS * SV_GAIN_M) >> SV_GAIN_S, SV_ILIM);
+  }
+
+  void servo_mirror(int64_t off, bool first) {
+    if (first && (off > SV_STEP_NS || off < -SV_STEP_NS)) {
       svm.stepped = true;
       svm.step_val = static_cast<uint64_t>(-off);
       svm.addend = -svm.intg;      // the surviving rate estimate, alone
       return;
     }
     svm.stepped = false;
-    int64_t t = (off * SV_GAIN_M) >> SV_GAIN_S;
+    const int64_t in = off > SV_SLEW_NS    ? SV_SLEW_NS
+                       : off < -SV_SLEW_NS ? -SV_SLEW_NS
+                                           : off;
+    int64_t t = (in * SV_GAIN_M) >> SV_GAIN_S;
     svm.intg += (t >> 2);
     if (svm.intg > SV_ILIM) svm.intg = SV_ILIM;
     if (svm.intg < -SV_ILIM) svm.intg = -SV_ILIM;
-    svm.addend = -((t - (t >> 2)) + svm.intg);
+    svm.addend = -pi_out(t, svm.intg);
+  }
+
+  //! the addend a 32-bit PHC write carries for a mirror value
+  static uint32_t adj_bits(int64_t addend) {
+    return static_cast<uint32_t>(static_cast<int32_t>(addend));
   }
 
   // ---- auto peer: answers every Pdelay_Req the DUT transmits ----------------
@@ -747,6 +788,52 @@ class GptpEngineHarness {
     Frame g = follow_up(seq, 0, origin, src);
     send_frame(g.b, local_rx + 500);
     run(6000);
+  }
+
+  //! One pair whose offset, as the plane measures it (local minus master,
+  //! less the modelled link delay, no correctionField), is exactly `off`,
+  //! graded against the #68 policy. `first` and `want_step` are what the
+  //! calling phase scripted; the mirror must agree with them, and the PHC
+  //! face must show exactly the pulses the policy names: one step pulse
+  //! carrying -offset, then one addend pulse carrying the bare integrator;
+  //! or no step pulse and one addend pulse carrying the PI output.
+  void expect_policy_pair(const char *tag, uint16_t seq, uint64_t local_rx,
+                          int64_t off, bool first, bool want_step,
+                          uint64_t src = PEER_CID) {
+    char n[128];
+    const size_t s0 = steps_seen.size();
+    const size_t a0 = adj_seen.size();
+    snprintf(n, sizeof n, "%s: sync-ok %s before the pair", tag,
+             first ? "low" : "high");
+    expect(n, dut->pub_flags_o & FL_SYNCOK, first ? 0u : FL_SYNCOK);
+    sync_pair(seq, local_rx,
+              local_rx - static_cast<uint64_t>(pdm.d)
+                  - static_cast<uint64_t>(off),
+              src);
+    servo_mirror(off, first);
+    snprintf(n, sizeof n, "%s: the harness mirror agrees", tag);
+    expect(n, svm.stepped, want_step);
+    snprintf(n, sizeof n, "%s: offset published", tag);
+    expect(n, static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(off));
+    snprintf(n, sizeof n, "%s: step pulses", tag);
+    expect(n, steps_seen.size() - s0, want_step ? 1u : 0u);
+    snprintf(n, sizeof n, "%s: addend pulses", tag);
+    expect(n, adj_seen.size() - a0, 1);
+    if (adj_seen.size() > a0) {
+      snprintf(n, sizeof n, "%s: addend matches the mirror", tag);
+      expect(n, adj_seen.back(), adj_bits(svm.addend));
+    }
+    if (want_step && steps_seen.size() > s0 && adj_seen.size() > a0) {
+      snprintf(n, sizeof n, "%s: step carries -offset", tag);
+      expect(n, steps_seen.back(), static_cast<uint64_t>(-off));
+      snprintf(n, sizeof n, "%s: step pulse precedes its addend", tag);
+      expect(n, step_cyc.back() < adj_cyc.back(), 1);
+      snprintf(n, sizeof n, "%s: step data holds after the pulse", tag);
+      expect(n, dut->phc_step_o, steps_seen.back());
+    }
+    snprintf(n, sizeof n, "%s: sync-ok raised", tag);
+    expect(n, dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
   }
 
   // an announce carrying {p1, gmid, steps} from `src`
@@ -2518,7 +2605,12 @@ class GptpEngineHarness {
   }
 
   // ---- 10: as slave, peer sync -> offset; sync-ok rises -----------------
+  // this is the plane's first synchronization after asCapable, about 1 ms
+  // off: under #68's one second, so it slews -- no step pulse, one addend
+  // pulse carrying the saturated PI output
   void steer_on_the_first_peer_sync() {
+    const size_t s0 = steps_seen.size();
+    const size_t a0 = adj_seen.size();
     expect("sync-ok low before sync", dut->pub_flags_o & FL_SYNCOK, 0);
     TRX = 20000000000ull;
     ORIGIN = 19999000000ull;
@@ -2544,10 +2636,11 @@ class GptpEngineHarness {
     expect("pub offset", static_cast<uint32_t>(dut->pub_offset_o),
            static_cast<uint32_t>(OFF));
     expect("sync-ok rose", dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
-    servo_mirror(static_cast<int64_t>(OFF));
-    expect("big offset re-bases the phc",
-           !steps_seen.empty() && svm.stepped &&
-               steps_seen.back() == svm.step_val, 1);
+    servo_mirror(static_cast<int64_t>(OFF), true);
+    expect("first sync under 1 s: no step pulse", steps_seen.size(), s0);
+    expect("first sync under 1 s: one slew addend",
+           adj_seen.size() == a0 + 1 &&
+               adj_seen.back() == adj_bits(svm.addend), 1);
   }
 
   // ---- 11: a Follow_Up later than 125 ms pairs with nothing -------------
@@ -2566,7 +2659,7 @@ class GptpEngineHarness {
     expect("late FU dropped", static_cast<uint32_t>(dut->pub_offset_o),
            static_cast<uint32_t>(OFF));
     expect("late FU never steers", steps_seen.size() + adj_seen.size(),
-           2);                                     // phase 10's step + its -I
+           1);                                     // phase 10's slew addend
     TRX2 = TRX + 2000000000ull;
     ORIGIN2 = ORIGIN + 1999000000ull;
     {
@@ -2582,7 +2675,7 @@ class GptpEngineHarness {
         TRX2 - (ORIGIN2 + CORR_NS + static_cast<uint64_t>(pdm.d));
     expect("next pair lands", static_cast<uint32_t>(dut->pub_offset_o),
            static_cast<uint32_t>(OFF2));
-    servo_mirror(static_cast<int64_t>(OFF2));
+    servo_mirror(static_cast<int64_t>(OFF2), false);
   }
 
   // ---- 11b: a Sync + Follow_Up pair in a foreign domain never steers ---
@@ -2640,7 +2733,8 @@ class GptpEngineHarness {
   // the published offset; each is counted and leaves the offset, the PHC
   // knobs and the flags unmoved; none consumes the pending Sync, so the
   // complete Follow_Up that follows pairs with it and lands an offset 333
-  // ns from the previous one, then re-bases the PHC by its negation
+  // ns from the previous one, then steers the PHC: synchronized, it slews
+  // (#68), one addend pulse and no step
   void never_steer_from_a_follow_up_without_its_tlv() {
     uint16_t drops = dut->dbg_rx_drop_o;
     size_t writes = steps_seen.size() + adj_seen.size();
@@ -2696,10 +2790,11 @@ class GptpEngineHarness {
            static_cast<uint32_t>(OFFM));
     expect("complete Follow_Up: nothing further dropped", dut->dbg_rx_drop_o,
            static_cast<uint16_t>(drops + 3));
-    servo_mirror(static_cast<int64_t>(OFFM));
-    expect("complete Follow_Up re-bases the phc",
-           !steps_seen.empty() && svm.stepped &&
-               steps_seen.back() == svm.step_val, 1);
+    servo_mirror(static_cast<int64_t>(OFFM), false);
+    expect("complete Follow_Up steers the phc",
+           steps_seen.size() + adj_seen.size() == writes + 1 &&
+               !adj_seen.empty() && adj_seen.back() == adj_bits(svm.addend),
+           1);
   }
 
   // ---- 11d: a Sync padded to the Ethernet minimum still pairs ----------
@@ -2711,8 +2806,8 @@ class GptpEngineHarness {
   // Two shapes: the 60-byte minimum, and a Sync padded to 74 bytes, the
   // span of the whole Follow_Up TLV header arm (octets past messageLength
   // are padding to a receiver whatever their count). Each is accepted
-  // with no drop, its Follow_Up pairs with it, and the pair re-bases the
-  // PHC by the negation of its own offset. The 74-byte shape is the one
+  // with no drop, its Follow_Up pairs with it, and the pair steers the PHC
+  // from its own offset (a synchronized slew, #68). The 74-byte shape is the one
   // an arm at byte 59 cannot hide from: a poison raised on a frame's eof
   // byte is not seen by the end-of-frame gate, which samples bad_r as
   // registered, so the 60-byte shape alone would pass MR7
@@ -2723,6 +2818,8 @@ class GptpEngineHarness {
     for (const Pad &p : pads) {
       char n[64];
       uint16_t drops = dut->dbg_rx_drop_o;
+      const size_t s0 = steps_seen.size();
+      const size_t a0 = adj_seen.size();
       const uint64_t TRXP =
           TRX2 + 1200000000ull + static_cast<uint64_t>(p.seq) * 1000ull;
       const uint64_t ORGP =
@@ -2743,10 +2840,10 @@ class GptpEngineHarness {
       snprintf(n, sizeof n, "%s pairs: offset", p.tag);
       expect(n, static_cast<uint32_t>(dut->pub_offset_o),
              static_cast<uint32_t>(OFFP));
-      servo_mirror(static_cast<int64_t>(OFFP));
-      snprintf(n, sizeof n, "%s pairs: re-bases the phc", p.tag);
-      expect(n, !steps_seen.empty() && svm.stepped &&
-                    steps_seen.back() == svm.step_val, 1);
+      servo_mirror(static_cast<int64_t>(OFFP), false);
+      snprintf(n, sizeof n, "%s pairs: steers the phc", p.tag);
+      expect(n, steps_seen.size() == s0 && adj_seen.size() == a0 + 1 &&
+                    adj_seen.back() == adj_bits(svm.addend), 1);
     }
   }
 
@@ -2763,7 +2860,8 @@ class GptpEngineHarness {
   // Each pair carries its own sequenceId, ingress stamp and origin skew,
   // so its offset is a value the previous pair cannot leave behind, and
   // the outcome tuple of every variant is compared against the conformant
-  // one: same drop count, same pairing, same sync-ok, same PHC re-base.
+  // one: same drop count, same pairing, same sync-ok, same PHC steering
+  // (a synchronized slew, #68).
   void pair_a_sync_whose_flag_bits_are_ignored() {
     struct Variant {
       const char *tag;
@@ -2777,12 +2875,14 @@ class GptpEngineHarness {
       {"sync flags 0208/0008", 0x0141, 0x0208, 0x0008, 666ull},
       {"sync flags 0000/0200", 0x0142, 0x0000, 0x0200, 888ull},
     }};
-    //! {dropped nothing, paired exactly, sync-ok, re-based} per variant
+    //! {dropped nothing, paired exactly, sync-ok, steered} per variant
     unsigned reference = 0;
     for (size_t i = 0; i < variants.size(); i++) {
       const Variant &v = variants[i];
       char n[96];
       const uint16_t drops = dut->dbg_rx_drop_o;
+      const size_t s0 = steps_seen.size();
+      const size_t a0 = adj_seen.size();
       const uint64_t TRXV =
           TRX2 + 1400000000ull + static_cast<uint64_t>(v.seq) * 1000ull;
       const uint64_t ORGV =
@@ -2797,14 +2897,14 @@ class GptpEngineHarness {
       run(6000);
       const uint64_t OFFV =
           TRXV - (ORGV + CORR_NS + static_cast<uint64_t>(pdm.d));
-      servo_mirror(static_cast<int64_t>(OFFV));
+      servo_mirror(static_cast<int64_t>(OFFV), false);
       const unsigned outcome =
           (dut->dbg_rx_drop_o == drops ? 1u : 0u)
           | (static_cast<uint32_t>(dut->pub_offset_o)
                  == static_cast<uint32_t>(OFFV) ? 2u : 0u)
           | ((dut->pub_flags_o & FL_SYNCOK) ? 4u : 0u)
-          | (!steps_seen.empty() && svm.stepped &&
-             steps_seen.back() == svm.step_val ? 8u : 0u);
+          | (steps_seen.size() == s0 && adj_seen.size() == a0 + 1 &&
+             adj_seen.back() == adj_bits(svm.addend) ? 8u : 0u);
       snprintf(n, sizeof n, "%s: pairs and steers", v.tag);
       expect(n, outcome, 15u);
       if (i == 0) {
@@ -2824,27 +2924,90 @@ class GptpEngineHarness {
     expect("timeout keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
   }
 
-  // ---- 13: a +1 ms offset STEPS the phc by its negation -----------------
-  void step_the_phc_on_a_one_millisecond_offset() {
-    size_t adj_before = adj_seen.size();
-    const uint64_t TRX3 = 30000000000ull;
-    const uint64_t ORG3 =
-        TRX3 - CORR_NS - static_cast<uint64_t>(pdm.d) - 1000000ull;
-    Frame f = ptp(0x0, 0x0105, 0, 0x0208, 10);
-    f.ts(0);
-    send_frame(f.b, TRX3);
-    run(2000);
-    Frame g = follow_up(0x0105, CORR_NS << 16, ORG3);
-    send_frame(g.b, TRX3 + 500);
-    run(6000);
-    servo_mirror(1000000);
-    expect("step is the negation",
-           !steps_seen.empty() && steps_seen.back() == svm.step_val &&
-               svm.step_val == static_cast<uint64_t>(-1000000ll), 1);
-    expect("step writes the bare estimate",
-           adj_seen.size() == adj_before + 1 &&
-               adj_seen.back() ==
-                   static_cast<uint32_t>(static_cast<int32_t>(-svm.intg)), 1);
+  //! The parent re-announces the adopted grandmaster, so the 3 s Announce
+  //! receipt watch restarts. A refresh leaves sync-ok alone, so it cannot
+  //! make the next pair first; the receipt-timeout waits of the #68 phases
+  //! would otherwise outlast that watch and hand this plane mastership
+  void keep_the_gm_elected(uint16_t seq) {
+    announce(seq, 100, GMID, 0, PEER_CID);
+  }
+
+  // ---- 13: #68 -- a first synchronization under one second slews --------
+  // phase 12's receipt timeout left sync-ok low, so the next pair is a
+  // first synchronization, and 900 ms is under the one-second threshold:
+  // no step pulse, one addend pulse carrying the PI output with its input
+  // saturated at 20 us, a trim that slows our clock while it is ahead.
+  // The integrator enters on its positive rail (phases 10..11e each fed it
+  // a saturated input), so this pair runs that clamp; twelve pairs 900 ms
+  // BEHIND then walk it to the negative rail. Every addend matches the
+  // mirror and none leaves the envelope the pre-#68 loop could program
+  void slew_a_first_offset_under_one_second() {
+    const size_t s0 = steps_seen.size();
+    const uint64_t T13 = 30000000000ull;
+    keep_the_gm_elected(0x0300);
+    expect_policy_pair("+900 ms first", 0x0105, T13, 900000000ll, true,
+                       false);
+    expect("+900 ms: the trim slows our clock",
+           static_cast<int32_t>(phc_adj) < 0, 1);
+    int64_t widest = 0;
+    for (int k = 0; k < 12; k++) {
+      char n[48];
+      snprintf(n, sizeof n, "-900 ms synchronized %d", k);
+      expect_policy_pair(n, static_cast<uint16_t>(0x0120 + k),
+                         T13 + static_cast<uint64_t>(k + 1) * 125000000ull,
+                         -900000000ll, false, false);
+      const int64_t a = static_cast<int32_t>(phc_adj);
+      widest = a > widest ? a : (-a > widest ? -a : widest);
+    }
+    expect("-900 ms: the trim speeds our clock",
+           static_cast<int32_t>(phc_adj) > 0, 1);
+    expect("900 ms: never one step pulse", steps_seen.size(), s0);
+    expect("900 ms: the integrator reached its negative rail", svm.intg,
+           static_cast<uint64_t>(-SV_ILIM));
+    expect("900 ms: widest slew is the pre-#68 envelope", widest,
+           static_cast<uint64_t>(slew_envelope()));
+  }
+
+  // ---- 13b: #68 -- over one second, a first synchronization steps ONCE --
+  // after a receipt timeout, a pair 1.1 s ahead steps: exactly one step
+  // pulse of -1.1 s, then one addend pulse with the bare integrator. The
+  // same 1.1 s again is no longer first, so it slews: the step happened
+  // exactly once. Then, each after its own timeout: -1.1 s steps; the
+  // threshold is "exceeds", so exactly +-1 s slews and 1 s + 1 ns steps
+  void step_a_first_offset_over_one_second_once() {
+    const size_t s0 = steps_seen.size();
+    const uint64_t T13B = 32000000000ull;
+    keep_the_gm_elected(0x0301);
+    expect("1.1 s: sync-ok falls first", wait_flags(FL_SYNCOK, 0, 900000ull),
+           1);
+    const int64_t intg = svm.intg;
+    expect_policy_pair("+1.1 s first", 0x0140, T13B, 1100000000ll, true,
+                       true);
+    expect("+1.1 s: the step writes the bare estimate", adj_seen.back(),
+           adj_bits(-intg));
+    expect_policy_pair("+1.1 s synchronized", 0x0141, T13B + 125000000ull,
+                       1100000000ll, false, false);
+    expect("+1.1 s: exactly one step pulse", steps_seen.size(), s0 + 1);
+    struct Probe { const char *tag; int64_t off; bool steps; };
+    const std::array<Probe, 5> probes = {{
+      {"-1.1 s first", -1100000000ll, true},
+      {"+1 s first", 1000000000ll, false},
+      {"-1 s first", -1000000000ll, false},
+      {"+1 s + 1 ns first", 1000000001ll, true},
+      {"-1 s - 1 ns first", -1000000001ll, true},
+    }};
+    for (size_t i = 0; i < probes.size(); i++) {
+      const Probe &p = probes[i];
+      char n[64];
+      keep_the_gm_elected(static_cast<uint16_t>(0x0302 + i));
+      snprintf(n, sizeof n, "%s: sync-ok falls first", p.tag);
+      expect(n, wait_flags(FL_SYNCOK, 0, 900000ull), 1);
+      expect_policy_pair(p.tag, static_cast<uint16_t>(0x0142 + i),
+                         T13B + static_cast<uint64_t>(i + 2) * 1000000000ull,
+                         p.off, true, p.steps);
+    }
+    expect("over one second: one step per first pair", steps_seen.size(),
+           s0 + 4);
   }
 
   // ---- 14: a +5 us offset SLEWS: the PI addend matches the mirror -------
@@ -2860,7 +3023,7 @@ class GptpEngineHarness {
     Frame g = follow_up(0x0106, CORR_NS << 16, ORG4);
     send_frame(g.b, TRX4 + 500);
     run(6000);
-    servo_mirror(5000);
+    servo_mirror(5000, false);
     expect("slew addend matches the PI mirror",
            !adj_seen.empty() &&
                adj_seen.back() ==
@@ -2868,15 +3031,19 @@ class GptpEngineHarness {
     expect("a slew is not a step", steps_seen.size(), steps_before);
   }
 
-  // ---- 15: closed loop -- a +100 ppm master converges to lock -----------
-  // the master clock runs independent of our phc: 1 ms ahead at start,
-  // +0.05 ns per cycle faster. The first pair steps; the PI then drives
-  // the measured offset to zero with the integrator carrying the rate.
+  // ---- 15: closed loop -- a +140 ppm master converges to lock -----------
+  // the master clock runs independent of our phc: 1.5 s ahead at start,
+  // +0.07 ns per cycle faster. The receipt timeout clears sync-ok first,
+  // so the first pair is a first synchronization over one second and
+  // steps (#68); the PI then drives the measured offset to zero with the
+  // integrator carrying the rate.
   void converge_the_closed_loop_on_a_fast_master() {
+    expect("closed loop starts unsynchronized",
+           wait_flags(FL_SYNCOK, 0, 900000ull), 1);
     size_t steps_before = steps_seen.size();
-    int64_t intg_at_entry = svm.intg;            // phase 14's ki deposit
+    int64_t intg_at_entry = svm.intg;            // phases 13..14's deposits
     uint64_t mst_base =
-        phc() + 1000000ull - cyc * 500ull - cyc * 7ull / 100ull;
+        phc() + 1500000000ull - cyc * 500ull - cyc * 7ull / 100ull;
     uint16_t sq = 0x0200;
     for (int k = 0; k < 24; k++) {
       if ((k % 8) == 0) {                        // keep the GM elected
@@ -2900,6 +3067,15 @@ class GptpEngineHarness {
       Frame g = follow_up(sq, 0, origin);
       send_frame(g.b, local_rx + 500);
       run(4000);
+      // every pair of the loop is mirrored, so the integrator the later
+      // #68 phases grade against is the one this loop leaves behind
+      servo_mirror(static_cast<int64_t>(local_rx - origin
+                                        - static_cast<uint64_t>(pdm.d)),
+                   k == 0);
+      char n[64];
+      snprintf(n, sizeof n, "closed loop pair %d: addend matches the mirror",
+               k);
+      expect(n, adj_seen.back(), adj_bits(svm.addend));
       if (k == 0) {
         // the one step: its addend write must be the surviving
         // integrator alone, and that integrator is nonzero here --
@@ -2943,6 +3119,9 @@ class GptpEngineHarness {
       const uint64_t OFF6 = TRX6 - (TRX6 - 5000 + static_cast<uint64_t>(pdm.d));
       expect("matching FU still lands", static_cast<uint32_t>(dut->pub_offset_o),
              static_cast<uint32_t>(OFF6));
+      servo_mirror(static_cast<int64_t>(OFF6), false);
+      expect("matching FU steers as the mirror", adj_seen.back(),
+             adj_bits(svm.addend));
     }
   }
 
@@ -2965,6 +3144,9 @@ class GptpEngineHarness {
       const uint64_t OFF7 = 7000 - static_cast<uint64_t>(pdm.d);
       expect("paired FU still lands", static_cast<uint32_t>(dut->pub_offset_o),
              static_cast<uint32_t>(OFF7));
+      servo_mirror(static_cast<int64_t>(OFF7), false);
+      expect("paired FU steers as the mirror", adj_seen.back(),
+             adj_bits(svm.addend));
     }
   }
 
@@ -3026,6 +3208,37 @@ class GptpEngineHarness {
            0x00F1F1FFFE000009ull);
   }
 
+  // ---- 18c: #68 -- a grandmaster identity change alone never steps ------
+  // phase 18's parent announces a DIFFERENT grandmaster with the same
+  // vector: a parent update, so it is taken, and a new identity, so it is
+  // the full adoption that clears sync-ok. The next pair is therefore a
+  // first synchronization, and at 300 us -- far over the pre-#68 20 us,
+  // far under one second -- it slews with no step pulse. The contrast arm
+  // proves the adoption did make that pair first: a second identity
+  // change, then a pair 1.5 s behind, steps exactly once
+  void never_step_on_a_grandmaster_change_alone() {
+    const uint64_t SRC5 = 0x00F1F1FFFE000009ull;
+    const uint64_t GM_B = 0x00B0B0FFFE00000Bull;
+    const uint64_t GM_C = 0x00C0C0FFFE00000Cull;
+    const uint64_t T18C = 50000000000ull;
+    const size_t s0 = steps_seen.size();
+    expect_policy_pair("before the GM change", 0x0600, T18C, 3000, false,
+                       false, SRC5);
+    announce(48, 100, GM_B, 1, SRC5);
+    expect("GM change: new identity adopted", dut->pub_gm_id_o, GM_B);
+    expect("GM change: same parent", dut->pub_parent_id_o, SRC5);
+    expect("GM change: still slave", dut->pub_flags_o & 3, FL_PRESENT);
+    expect_policy_pair("GM change, +300 us", 0x0601, T18C + 125000000ull,
+                       300000, true, false, SRC5);
+    expect("GM change alone: no step pulse", steps_seen.size(), s0);
+    announce(49, 100, GM_C, 1, SRC5);
+    expect("second GM change: new identity adopted", dut->pub_gm_id_o, GM_C);
+    expect_policy_pair("second GM change, -1.5 s", 0x0602,
+                       T18C + 250000000ull, -1500000000ll, true, true, SRC5);
+    expect("GM change over one second: one step pulse", steps_seen.size(),
+           s0 + 1);
+  }
+
   // ---- 19: the parent degrades below us -> immediate takeover -----------
   // 10.3.5: a parent update replaces the best; ours now wins the
   // contest and become-master runs WITHOUT waiting any timeout
@@ -3048,6 +3261,9 @@ class GptpEngineHarness {
   }
 
   // ---- 21: an asCapable fall stops sync consumption ---------------------
+  // and, for #68, the first pair after asCapable returns is a first
+  // synchronization (the receipt timeout cleared sync-ok while consumption
+  // stood still): 1.2 s behind, it steps exactly once
   void stop_consuming_sync_when_ascapable_falls() {
     announce(43, 100, GMID, 0, PEER_CID);        // adopt again
     expect("re-adopted", dut->pub_flags_o & 3, FL_PRESENT);
@@ -3055,6 +3271,9 @@ class GptpEngineHarness {
     const uint64_t OFF_A = 4000 - static_cast<uint64_t>(pdm.d);
     expect("baseline pair lands", static_cast<uint32_t>(dut->pub_offset_o),
            static_cast<uint32_t>(OFF_A));
+    servo_mirror(static_cast<int64_t>(OFF_A), true);   // first after adopt
+    expect("baseline pair steers as the mirror", adj_seen.back(),
+           adj_bits(svm.addend));
     pd_mode = PD_FAR;
     {
       int base = pdm.count;
@@ -3072,10 +3291,8 @@ class GptpEngineHarness {
     announce(44, 100, GMID, 0, PEER_CID);        // keep the GM elected
     expect("capable again", wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
     announce(45, 100, GMID, 0, PEER_CID);
-    sync_pair(0x0502, TRX6 + 9000000000ull, TRX6 + 9000000000ull - 6000);
-    const uint64_t OFF_C = 6000 - static_cast<uint64_t>(pdm.d);
-    expect("recovered pair lands", static_cast<uint32_t>(dut->pub_offset_o),
-           static_cast<uint32_t>(OFF_C));
+    expect_policy_pair("first pair after asCapable returns, -1.2 s", 0x0502,
+                       TRX6 + 9000000000ull, -1200000000ll, true, true);
   }
 
   // ---- 21b: become resets the best record -- no ghost GM ----------------

@@ -177,6 +177,55 @@ MUTATIONS = [
      "    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, \"ac\", \"skip\")\n"
      "    p.emit(\"RDST\", rd=RA, imm=RG_SCR | S_ASEQ, fmt=FMT_Q)\n",
      "an Announce beat is postponed while the transmit path has no credit"),
+    # ---- the #68 step-versus-slew policy, one arm per rule -----------------
+    ("a synchronized servo may step", GENERATOR,
+     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=0)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_first\")\n",
+     "    p.emit(\"BR\", label=\"sv_first\")\n",
+     "only a first synchronization may step"),
+    ("the first-synchronization test inverted", GENERATOR,
+     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=0)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_first\")\n",
+     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=FL_SYNCOK_C)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_first\")\n",
+     "a first synchronization over one second steps"),
+    ("every first synchronization steps", GENERATOR,
+     "    p.emit(\"MD\", rd=RU, ra=RT, rb=RB, cnd=MD_DIVU)\n"
+     "    p.emit(\"CMP\", ra=RU, rb=0, fmt=FMT_Q, imm=0)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_slew\")\n",
+     "",
+     "a first synchronization under one second slews"),
+    ("the pre-#68 20 us threshold", GENERATOR,
+     "    p.emit(\"RDST\", rd=RB, imm=RG_SCR | S_1E9, fmt=FMT_Q)\n",
+     "    p.emit(\"MOVE\", rd=RB, ra=0, imm=20000)\n",
+     "the step threshold is one second"),
+    ("exactly one second steps", GENERATOR,
+     "    p.emit(\"ALU\", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=1)\n"
+     "    p.emit(\"MD\", rd=RU, ra=RT, rb=RB, cnd=MD_DIVU)\n",
+     "    p.emit(\"ALU\", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=0)\n"
+     "    p.emit(\"MD\", rd=RU, ra=RT, rb=RB, cnd=MD_DIVU)\n",
+     "an offset of exactly one second does not exceed the threshold"),
+    ("the step arm is unreachable", GENERATOR,
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_slew\")\n"
+     "    p.emit(\"ALU\", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          "
+     "# -offset\n",
+     "    p.emit(\"BR\", label=\"sv_slew\")\n"
+     "    p.emit(\"ALU\", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          "
+     "# -offset\n",
+     "a first synchronization over one second steps"),
+    ("a grandmaster change keeps synchronization", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C, orm=FL_PRESENT_C)\n",
+     "a grandmaster identity change makes the next pair first"),
+    ("the slew input is not saturated", GENERATOR,
+     "    e_sat(p, RA, SLEW_NS_C, \"sv_in\")\n",
+     "",
+     "a large offset slews within the pre-#68 rate envelope"),
+    ("the integrator is not clamped", GENERATOR,
+     "    e_sat(p, RC, RUNTIME[\"ilim\"], \"sv_i\")                    "
+     "# +-ILIM\n",
+     "",
+     "the integrator stays within +-200 ppm"),
 ]
 
 

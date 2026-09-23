@@ -150,13 +150,97 @@ Restore credit to resume every normal cadence.
 | Output | Meaning |
 |---|---|
 | `phc_addend_we_o` | Applies one rate update |
-| `phc_addend_o[31:0]` | Carries unsigned rate addend |
+| `phc_addend_o[31:0]` | Carries signed Q8.24 ns-per-tick rate trim |
 | `phc_step_we_o` | Applies one phase step |
-| `phc_step_o[63:0]` | Carries signed phase adjustment bits |
+| `phc_step_o[63:0]` | Carries signed phase adjustment nanoseconds |
 
 Treat each write-enable as a pulse.
 
 Apply its data during that cycle.
+
+### Pulse semantics
+
+Each write-enable stays high for exactly one `clk_i` cycle.
+
+Only a consumed slave Sync and Follow_Up pair writes.
+
+Each consumed pair writes exactly one addend pulse.
+
+At most one step pulse precedes that addend pulse.
+
+Add `phc_step_o` to PHC time on its pulse.
+
+A step carries the measured offset, negated.
+
+Its addend then carries the retained rate estimate alone.
+
+Each addend pulse replaces the previous rate trim.
+
+Both data outputs hold their values between pulses.
+
+Reset zeroes both data outputs.
+
+Count step pulses to count phase steps.
+
+### Step versus slew policy
+
+[Issue #68](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68) records this policy.
+
+The offset is local time minus grandmaster time.
+
+A pair steps only when both conditions hold:
+
+- It is the first synchronization.
+- Its offset magnitude exceeds one second.
+
+An offset of exactly one second slews.
+
+Every other pair slews through the rate path.
+
+A synchronized servo never steps, whatever the offset.
+
+#### First synchronization
+
+`pub_flags_o` bit 3 publishes the synchronization verdict.
+
+The first synchronization finds that verdict clear.
+
+That pair then raises the verdict.
+
+These events clear the verdict:
+
+- Reset.
+- A 375 ms Sync receipt timeout.
+- A grandmaster identity change.
+- This plane becoming grandmaster.
+
+Losing asCapable stops Sync consumption.
+
+The receipt timeout then clears the verdict.
+
+Regaining asCapable takes longer than that timeout.
+
+So the first pair after asCapable is first.
+
+#### Grandmaster change
+
+An identity change makes the next pair first.
+
+That pair steps only above one second.
+
+An identity change alone therefore never steps.
+
+A new parent under the same grandmaster never steps.
+
+#### Slew limits
+
+The rate path saturates its input at 20 microseconds.
+
+Inside that band the servo behaves as before.
+
+The rate trim therefore never exceeds about 320 ppm.
+
+A 900 ms offset takes tens of minutes to slew.
 
 ## Publication
 
@@ -207,6 +291,7 @@ Set `CLK_HZ_P` to the actual engine frequency.
 - Report unmeasured results explicitly.
 - Drive admission credit as a level.
 - Apply PHC pulses once.
+- Count each step pulse as one step.
 - Capture publication only on commit.
 - Review the open interface risk.
 - Run every repository gate.
