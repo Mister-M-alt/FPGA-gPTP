@@ -178,49 +178,65 @@ MUTATIONS = [
      "    p.emit(\"RDST\", rd=RA, imm=RG_SCR | S_ASEQ, fmt=FMT_Q)\n",
      "an Announce beat is postponed while the transmit path has no credit"),
     # ---- the #68 step-versus-slew policy, one arm per rule -----------------
-    ("a synchronized servo may step", GENERATOR,
-     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=0)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_first\")\n",
-     "    p.emit(\"BR\", label=\"sv_first\")\n",
-     "only a first synchronization may step"),
-    ("the first-synchronization test inverted", GENERATOR,
-     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=0)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_first\")\n",
-     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=FL_SYNCOK_C)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_first\")\n",
-     "a first synchronization over one second steps"),
-    ("every first synchronization steps", GENERATOR,
-     "    p.emit(\"MD\", rd=RU, ra=RT, rb=RB, cnd=MD_DIVU)\n"
-     "    p.emit(\"CMP\", ra=RU, rb=0, fmt=FMT_Q, imm=0)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_slew\")\n",
-     "",
-     "a first synchronization under one second slews"),
-    ("the pre-#68 20 us threshold", GENERATOR,
-     "    p.emit(\"RDST\", rd=RB, imm=RG_SCR | S_1E9, fmt=FMT_Q)\n",
-     "    p.emit(\"MOVE\", rd=RB, ra=0, imm=20000)\n",
-     "the step threshold is one second"),
-    ("exactly one second steps", GENERATOR,
+    ("every pair uses the locked threshold", GENERATOR,
+     "    p.emit(\"RDST\", rd=RB, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
+     "    p.emit(\"MOVE\", rd=RB, ra=0,"
+     " imm=STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)\n",
+     "a link-up pair steps over 20 us"),
+    ("every pair uses the link-up threshold", GENERATOR,
+     "    p.emit(\"MOVE\", rd=RT, ra=0,"
+     " imm=STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)\n",
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=0)\n",
+     "a locked pair slews up to 100 us"),
+    ("exactly the threshold steps", GENERATOR,
      "    p.emit(\"ALU\", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=1)\n"
-     "    p.emit(\"MD\", rd=RU, ra=RT, rb=RB, cnd=MD_DIVU)\n",
+     "    p.emit(\"MD\", rd=RU, ra=RW, rb=RB, cnd=MD_DIVU)\n",
      "    p.emit(\"ALU\", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=0)\n"
-     "    p.emit(\"MD\", rd=RU, ra=RT, rb=RB, cnd=MD_DIVU)\n",
-     "an offset of exactly one second does not exceed the threshold"),
+     "    p.emit(\"MD\", rd=RU, ra=RW, rb=RB, cnd=MD_DIVU)\n",
+     "an offset of exactly 20 us, or 100 us once locked, slews"),
     ("the step arm is unreachable", GENERATOR,
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_slew\")\n"
-     "    p.emit(\"ALU\", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          "
-     "# -offset\n",
-     "    p.emit(\"BR\", label=\"sv_slew\")\n"
-     "    p.emit(\"ALU\", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          "
-     "# -offset\n",
-     "a first synchronization over one second steps"),
-    ("a grandmaster change keeps synchronization", GENERATOR,
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)\n",
-     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C, orm=FL_PRESENT_C)\n",
-     "a grandmaster identity change makes the next pair first"),
-    ("the slew input is not saturated", GENERATOR,
-     "    e_sat(p, RA, SLEW_NS_C, \"sv_in\")\n",
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_slew\")\n",
+     "    p.emit(\"BR\", label=\"sv_slew\")\n",
+     "an offset over the threshold steps"),
+    # word-neutral, because the BTCA leg fills its gap and one more word is
+    # a packing refusal, not a mutant: the unlock takes the slot of the
+    # Sync-cadence disarm, which disarms nothing for a plane that is
+    # already a slave (18c's), and elsewhere leaves a cadence whose own
+    # master gate sends nothing
+    ("a grandmaster change unlocks the servo", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_TMR | 1, fmt=FMT_Q)        "
+     "# sync TX off\n",
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
+     "the servo stays locked across a grandmaster identity change"),
+    ("a receipt timeout keeps the lock", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n"
+     "    p.emit(\"COMMIT\")\n",
+     "    p.emit(\"COMMIT\")\n",
+     "the first pair after a Sync receipt timeout is a link-up"),
+    ("becoming grandmaster keeps the lock", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)"
+     "  # a link-up next\n",
      "",
-     "a large offset slews within the pre-#68 rate envelope"),
+     "the first pair after this plane was grandmaster is a link-up"),
+    ("asCapable's rise keeps the lock", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)"
+     "  # rose: link-up\n",
+     "",
+     "the first pair after a warm reset is a link-up"),
+    ("becoming grandmaster keeps sync-ok", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C,"
+     " orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "becoming grandmaster clears the sync-ok verdict"),
+    ("the whole trim is not clamped", GENERATOR,
+     "    e_sat(p, RT, RUNTIME[\"ilim\"], \"sv_a\")                    "
+     "# +-200 ppm\n",
+     "",
+     "the written trim never leaves +-200 ppm"),
+    ("the trim clamp is one unit wider than the envelope", GENERATOR,
+     "    e_sat(p, RT, RUNTIME[\"ilim\"], \"sv_a\")",
+     "    e_sat(p, RT, RUNTIME[\"ilim\"] + 1, \"sv_a\")",
+     "the written trim never leaves the envelope the consumer derives"),
     ("the integrator is not clamped", GENERATOR,
      "    e_sat(p, RC, RUNTIME[\"ilim\"], \"sv_i\")                    "
      "# +-ILIM\n",

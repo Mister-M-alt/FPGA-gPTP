@@ -13,16 +13,18 @@ write-back. A separate regression image seeds S_SSEQ at 0x10000; the existing
 high-bit S_MYSEQ image remains independent so both counter paths are proved.
 
 FPGA-gPTP #68, the step-versus-slew policy the parent's media plane relies
-on (docs/INTEGRATION.md): a Sync/Follow_Up pair steps the PHC only when it
-is a FIRST synchronization -- it finds the sync-ok verdict clear, as after
-asCapable returns, a grandmaster identity change, a receipt timeout or a
-reset -- AND its |offset| exceeds one second (STEP_NS_C). Every other pair
-slews, so a grandmaster change alone never steps and a synchronized servo
-never steps at all. The rate path's input saturates at +-SLEW_NS_C, the
-retired 20 us step threshold: inside it the PI is the v5 loop bit for bit,
-beyond it the trim never exceeds what that loop could program, and MULS
-never sees a truncated offset. The v5 notes below describe the rule #68
-retires.
+on (docs/INTEGRATION.md), as the owner re-decided it on 2026-09-23. A
+link-up pair steps the PHC when |offset| exceeds STEP_LINKUP_NS_C (20 us);
+a locked pair steps above STEP_LOCKED_NS_C (100 us); every other pair
+slews. A link-up pair is the first one consumed after asCapable rises, a
+Sync receipt timeout, or this plane becoming grandmaster. Every consumed
+pair locks the servo (S_LOCK), and a grandmaster identity change leaves
+it locked. The whole written trim, proportional plus integral, is clamped
+to +-RATE_PPM_C, derived exactly as the parent derives the envelope its
+egress reconstruction enforces (ppm_addend), so the plane never holds a
+trim its consumer refuses. Inside +-20 us the PI is the v5 loop bit for
+bit wherever that loop stayed inside the envelope. The v5 notes below
+describe the rule #68 retires.
 
 FPGA-gPTP #7, found by the parent's field campaign: the announce handler
 fed BTCA every well-formed Announce, so a better vector that 802.1AS-2011
@@ -159,7 +161,7 @@ lands and observe-only retires. On every accepted Sync + Follow_Up as
 slave, the measured offset drives the parent `timestamp_counter`'s two
 knobs through the engine's PHC region:
 
-  * |offset| > 20 us (the step threshold until #68, above):
+  * |offset| > 20 us (the v5 rule on every pair, retired by #68 above):
     STEP -- one adjtime write of -offset re-bases the clock at once,
     and the addend is rewritten to the bare integrator: the rate
     estimate survives the step while the stale proportional term (moot
@@ -328,6 +330,16 @@ S_T3 = 42        # the waiting pair's t3, guarded by S_PDWAIT
 # deferral arm). Gate and guarded cell therefore carry over a warm reset
 # together, and S_PDWAIT's reset-backed validity closes the cell for the
 # reset case. ADDING A SECOND WRITER to either breaks this.
+# ---- the servo's lock state (FPGA-gPTP #68) ---------------------------------
+S_LOCK = 43      # 0 when the next pair is a link-up, else what a locked
+                 # servo adds to the link-up step threshold
+# INVARIANT for S_LOCK: WRITTEN BEFORE IT IS READ after every reset, cold or
+# warm, with no init write and no reset-backed validity. Its only reader is
+# the SERVO leg, which runs only while asCapable stands. Reset clears the
+# publish flags, and asCapable has ONE setter, the verdict in PDPAIR, which
+# writes S_LOCK in the same block whenever it finds the flag clear. So a
+# pre-reset lock can never reach the first pair after a reset. ADDING A
+# SECOND asCapable SETTER breaks this: it must write S_LOCK as well.
 # S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
 # (steps ranks BELOW the identity in 10.3.5, so it never joins the
 # packed compare -- the pv compare masks the low 16 first)
@@ -387,12 +399,13 @@ CEASE_MS_C = 300_000            # resume after 5 min (--cease-ms overrides)
                                 # counted down in 1 s cadence beats
 
 # ---- servo constants (clock-aware, set by set_servo_gains) -----------------
-STEP_NS_C = 1000000000          # a first synchronization steps above this, ns
-SLEW_NS_C = 20000               # PI input saturation, ns: the pre-#68 step
-                                # threshold, so the loop inside it is unchanged
+STEP_LINKUP_NS_C = 20000        # a link-up pair steps above this, ns (#68)
+STEP_LOCKED_NS_C = 100000       # a locked pair steps above this, ns (#68)
+RATE_PPM_C = 200                # the rate envelope, ppm: the integrator clamp
+                                # and, since #68, the whole written trim
 GAIN_S_C = 6                    # ns -> addend units: (off * GAIN_M) >> 6
 GAIN_M_C = 86                   # for the 100 MHz default; see set_servo_gains
-ILIM_C = 33554                  # integrator clamp = +-200 ppm at that clock
+ILIM_C = 33554                  # RATE_PPM_C in addend units at that clock
 
 # ---- what this run actually uses -------------------------------------------
 # Seeded from the constants above and MUTATED IN PLACE by the CLI and by
@@ -404,16 +417,30 @@ RUNTIME = {
     "p1": P1_C,                 # --p1
     "cease_ms": CEASE_MS_C,     # --cease-ms
     "gain_m": GAIN_M_C,         # --clk-hz, through set_servo_gains
-    "ilim": ILIM_C,             # --clk-hz, through set_servo_gains
+    "ilim": ILIM_C,             # --clk-hz, through set_servo_gains: the
+                                # +-RATE_PPM_C envelope in addend units
 }
+
+
+def ppm_addend(ppm: int, clk_hz: int) -> int:
+    """`ppm` of relative frequency in Q8.24 addend units at `clk_hz`. A unit
+    adds 2^-24 ns per tick, so this is ppm * 2^24 * 1000 / clk_hz, rounded
+    half up in exact integers. The parent's KL_gptp_txret.sv derives
+    PHC_ADJ_MAX_C, the addend envelope outside which it refuses every
+    egress timestamp, with this expression: RECON_REL_PPM_P = 200 and
+    PHC_CLK_HZ_P = the clock given here. So the two agree to the unit at
+    every clock, ties included."""
+    return (ppm * (1 << 24) * 1000 + clk_hz // 2) // clk_hz
 
 
 def set_servo_gains(clk_hz: int) -> None:
     """An addend unit adds 2^-24 ns per tick; one 125 ms sync interval is
     clk/8 ticks, so one unit is clk/8/2^24 ns of phase per interval. The
-    PI shifts assume normalized gain, hence M/2^6 = 2^24/(clk/8)."""
+    PI shifts assume normalized gain, hence M/2^6 = 2^24/(clk/8). The rate
+    envelope clamps the integrator and, since #68, the whole written
+    trim."""
     RUNTIME["gain_m"] = round((1 << 24) * 64 * 8 / clk_hz)
-    RUNTIME["ilim"] = round(200 * (1 << 24) * 1000 / clk_hz)
+    RUNTIME["ilim"] = ppm_addend(RATE_PPM_C, clk_hz)
     assert 0 < RUNTIME["gain_m"] < (1 << 24), RUNTIME["gain_m"]
     assert 2 * RUNTIME["ilim"] + 1 < (1 << 24), RUNTIME["ilim"]
 
@@ -681,7 +708,11 @@ def e_sat(p: Prog, reg: int, lim: int, tag: str) -> None:
     """Saturate the signed rf[reg] to [-lim, +lim] in place (clobbers RU and
     RW). In range exactly when (reg + lim) u<= 2 lim, i.e. when that sum
     divided by 2 lim + 1 is zero; out of range, the sum's sign picks the
-    bound: s = sum >>a 63 is 0 or -1, and (lim ^ s) - s is +lim or -lim."""
+    bound: s = sum >>a 63 is 0 or -1, and (lim ^ s) - s is +lim or -lim.
+    Exact for every reg up to 2^63 - 1 - lim; above that the sum wraps
+    negative and the result is -lim. Both callers stay far inside: the
+    integrator is itself clamped, and the trim is the PI output for a
+    slewed offset, which never exceeds STEP_LOCKED_NS_C."""
     assert 0 < 2 * lim + 1 < (1 << 24), lim
     p.emit("ALU", rd=RW, ra=reg, rb=0, cnd=ALU_ADD, imm=lim)
     p.emit("MD", rd=RU, ra=RW, rb=0, cnd=MD_DIVU, imm=2 * lim + 1)
@@ -770,17 +801,27 @@ def prog_leg_servo(base: int) -> Prog:
     receipt-timeout tail."""
     p = Prog(base)
     # ---- the servo: offset is local minus master, correction negates --
-    # FPGA-gPTP #68: only a FIRST synchronization, one that finds the
-    # sync-ok verdict still clear, may step; a synchronized servo slews
-    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
-    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=FL_SYNCOK_C)
-    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
-    p.emit("BRS", cnd=BRS_Z, label="sv_first")
+    # FPGA-gPTP #68: the step threshold T is STEP_LINKUP_NS_C plus S_LOCK,
+    # so 20 us at link-up and 100 us once locked. Step when |offset| > T,
+    # i.e. (offset + T) u> 2T: exactly when that sum divided by 2T + 1 is
+    # nonzero. A slewed offset is therefore never over 100 us, which keeps
+    # the MULS operand (32 x 32) exact without saturating it
+    assert STEP_LINKUP_NS_C < STEP_LOCKED_NS_C < (1 << 23)
+    p.emit("RDST", rd=RB, imm=RG_SCR | S_LOCK, fmt=FMT_Q)
+    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=STEP_LINKUP_NS_C)
+    p.emit("ALU", rd=RW, ra=RA, rb=RB, cnd=ALU_ADD)
+    p.emit("ALU", rd=RB, ra=RB, rb=RB, cnd=ALU_ADD)
+    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=1)
+    p.emit("MD", rd=RU, ra=RW, rb=RB, cnd=MD_DIVU)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_Q, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="sv_slew")
+    p.emit("ALU", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          # -offset
+    p.emit("WRST", ra=RB, imm=RG_PHC | 1, fmt=FMT_Q)         # adjtime
+    # the rate estimate survives the step AND becomes the whole addend:
+    # the re-base just made the stale proportional term moot
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
+    p.emit("BR", label="sv_rate")
     p.label("sv_slew")
-    # the PI input saturates at +-SLEW_NS_C: inside it the loop is the
-    # pre-#68 one bit for bit, beyond it the slew programs no rate that
-    # loop could not, and MULS (32 x 32) never sees a truncated offset
-    e_sat(p, RA, SLEW_NS_C, "sv_in")
     p.emit("MOVE", rd=RB, ra=0, imm=RUNTIME["gain_m"])
     p.emit("MD", rd=RT, ra=RA, rb=RB, cnd=MD_MULS)           # off * M
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SAR, imm=GAIN_S_C)
@@ -793,33 +834,21 @@ def prog_leg_servo(base: int) -> Prog:
     p.emit("ALU", rd=RT, ra=RT, rb=RB, cnd=ALU_SUB)          # kp = 3/4
     p.emit("ALU", rd=RT, ra=RT, rb=RC, cnd=ALU_ADD)          # + I
     p.label("sv_rate")
+    # the whole trim, proportional plus integral, stays inside the rate
+    # envelope the parent's egress reconstruction enforces
+    e_sat(p, RT, RUNTIME["ilim"], "sv_a")                    # +-200 ppm
     p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)          # negate
     p.emit("WRST", ra=RT, imm=RG_PHC | 0, fmt=FMT_Q)         # adjfine
     p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   # consumed
     p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
     p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)         # sync watch
     p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)          # FU watch off
+    # a consumed pair locks the servo: a grandmaster change keeps it
+    p.emit("MOVE", rd=RT, ra=0, imm=STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_LOCK, fmt=FMT_Q)
     e_flags(p, orm=FL_SYNCOK_C)
     p.emit("COMMIT")
     p.emit("END")
-    p.label("sv_first")
-    # ... and a first synchronization steps only when |offset| > 1 s, i.e.
-    # (offset + 1 s) u> 2 s: exactly when that sum divided by 2 s + 1 is
-    # nonzero. S_1E9 already holds the second
-    assert STEP_NS_C == 1_000_000_000, "load the new threshold explicitly"
-    p.emit("RDST", rd=RB, imm=RG_SCR | S_1E9, fmt=FMT_Q)
-    p.emit("ALU", rd=RT, ra=RA, rb=RB, cnd=ALU_ADD)
-    p.emit("ALU", rd=RB, ra=RB, rb=RB, cnd=ALU_ADD)
-    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=1)
-    p.emit("MD", rd=RU, ra=RT, rb=RB, cnd=MD_DIVU)
-    p.emit("CMP", ra=RU, rb=0, fmt=FMT_Q, imm=0)
-    p.emit("BRS", cnd=BRS_Z, label="sv_slew")
-    p.emit("ALU", rd=RB, ra=R0, rb=RA, cnd=ALU_SUB)          # -offset
-    p.emit("WRST", ra=RB, imm=RG_PHC | 1, fmt=FMT_Q)         # adjtime
-    # the rate estimate survives the step AND becomes the whole addend:
-    # the re-base just made the stale proportional term moot
-    p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
-    p.emit("BR", label="sv_rate")
     return p
 
 
@@ -1586,6 +1615,7 @@ def prog_become(base: int) -> Prog:
     p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)  # a link-up next
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     # A nonzero write is the self-master form of the same publication
     # transaction: one GM entry and an erased tail.
@@ -1754,7 +1784,12 @@ def _pdpost_corrected_delay(p):
 
 def _pdpost_verdict(p):
     """The threshold verdict and the asCapable ladder: good iff
-    -80 <= D <= 800, i.e. (D + 80) u<= 880."""
+    -80 <= D <= 800, i.e. (D + 80) u<= 880. The one asCapable setter, so
+    it also arms the #68 link-up: a rise, which it tells by finding the
+    flag clear, writes S_LOCK zero (see the invariant at the scratch map).
+    Both verdicts mark the exchange answered, so that write leads."""
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)  # it DID answer
     p.emit("ALU", rd=RT, ra=RD_, rb=0, cnd=ALU_ADD, imm=NPD_LO_C)
     p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
     p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
@@ -1765,19 +1800,21 @@ def _pdpost_verdict(p):
     p.emit("BRS", cnd=BRS_LT, label="good")
     p.emit("BR", label="bad")
     p.label("good")
-    p.emit("MOVE", rd=RT, ra=0, imm=1)
-    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
     p.emit("RDST", rd=RT, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_ADD, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
     p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=ASCAP_UP_C)
     p.emit("BRS", cnd=BRS_LT, label="done")          # Milan: not before 2
-    e_flags(p, orm=FL_ASCAP_C)
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_AND, imm=FL_ASCAP_C)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_OR, imm=FL_ASCAP_C)
+    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=FL_ASCAP_C)
+    p.emit("BRS", cnd=BRS_Z, label="done")           # already capable
+    p.emit("WRST", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)  # rose: link-up
     p.emit("BR", label="done")
     p.label("bad")
-    p.emit("MOVE", rd=RT, ra=0, imm=1)
-    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)  # it DID answer
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
     e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
     p.label("done")
@@ -1799,9 +1836,11 @@ def prog_leg_resume(base: int) -> Prog:
 
 
 def prog_leg_srto(base: int) -> Prog:
-    """Sync receipt timeout (375 ms): the sync-ok verdict falls."""
+    """Sync receipt timeout (375 ms): the sync-ok verdict falls, and the
+    servo loses its lock, so the next pair is a link-up (#68)."""
     p = Prog(base)
     e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)
     p.emit("COMMIT")
     p.emit("END")
     return p

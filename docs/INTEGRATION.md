@@ -176,9 +176,13 @@ Its addend then carries the retained rate estimate alone.
 
 Each addend pulse replaces the previous rate trim.
 
+The addend is signed; a negative trim slows the PHC.
+
 Both data outputs hold their values between pulses.
 
 Reset zeroes both data outputs.
+
+Each step pulse is exactly one phase step.
 
 Count step pulses to count phase steps.
 
@@ -188,59 +192,86 @@ Count step pulses to count phase steps.
 
 The offset is local time minus grandmaster time.
 
-A pair steps only when both conditions hold:
+| Servo state | Slews up to | Steps above |
+|---|---|---|
+| Link-up | 20 us | 20 us |
+| Locked | 100 us | 100 us |
 
-- It is the first synchronization.
-- Its offset magnitude exceeds one second.
-
-An offset of exactly one second slews.
+An offset of exactly the threshold slews.
 
 Every other pair slews through the rate path.
 
-A synchronized servo never steps, whatever the offset.
+#### Link-up
 
-#### First synchronization
+A link-up pair is the first pair consumed after:
 
-`pub_flags_o` bit 3 publishes the synchronization verdict.
-
-The first synchronization finds that verdict clear.
-
-That pair then raises the verdict.
-
-These events clear the verdict:
-
-- Reset.
+- asCapable rising, including after any reset.
 - A 375 ms Sync receipt timeout.
-- A grandmaster identity change.
 - This plane becoming grandmaster.
 
 Losing asCapable stops Sync consumption.
 
-The receipt timeout then clears the verdict.
+The receipt timeout follows before asCapable can return.
 
-Regaining asCapable takes longer than that timeout.
+So the first pair after asCapable is a link-up.
 
-So the first pair after asCapable is first.
+#### Locked
 
-#### Grandmaster change
+Every consumed pair locks the servo.
 
-An identity change makes the next pair first.
+A grandmaster identity change clears the synchronization verdict.
 
-That pair steps only above one second.
+It leaves the servo locked.
 
-An identity change alone therefore never steps.
+So the next pair uses the 100 us threshold.
 
-A new parent under the same grandmaster never steps.
+A new parent under the same grandmaster changes nothing.
 
-#### Slew limits
+#### Rate envelope
 
-The rate path saturates its input at 20 microseconds.
+The trim sums a proportional and an integral term.
 
-Inside that band the servo behaves as before.
+That whole trim never exceeds 200 ppm in magnitude.
 
-The rate trim therefore never exceeds about 320 ppm.
+The integrator is clamped to the same bound.
 
-A 900 ms offset takes tens of minutes to slew.
+In addend units the bound is this integer expression:
+
+```text
+(200 * 2^24 * 1000 + clk_hz / 2) / clk_hz
+```
+
+Here `clk_hz` is the generator's `--clk-hz` value.
+
+The division truncates, so the bound rounds half up.
+
+Derive a consumer's addend envelope from this expression.
+
+That consumer then accepts every trim the plane writes.
+
+When consumption stops, the last trim stays applied.
+
+That held trim is inside the bound too.
+
+A 100 us slew needs at least 0.5 s.
+
+#### Publication during a slew
+
+`pub_flags_o` bit 3 publishes the synchronization verdict.
+
+Every consumed pair raises it, stepping or slewing.
+
+So a slew may still be in progress.
+
+Its remaining offset is at most 100 us.
+
+`pub_offset_o` carries each pair's offset before correction.
+
+It holds only the low 32 bits.
+
+Offsets beyond about 2.147 s therefore wrap.
+
+Such a pair always steps.
 
 ## Publication
 
@@ -292,6 +323,7 @@ Set `CLK_HZ_P` to the actual engine frequency.
 - Drive admission credit as a level.
 - Apply PHC pulses once.
 - Count each step pulse as one step.
+- Derive addend envelopes from the generator clock.
 - Capture publication only on commit.
 - Review the open interface risk.
 - Run every repository gate.
