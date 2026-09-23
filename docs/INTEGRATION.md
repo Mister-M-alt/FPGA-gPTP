@@ -150,13 +150,142 @@ Restore credit to resume every normal cadence.
 | Output | Meaning |
 |---|---|
 | `phc_addend_we_o` | Applies one rate update |
-| `phc_addend_o[31:0]` | Carries unsigned rate addend |
+| `phc_addend_o[31:0]` | Carries signed Q8.24 ns-per-tick rate trim |
 | `phc_step_we_o` | Applies one phase step |
-| `phc_step_o[63:0]` | Carries signed phase adjustment bits |
+| `phc_step_o[63:0]` | Carries signed phase adjustment nanoseconds |
 
 Treat each write-enable as a pulse.
 
 Apply its data during that cycle.
+
+### Pulse semantics
+
+Each write-enable stays high for exactly one `clk_i` cycle.
+
+Only a consumed slave Sync and Follow_Up pair writes.
+
+Each consumed pair writes exactly one addend pulse.
+
+At most one step pulse precedes that addend pulse.
+
+Add `phc_step_o` to PHC time on its pulse.
+
+A step carries the measured offset, negated.
+
+Its addend then carries the retained rate estimate alone.
+
+Each addend pulse replaces the previous rate trim.
+
+The addend is signed; a negative trim slows the PHC.
+
+Both data outputs hold their values between pulses.
+
+Reset zeroes both data outputs.
+
+Each step pulse is exactly one phase step.
+
+Count step pulses to count phase steps.
+
+### Step versus slew policy
+
+[Issue #68](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68) records this policy.
+
+[The owner's decision](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68#issuecomment-5794731372) sets both thresholds.
+
+[The manager's ruling](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68#issuecomment-5798089412) defines link-up.
+
+The offset is local time minus grandmaster time.
+
+| Servo state | Slews up to | Steps above |
+|---|---|---|
+| Link-up | 20 us | 20 us |
+| Locked | 100 us | 100 us |
+
+An offset of exactly the threshold slews.
+
+Every other pair slews through the rate path.
+
+#### Link-up
+
+A link-up pair is the first after asCapable rises.
+
+Every reset clears asCapable, so every reset re-arms link-up.
+
+Nothing else re-arms the 20 us threshold.
+
+#### Locked
+
+Every consumed pair locks the servo.
+
+Only an asCapable fall and rise unlocks it.
+
+These events clear the synchronization verdict and keep the lock:
+
+- A grandmaster identity change.
+- A 375 ms Sync receipt timeout.
+- This plane returning from grandmaster duty.
+
+A grandmaster failover through a Sync lapse stays locked.
+
+So the next pair uses the 100 us threshold.
+
+A new parent under the same grandmaster changes nothing.
+
+#### Rate envelope
+
+The trim sums a proportional and an integral term.
+
+That whole trim never exceeds 200 ppm in magnitude.
+
+The integrator is clamped to the same bound.
+
+In addend units the bound is this integer expression:
+
+```text
+(200 * 2^24 * 1000 + clk_hz / 2) / clk_hz
+```
+
+Here `clk_hz` is the generator's `--clk-hz` value.
+
+The division truncates, so the bound rounds half up.
+
+Derive a consumer's addend envelope from this expression.
+
+That consumer then accepts every trim the plane writes.
+
+When consumption stops, the last trim stays applied.
+
+That held trim is inside the bound too.
+
+A 100 us slew needs at least 0.5 s.
+
+The master's own rate offset shares the 200 ppm bound.
+
+So a real slew can take much longer.
+
+A slew can overshoot while its trim rides the bound.
+
+A master over 200 ppm apart outruns the trim.
+
+Its offset then grows past 100 us and steps.
+
+#### Publication during a slew
+
+`pub_flags_o` bit 3 publishes the synchronization verdict.
+
+Every consumed pair raises it, stepping or slewing.
+
+So a slew may still be in progress.
+
+Its remaining offset is at most 100 us.
+
+`pub_offset_o` carries each pair's offset before correction.
+
+It holds only the low 32 bits.
+
+Offsets beyond about 2.147 s therefore wrap.
+
+Such a pair always steps.
 
 ## Publication
 
@@ -207,6 +336,8 @@ Set `CLK_HZ_P` to the actual engine frequency.
 - Report unmeasured results explicitly.
 - Drive admission credit as a level.
 - Apply PHC pulses once.
+- Count each step pulse as one step.
+- Derive addend envelopes from the generator clock.
 - Capture publication only on commit.
 - Review the open interface risk.
 - Run every repository gate.

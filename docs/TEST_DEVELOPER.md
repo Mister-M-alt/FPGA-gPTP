@@ -96,6 +96,9 @@ Prefer independent protocol formulas and frame builders.
 - Models a scripted protocol peer.
 - Runs shipping and seeded ROM images.
 - Checks Pdelay, Announce, Sync, and servo behavior.
+- Proves the link-up and locked step thresholds.
+- Keeps the lock across timeouts, failovers and mastership.
+- Keeps every written addend inside 200 ppm.
 - Exercises reset, backpressure, ordering, and timeouts.
 - Reorders and withholds timestamp results.
 - Holds every result offer until acceptance.

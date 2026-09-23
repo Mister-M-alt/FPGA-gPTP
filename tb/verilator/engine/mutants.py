@@ -177,6 +177,79 @@ MUTATIONS = [
      "    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, \"ac\", \"skip\")\n"
      "    p.emit(\"RDST\", rd=RA, imm=RG_SCR | S_ASEQ, fmt=FMT_Q)\n",
      "an Announce beat is postponed while the transmit path has no credit"),
+    # ---- the #68 step-versus-slew policy, one arm per rule -----------------
+    ("every pair uses the locked threshold", GENERATOR,
+     "    p.emit(\"RDST\", rd=RB, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
+     "    p.emit(\"MOVE\", rd=RB, ra=0,"
+     " imm=STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)\n",
+     "a link-up pair steps over 20 us"),
+    ("every pair uses the link-up threshold", GENERATOR,
+     "    p.emit(\"MOVE\", rd=RT, ra=0,"
+     " imm=STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)\n",
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=0)\n",
+     "a locked pair slews up to 100 us"),
+    ("exactly the threshold steps", GENERATOR,
+     "    p.emit(\"ALU\", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=1)\n"
+     "    p.emit(\"MD\", rd=RU, ra=RW, rb=RB, cnd=MD_DIVU)\n",
+     "    p.emit(\"ALU\", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=0)\n"
+     "    p.emit(\"MD\", rd=RU, ra=RW, rb=RB, cnd=MD_DIVU)\n",
+     "an offset of exactly 20 us, or 100 us once locked, slews"),
+    ("the step arm is unreachable", GENERATOR,
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_slew\")\n",
+     "    p.emit(\"BR\", label=\"sv_slew\")\n",
+     "an offset over the threshold steps"),
+    # word-neutral, because the BTCA leg fills its gap and one more word is
+    # a packing refusal, not a mutant: the unlock takes the slot of the
+    # Sync-cadence disarm, which disarms nothing for a plane that is
+    # already a slave (18c's), and elsewhere leaves a cadence whose own
+    # master gate sends nothing
+    ("a grandmaster change unlocks the servo", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_TMR | 1, fmt=FMT_Q)        "
+     "# sync TX off\n",
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
+     "the servo stays locked across a grandmaster identity change"),
+    # only an asCapable rise re-arms the link-up (the manager's ruling on
+    # #68): each of these two re-adds a retired re-arm
+    ("a receipt timeout unlocks the servo", GENERATOR,
+     "    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n",
+     "    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
+     "the servo stays locked across a Sync receipt timeout"),
+    ("becoming grandmaster unlocks the servo", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n"
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
+     "the servo stays locked across a return from mastership"),
+    ("the locked threshold is 200 us", GENERATOR,
+     "    p.emit(\"MOVE\", rd=RT, ra=0,"
+     " imm=STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)\n",
+     "    p.emit(\"MOVE\", rd=RT, ra=0,"
+     " imm=2 * STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)\n",
+     "a locked pair steps over 100 us, after a receipt timeout too"),
+    ("asCapable's rise keeps the lock", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)"
+     "  # rose: link-up\n",
+     "",
+     "the first pair after asCapable rises, or after a reset, is a link-up"),
+    ("becoming grandmaster keeps sync-ok", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C,"
+     " orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "becoming grandmaster clears the sync-ok verdict"),
+    ("the whole trim is not clamped", GENERATOR,
+     "    e_sat(p, RT, RUNTIME[\"ilim\"], \"sv_a\")                    "
+     "# +-200 ppm\n",
+     "",
+     "the written trim never leaves +-200 ppm"),
+    ("the trim clamp is one unit wider than the envelope", GENERATOR,
+     "    e_sat(p, RT, RUNTIME[\"ilim\"], \"sv_a\")",
+     "    e_sat(p, RT, RUNTIME[\"ilim\"] + 1, \"sv_a\")",
+     "the written trim never leaves the envelope the consumer derives"),
+    ("the integrator is not clamped", GENERATOR,
+     "    e_sat(p, RC, RUNTIME[\"ilim\"], \"sv_i\")                    "
+     "# +-ILIM\n",
+     "",
+     "the integrator stays within +-200 ppm"),
 ]
 
 
