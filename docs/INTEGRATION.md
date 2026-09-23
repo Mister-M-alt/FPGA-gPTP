@@ -190,6 +190,10 @@ Count step pulses to count phase steps.
 
 [Issue #68](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68) records this policy.
 
+[The owner's decision](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68#issuecomment-5794731372) sets both thresholds.
+
+[The manager's ruling](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68#issuecomment-5798089412) defines link-up.
+
 The offset is local time minus grandmaster time.
 
 | Servo state | Slews up to | Steps above |
@@ -203,25 +207,25 @@ Every other pair slews through the rate path.
 
 #### Link-up
 
-A link-up pair is the first pair consumed after:
+A link-up pair is the first after asCapable rises.
 
-- asCapable rising, including after any reset.
-- A 375 ms Sync receipt timeout.
-- This plane becoming grandmaster.
+Every reset clears asCapable, so every reset re-arms link-up.
 
-Losing asCapable stops Sync consumption.
-
-The receipt timeout follows before asCapable can return.
-
-So the first pair after asCapable is a link-up.
+Nothing else re-arms the 20 us threshold.
 
 #### Locked
 
 Every consumed pair locks the servo.
 
-A grandmaster identity change clears the synchronization verdict.
+Only an asCapable fall and rise unlocks it.
 
-It leaves the servo locked.
+These events clear the synchronization verdict and keep the lock:
+
+- A grandmaster identity change.
+- A 375 ms Sync receipt timeout.
+- This plane returning from grandmaster duty.
+
+A grandmaster failover through a Sync lapse stays locked.
 
 So the next pair uses the 100 us threshold.
 
@@ -254,6 +258,16 @@ When consumption stops, the last trim stays applied.
 That held trim is inside the bound too.
 
 A 100 us slew needs at least 0.5 s.
+
+The master's own rate offset shares the 200 ppm bound.
+
+So a real slew can take much longer.
+
+A slew can overshoot while its trim rides the bound.
+
+A master over 200 ppm apart outruns the trim.
+
+Its offset then grows past 100 us and steps.
 
 #### Publication during a slew
 

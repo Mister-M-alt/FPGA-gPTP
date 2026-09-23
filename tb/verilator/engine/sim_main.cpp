@@ -80,12 +80,16 @@
 // 11e     three Sync/Follow_Up pairs differing only in their flags word
 //         -- 0200/0000, 0208/0008 and twoStep flipped -- pair, steer and
 //         re-base the PHC alike (Table 11-4 ignored on reception, #64)
-// 13..15  the servo under the #68 policy. At link-up (after a receipt
-//         timeout) +-15 us slews and +-25 us steps once, +-20 us slews and
-//         +-(20 us + 1 ns) steps; once locked +-90 us slews and +-110 us
-//         steps once, +-100 us slews and +-(100 us + 1 ns) steps; the PI
-//         addend against an exact-integer mirror; closed-loop lock on a
-//         +140 ppm master (one re-base carrying the surviving integrator)
+// 12b     #68: a receipt timeout clears sync-ok and keeps the servo
+//         locked: the same grandmaster 50 us off slews, and after a
+//         second timeout 150 us off steps once
+// 13..15  the servo under the #68 policy. At link-up (after asCapable
+//         falls and rises) +-15 us slews and +-25 us steps once, +-20 us
+//         slews and +-(20 us + 1 ns) steps; once locked +-90 us slews and
+//         +-110 us steps once, +-100 us slews and +-(100 us + 1 ns) steps;
+//         the PI addend against an exact-integer mirror; closed-loop lock
+//         on a +140 ppm master (one re-base carrying the surviving
+//         integrator)
 // 15b     #68: that master jumps +-90 us while locked; the slew rides the
 //         +-200 ppm clamp for several pairs, never beyond it, never steps,
 //         and settles back to lock
@@ -95,12 +99,17 @@
 //         its event names, so a worse announce rejects cleanly
 // 18c     #68: a grandmaster identity change clears sync-ok and keeps the
 //         servo locked: 50 us off it slews, 5 ms off it steps once
+// 18d     #68: a failover -- a receipt timeout with asCapable held, then a
+//         new grandmaster through the same parent -- keeps the servo
+//         locked: -50 us off it slews, and after a second failover 150 us
+//         off it steps once
 // 19..21  parent degradation yields mastership immediately (10.3.5) and
 //         clears sync-ok; the Sync body stays zero while its Follow_Up
 //         carries the live egress stamp; an asCapable fall stops
 //         consumption and steering. #68: the first pair after the
-//         re-adoption and the first after asCapable returns are link-ups,
-//         and 25 us off each steps once
+//         return from mastership is locked, and 50 us off it slews; the
+//         first after asCapable falls and returns is a link-up, and 25 us
+//         off it steps once
 // 21b,21c become resets the best record (no ghost GM after a quiet
 //         ride to mastership); the priority vector outranks the
 //         identity in the compare order
@@ -112,7 +121,8 @@
 // 27      the Milan 4.2.6.2.5 cease rule: storm, silence, resume,
 //         re-earn -- and same-identity duplicates are not a storm
 // 28b     #68: after a warm reset the lock survives in scratch, yet the
-//         first pair is a link-up: 25 us off, it steps once
+//         first pair is a link-up (the reset clears asCapable, and its
+//         rise re-arms): 25 us off, it steps once
 // 31      reset after a Pdelay_Req, Pdelay_Resp or Sync SEND but before its
 //         boundary return invalidates the volatile owner; request, response
 //         and master Sync cadence each recover autonomously (#41)
@@ -236,6 +246,7 @@ class GptpEngineHarness {
     pair_a_padded_sync();
     pair_a_sync_whose_flag_bits_are_ignored();
     drop_sync_ok_at_the_receipt_timeout();
+    stay_locked_across_a_receipt_timeout();
     step_over_twenty_microseconds_at_link_up();
     step_over_a_hundred_microseconds_once_locked();
     slew_on_a_five_microsecond_offset();
@@ -246,6 +257,7 @@ class GptpEngineHarness {
     break_btca_ties_on_steps_then_source();
     read_a_complete_frozen_epoch_in_a_delayed_dispatch();
     stay_locked_across_a_grandmaster_change();
+    stay_locked_across_a_failover_after_a_receipt_timeout();
     take_mastership_when_the_parent_degrades();
     keep_the_two_step_sync_body_zero();
     stop_consuming_sync_when_ascapable_falls();
@@ -621,13 +633,14 @@ class GptpEngineHarness {
 
   // ---- servo mirror: the #68 step-vs-slew policy in exact integer form -----
   // The policy as docs/INTEGRATION.md records it, not as the ROM encodes it:
-  // a LINK-UP pair (the first after asCapable rises, a Sync receipt timeout
-  // or this plane becoming grandmaster) steps when |offset| exceeds 20 us;
-  // a LOCKED pair, including the first after a grandmaster identity
-  // change, steps above 100 us; every other pair slews through the PI. The
-  // whole written trim is clamped to the consumer's envelope. The caller
-  // says whether the pair is a link-up, from the phase it scripted, never
-  // from the DUT. Gains match gen_gptp_ucode.py at --clk-hz 2000000
+  // a LINK-UP pair (the first after asCapable rises, which every reset
+  // forces, and after nothing else) steps when |offset| exceeds 20 us; a
+  // LOCKED pair, including the first after a grandmaster identity change,
+  // a Sync receipt timeout or a return from mastership, steps above
+  // 100 us; every other pair slews through the PI. The whole written trim
+  // is clamped to the consumer's envelope. The caller says whether the
+  // pair is a link-up, from the phase it scripted, never from the DUT.
+  // Gains match gen_gptp_ucode.py at --clk-hz 2000000
   static constexpr int64_t SV_STEP_LINKUP_NS = 20000;
   static constexpr int64_t SV_STEP_LOCKED_NS = 100000;
   static constexpr int64_t SV_GAIN_M = 4295;
@@ -840,8 +853,9 @@ class GptpEngineHarness {
   //! carrying -offset, then one addend pulse carrying the bare integrator;
   //! or no step pulse and one addend pulse carrying the clamped PI output.
   //! The published verdict is low before a link-up pair and high before a
-  //! locked one, except after a grandmaster identity change, which clears
-  //! it and yet keeps the servo locked: `verdict_before` says so there.
+  //! locked one, except after a grandmaster identity change, a receipt
+  //! timeout or mastership, which clear it and yet keep the servo locked:
+  //! `verdict_before` says so there.
   void expect_policy_pair(const char *tag, uint16_t seq, uint64_t local_rx,
                           int64_t off, bool linkup, bool want_step,
                           uint64_t src = PEER_CID, int verdict_before = -1) {
@@ -2977,16 +2991,65 @@ class GptpEngineHarness {
     announce(seq, 100, GMID, 0, PEER_CID);
   }
 
+  //! One asCapable fall and rise under the phase 10 grandmaster: a far
+  //! exchange fails the delay threshold, so asCapable falls, and two good
+  //! ones re-earn it (Milan 4.2.6.2.4). The grandmaster is re-announced
+  //! around each edge, so its 3 s Announce watch never hands this plane
+  //! mastership. Uses the three Announce sequenceIds from `aseq`. True
+  //! when both edges were seen
+  bool bounce_ascapable(uint16_t aseq) {
+    keep_the_gm_elected(aseq);
+    pd_mode = PD_FAR;
+    const int base = pdm.count;
+    const bool far = wait_exchanges(base + 1, 4000000ull);
+    run(4000);
+    const bool fell = far && (dut->pub_flags_o & FL_ASCAP) == 0;
+    pd_mode = PD_NORMAL;
+    keep_the_gm_elected(static_cast<uint16_t>(aseq + 1));
+    const bool rose = wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull);
+    keep_the_gm_elected(static_cast<uint16_t>(aseq + 2));
+    return fell && rose;
+  }
+
+  // ---- 12b: #68 -- a receipt timeout leaves the servo locked ------------
+  // phase 12's receipt timeout cleared sync-ok with asCapable held and the
+  // grandmaster unchanged. Only an asCapable rise re-arms the link-up (the
+  // manager's ruling on #68), so the servo is still locked and the
+  // threshold is still 100 us: the same grandmaster 50 us off -- over the
+  // link-up 20 us -- slews with no step pulse. A second receipt timeout,
+  // then 150 us off: over 100 us, one step pulse of -offset
+  void stay_locked_across_a_receipt_timeout() {
+    const uint64_t T12B = 25000000000ull;
+    const size_t s0 = steps_seen.size();
+    keep_the_gm_elected(0x02F0);
+    expect("receipt timeout, same GM: asCapable held",
+           dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    expect_policy_pair("receipt timeout, same GM, +50 us", 0x0118, T12B,
+                       50000, false, false, PEER_CID, 0);
+    expect("receipt timeout, same GM, +50 us: no step pulse",
+           steps_seen.size(), s0);
+    keep_the_gm_elected(0x02F1);
+    expect("receipt timeout, same GM: the second timeout",
+           wait_flags(FL_SYNCOK, 0, 900000ull), 1);
+    expect("receipt timeout, same GM: asCapable held again",
+           dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    expect_policy_pair("receipt timeout, same GM, +150 us", 0x0119,
+                       T12B + 1000000000ull, 150000, false, true, PEER_CID, 0);
+    expect("receipt timeout, same GM, +150 us: one step pulse",
+           steps_seen.size(), s0 + 1);
+  }
+
   //! One #68 probe: an offset, and whether the policy steps on it
   struct PolicyProbe { const char *tag; int64_t off; bool steps; };
 
   // ---- 13: #68 -- at link-up, 15 us slews and 25 us steps ---------------
-  // phase 12's receipt timeout left sync-ok low and the servo unlocked, so
-  // the next pair is a link-up and the threshold is 20 us. Each probe
-  // waits out its own receipt timeout first, so each is a link-up again:
-  // +-15 us slew (no step pulse), +-25 us step exactly once (-offset, then
-  // the bare integrator); the threshold is "exceeds", so exactly +-20 us
-  // slews and +-(20 us + 1 ns) steps
+  // phase 12b left the servo locked, and only an asCapable rise re-arms
+  // the link-up. So each probe first bounces asCapable (bounce_ascapable);
+  // the Sync receipt timeout runs out meanwhile, so sync-ok is low too.
+  // The next pair is a link-up and the threshold is 20 us: +-15 us slew
+  // (no step pulse), +-25 us step exactly once (-offset, then the bare
+  // integrator); the threshold is "exceeds", so exactly +-20 us slews and
+  // +-(20 us + 1 ns) steps
   void step_over_twenty_microseconds_at_link_up() {
     const size_t s0 = steps_seen.size();
     const uint64_t T13 = 30000000000ull;
@@ -3003,9 +3066,8 @@ class GptpEngineHarness {
     for (size_t i = 0; i < probes.size(); i++) {
       const PolicyProbe &p = probes[i];
       char n[64];
-      keep_the_gm_elected(static_cast<uint16_t>(0x0300 + i));
-      snprintf(n, sizeof n, "%s: the receipt timeout comes first", p.tag);
-      expect(n, wait_flags(FL_SYNCOK, 0, 900000ull), 1);
+      snprintf(n, sizeof n, "%s: asCapable falls and rises first", p.tag);
+      expect(n, bounce_ascapable(static_cast<uint16_t>(0x0320 + 3 * i)), 1);
       const int64_t intg = svm.intg;
       expect_policy_pair(p.tag, static_cast<uint16_t>(0x0120 + i),
                          T13 + static_cast<uint64_t>(i) * 1000000000ull,
@@ -3077,10 +3139,10 @@ class GptpEngineHarness {
   uint16_t cl_seq = 0x0200;
 
   //! One closed-loop interval: 125 ms of service, then one Sync/Follow_Up
-  //! pair from that master stamped by our own PHC, mirrored as a link-up
-  //! pair or a locked one. Every eighth interval re-announces the
-  //! grandmaster. Returns the offset the plane measured.
-  int64_t closed_loop_pair(int k, bool linkup) {
+  //! pair from that master stamped by our own PHC, mirrored as a locked
+  //! pair: the loop never lets asCapable fall. Every eighth interval
+  //! re-announces the grandmaster. Returns the offset the plane measured.
+  int64_t closed_loop_pair(int k) {
     if ((k % 8) == 0) {                          // keep the GM elected
       Frame a = ptp(0xB, static_cast<uint16_t>(20 + (cl_seq & 0xFF)), 0,
                     0x0008, 42);
@@ -3106,16 +3168,16 @@ class GptpEngineHarness {
     cl_seq++;
     const int64_t off =
         static_cast<int64_t>(local_rx - origin - static_cast<uint64_t>(pdm.d));
-    servo_mirror(off, linkup);
+    servo_mirror(off, false);
     return off;
   }
 
   // ---- 15: closed loop -- a +140 ppm master converges to lock -----------
   // the master clock runs independent of our phc: 1.5 s ahead at start,
-  // +0.07 ns per cycle faster. The receipt timeout clears sync-ok and the
-  // lock first, so the first pair is a link-up over 20 us and steps (#68);
-  // the PI then drives the measured offset to zero with the integrator
-  // carrying the rate.
+  // +0.07 ns per cycle faster. The receipt timeout clears sync-ok first
+  // but leaves the servo locked, so the first pair is a locked one far
+  // over 100 us and steps (#68); the PI then drives the measured offset to
+  // zero with the integrator carrying the rate.
   void converge_the_closed_loop_on_a_fast_master() {
     expect("closed loop starts unsynchronized",
            wait_flags(FL_SYNCOK, 0, 900000ull), 1);
@@ -3126,7 +3188,7 @@ class GptpEngineHarness {
     for (int k = 0; k < 24; k++) {
       // every pair of the loop is mirrored, so the integrator the later
       // #68 phases grade against is the one this loop leaves behind
-      closed_loop_pair(k, k == 0);
+      closed_loop_pair(k);
       char n[64];
       snprintf(n, sizeof n, "closed loop pair %d: addend matches the mirror",
                k);
@@ -3184,7 +3246,7 @@ class GptpEngineHarness {
       for (int k = 0; k < j.pairs; k++) {
         if ((dut->pub_flags_o & FL_SYNCOK) == 0) unlocked++;
         if ((dut->pub_flags_o & FL_ASCAP) == 0) uncapable++;
-        const int64_t off = closed_loop_pair(k, false);
+        const int64_t off = closed_loop_pair(k);
         if (last_adj() != adj_bits(svm.addend)) mismatches++;
         const int64_t a = static_cast<int32_t>(last_adj());
         widest_pos = a > widest_pos ? a : widest_pos;
@@ -3359,10 +3421,58 @@ class GptpEngineHarness {
     expect("GM change, -5 ms: one step pulse", steps_seen.size(), s0 + 1);
   }
 
+  // ---- 18d: #68 -- a failover after a receipt timeout stays locked ------
+  // the usual way a grandmaster disappears: its Syncs stop, the 375 ms
+  // receipt timeout clears sync-ok with asCapable held, and a new
+  // grandmaster is then adopted through the same parent. Only an asCapable
+  // rise re-arms the link-up (the manager's ruling on #68), so the servo
+  // is still locked: 50 us behind, the first pair slews with no step
+  // pulse. A second failover the same way, then 150 us ahead: over 100 us,
+  // one step pulse of -offset
+  void stay_locked_across_a_failover_after_a_receipt_timeout() {
+    const uint64_t SRC5 = 0x00F1F1FFFE000009ull;
+    const uint64_t T18D = 52000000000ull;
+    struct Failover {
+      const char *tag;
+      uint64_t from;
+      uint64_t to;
+      int64_t off;
+      bool steps;
+    };
+    const std::array<Failover, 2> failovers = {{
+      {"failover, -50 us", 0x00C0C0FFFE00000Cull, 0x00D0D0FFFE00000Dull,
+       -50000, false},
+      {"failover, +150 us", 0x00D0D0FFFE00000Dull, 0x00E0E0FFFE00000Eull,
+       150000, true},
+    }};
+    for (size_t i = 0; i < failovers.size(); i++) {
+      const Failover &f = failovers[i];
+      char n[96];
+      // the old grandmaster still announces; only its Syncs stop
+      announce(static_cast<uint16_t>(50 + 2 * i), 100, f.from, 1, SRC5);
+      snprintf(n, sizeof n, "%s: the receipt timeout comes first", f.tag);
+      expect(n, wait_flags(FL_SYNCOK, 0, 900000ull), 1);
+      snprintf(n, sizeof n, "%s: asCapable held", f.tag);
+      expect(n, dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+      announce(static_cast<uint16_t>(51 + 2 * i), 100, f.to, 1, SRC5);
+      snprintf(n, sizeof n, "%s: new identity adopted", f.tag);
+      expect(n, dut->pub_gm_id_o, f.to);
+      snprintf(n, sizeof n, "%s: same parent", f.tag);
+      expect(n, dut->pub_parent_id_o, SRC5);
+      const size_t s0 = steps_seen.size();
+      expect_policy_pair(f.tag, static_cast<uint16_t>(0x0610 + i),
+                         T18D + static_cast<uint64_t>(i) * 1000000000ull,
+                         f.off, false, f.steps, SRC5, 0);
+      snprintf(n, sizeof n, "%s: %s", f.tag,
+               f.steps ? "one step pulse" : "no step pulse");
+      expect(n, steps_seen.size(), s0 + (f.steps ? 1u : 0u));
+    }
+  }
+
   // ---- 19: the parent degrades below us -> immediate takeover -----------
   // 10.3.5: a parent update replaces the best; ours now wins the
   // contest and become-master runs WITHOUT waiting any timeout. Becoming
-  // grandmaster clears the sync-ok verdict phase 18c left high
+  // grandmaster clears the sync-ok verdict phase 18d left high
   void take_mastership_when_the_parent_degrades() {
     expect("sync-ok high before the takeover",
            dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
@@ -3386,16 +3496,23 @@ class GptpEngineHarness {
   }
 
   // ---- 21: an asCapable fall stops sync consumption ---------------------
-  // and, for #68, two link-ups. Phase 19 made this plane grandmaster, which
-  // unlocked the servo, so the first pair after the re-adoption is a
-  // link-up: 25 us ahead, it steps once. The first pair after asCapable
-  // falls and returns is a link-up too: 25 us behind, it steps once
+  // and, for #68, both sides of the link-up rule. Phase 19 made this plane
+  // grandmaster with asCapable held, and only an asCapable rise re-arms
+  // the link-up (the manager's ruling), so the servo is still locked on
+  // the return from mastership: 50 us ahead, the first pair after the
+  // re-adoption slews with no step pulse. The first pair after asCapable
+  // falls and returns is a link-up: 25 us behind, it steps once
   void stop_consuming_sync_when_ascapable_falls() {
     announce(43, 100, GMID, 0, PEER_CID);        // adopt again
     expect("re-adopted", dut->pub_flags_o & 3, FL_PRESENT);
-    expect_policy_pair("link-up after become, +25 us", 0x0500,
-                       TRX6 + 5000000000ull, 25000, true, true);
-    const uint64_t OFF_A = 25000;
+    expect("return from mastership: asCapable held",
+           dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    const size_t s0 = steps_seen.size();
+    expect_policy_pair("return from mastership, +50 us", 0x0500,
+                       TRX6 + 5000000000ull, 50000, false, false, PEER_CID, 0);
+    expect("return from mastership, +50 us: no step pulse",
+           steps_seen.size(), s0);
+    const uint64_t OFF_A = 50000;
     pd_mode = PD_FAR;
     {
       int base = pdm.count;
@@ -3782,11 +3899,8 @@ class GptpEngineHarness {
   // phase 28 left this plane a capable slave of WGM. Two pairs lock the
   // servo (the second, 30 us off, is a locked slew), then a warm reset.
   // Scratch survives it, lock included, but the reset clears asCapable,
-  // and the ladder's rise re-arms the link-up. Neither a receipt timeout
-  // nor mastership comes between (the reset disarms the Sync watch, and
-  // the plane re-adopts WGM before its Announce watch runs out), so only
-  // that rise can make the first pair after the reset a link-up: 25 us
-  // ahead, it steps once
+  // and the ladder's rise, the only re-arm, makes the first pair after
+  // the reset a link-up: 25 us ahead, it steps once
   void link_up_again_after_a_warm_reset() {
     const uint64_t WGM = 0x00C028FFFE000001ull;
     const uint64_t T28B = 60000000000ull;

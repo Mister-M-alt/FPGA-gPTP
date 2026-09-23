@@ -16,15 +16,16 @@ FPGA-gPTP #68, the step-versus-slew policy the parent's media plane relies
 on (docs/INTEGRATION.md), as the owner re-decided it on 2026-09-23. A
 link-up pair steps the PHC when |offset| exceeds STEP_LINKUP_NS_C (20 us);
 a locked pair steps above STEP_LOCKED_NS_C (100 us); every other pair
-slews. A link-up pair is the first one consumed after asCapable rises, a
-Sync receipt timeout, or this plane becoming grandmaster. Every consumed
-pair locks the servo (S_LOCK), and a grandmaster identity change leaves
-it locked. The whole written trim, proportional plus integral, is clamped
-to +-RATE_PPM_C, derived exactly as the parent derives the envelope its
-egress reconstruction enforces (ppm_addend), so the plane never holds a
-trim its consumer refuses. Inside +-20 us the PI is the v5 loop bit for
-bit wherever that loop stayed inside the envelope. The v5 notes below
-describe the rule #68 retires.
+slews. A link-up pair is the first one consumed after asCapable rises,
+which every reset forces; nothing else re-arms it (the manager's ruling on
+#68). Every consumed pair locks the servo (S_LOCK), and a grandmaster
+identity change, a Sync receipt timeout and a return from mastership all
+leave it locked. The whole written trim, proportional plus integral, is
+clamped to +-RATE_PPM_C, derived exactly as the parent derives the
+envelope its egress reconstruction enforces (ppm_addend), so the plane
+never holds a trim its consumer refuses. Inside +-20 us the PI is the v5
+loop bit for bit wherever that loop stayed inside the envelope. The v5
+notes below describe the rule #68 retires.
 
 FPGA-gPTP #7, found by the parent's field campaign: the announce handler
 fed BTCA every well-formed Announce, so a better vector that 802.1AS-2011
@@ -339,7 +340,9 @@ S_LOCK = 43      # 0 when the next pair is a link-up, else what a locked
 # publish flags, and asCapable has ONE setter, the verdict in PDPAIR, which
 # writes S_LOCK in the same block whenever it finds the flag clear. So a
 # pre-reset lock can never reach the first pair after a reset. ADDING A
-# SECOND asCapable SETTER breaks this: it must write S_LOCK as well.
+# SECOND asCapable SETTER breaks this: it must write S_LOCK as well. That
+# rise is also the ONLY unlock (#68 ruling): a receipt timeout, a
+# grandmaster change and becoming grandmaster leave S_LOCK alone.
 # S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
 # (steps ranks BELOW the identity in 10.3.5, so it never joins the
 # packed compare -- the pv compare masks the low 16 first)
@@ -710,9 +713,10 @@ def e_sat(p: Prog, reg: int, lim: int, tag: str) -> None:
     divided by 2 lim + 1 is zero; out of range, the sum's sign picks the
     bound: s = sum >>a 63 is 0 or -1, and (lim ^ s) - s is +lim or -lim.
     Exact for every reg up to 2^63 - 1 - lim; above that the sum wraps
-    negative and the result is -lim. Both callers stay far inside: the
-    integrator is itself clamped, and the trim is the PI output for a
-    slewed offset, which never exceeds STEP_LOCKED_NS_C."""
+    negative and the result is -lim. Every caller stays far inside: the
+    integrator input is the clamped integrator plus one PI term, and the
+    whole trim is either the PI output for an offset of at most
+    STEP_LOCKED_NS_C (a slew) or the clamped integrator alone (a step)."""
     assert 0 < 2 * lim + 1 < (1 << 24), lim
     p.emit("ALU", rd=RW, ra=reg, rb=0, cnd=ALU_ADD, imm=lim)
     p.emit("MD", rd=RU, ra=RW, rb=0, cnd=MD_DIVU, imm=2 * lim + 1)
@@ -843,7 +847,7 @@ def prog_leg_servo(base: int) -> Prog:
     p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
     p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)         # sync watch
     p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)          # FU watch off
-    # a consumed pair locks the servo: a grandmaster change keeps it
+    # a consumed pair locks the servo; only an asCapable rise unlocks it
     p.emit("MOVE", rd=RT, ra=0, imm=STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_LOCK, fmt=FMT_Q)
     e_flags(p, orm=FL_SYNCOK_C)
@@ -1615,7 +1619,6 @@ def prog_become(base: int) -> Prog:
     p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)
-    p.emit("WRST", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)  # a link-up next
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     # A nonzero write is the self-master form of the same publication
     # transaction: one GM entry and an erased tail.
@@ -1785,8 +1788,9 @@ def _pdpost_corrected_delay(p):
 def _pdpost_verdict(p):
     """The threshold verdict and the asCapable ladder: good iff
     -80 <= D <= 800, i.e. (D + 80) u<= 880. The one asCapable setter, so
-    it also arms the #68 link-up: a rise, which it tells by finding the
-    flag clear, writes S_LOCK zero (see the invariant at the scratch map).
+    it also arms the #68 link-up, and nothing else does: a rise, which it
+    tells by finding the flag clear, writes S_LOCK zero (see the invariant
+    at the scratch map).
     Both verdicts mark the exchange answered, so that write leads."""
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)  # it DID answer
@@ -1836,11 +1840,10 @@ def prog_leg_resume(base: int) -> Prog:
 
 
 def prog_leg_srto(base: int) -> Prog:
-    """Sync receipt timeout (375 ms): the sync-ok verdict falls, and the
-    servo loses its lock, so the next pair is a link-up (#68)."""
+    """Sync receipt timeout (375 ms): the sync-ok verdict falls. The servo
+    stays locked, so the next pair still uses the locked threshold (#68)."""
     p = Prog(base)
     e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
-    p.emit("WRST", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)
     p.emit("COMMIT")
     p.emit("END")
     return p

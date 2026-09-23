@@ -208,21 +208,29 @@ MUTATIONS = [
      "# sync TX off\n",
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a grandmaster identity change"),
-    ("a receipt timeout keeps the lock", GENERATOR,
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n"
-     "    p.emit(\"COMMIT\")\n",
-     "    p.emit(\"COMMIT\")\n",
-     "the first pair after a Sync receipt timeout is a link-up"),
-    ("becoming grandmaster keeps the lock", GENERATOR,
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)"
-     "  # a link-up next\n",
-     "",
-     "the first pair after this plane was grandmaster is a link-up"),
+    # only an asCapable rise re-arms the link-up (the manager's ruling on
+    # #68): each of these two re-adds a retired re-arm
+    ("a receipt timeout unlocks the servo", GENERATOR,
+     "    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n",
+     "    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
+     "the servo stays locked across a Sync receipt timeout"),
+    ("becoming grandmaster unlocks the servo", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n"
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
+     "the servo stays locked across a return from mastership"),
+    ("the locked threshold is 200 us", GENERATOR,
+     "    p.emit(\"MOVE\", rd=RT, ra=0,"
+     " imm=STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)\n",
+     "    p.emit(\"MOVE\", rd=RT, ra=0,"
+     " imm=2 * STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)\n",
+     "a locked pair steps over 100 us, after a receipt timeout too"),
     ("asCapable's rise keeps the lock", GENERATOR,
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)"
      "  # rose: link-up\n",
      "",
-     "the first pair after a warm reset is a link-up"),
+     "the first pair after asCapable rises, or after a reset, is a link-up"),
     ("becoming grandmaster keeps sync-ok", GENERATOR,
      "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
      "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C,"
