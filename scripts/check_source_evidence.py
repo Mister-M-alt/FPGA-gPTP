@@ -44,7 +44,8 @@ EXPECTED = {
 }
 
 
-def check(root=ROOT, ledger=None, expected=EXPECTED):
+def check(root: Path = ROOT, ledger: str | None = None,
+          expected: dict[str, list[tuple[str, str]]] = EXPECTED) -> tuple[list[str], list[str]]:
     """Return (findings, exact anchors); missing or unbound links also fail."""
     if ledger is None:
         ledger = (root / "docs/SOURCE_EVIDENCE.md").read_text()
@@ -79,7 +80,7 @@ def check(root=ROOT, ledger=None, expected=EXPECTED):
     return findings, exact
 
 
-def selftest():
+def selftest() -> None:
     """A shifted link, wrong construct, removed link and unknown link fail."""
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -96,7 +97,8 @@ def selftest():
     print("source evidence selftest: PASS (7 arms)")
 
 
-def main():
+def main() -> int:
+    """Run the ledger check or its self-test and return the exit status."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     if parser.parse_args().selftest:
