@@ -32,14 +32,24 @@ Measurements used Vivado 2026.1.
 
 The target was `xc7a100tfgg484-2` at 100 MHz.
 
-Measurements finished on 2026-08-27.
+Measurements finished on 2026-09-24 for PR #76.
 
 | Block | LUTs | Registers | BRAM tiles | DSPs | WNS |
 |---|---:|---:|---:|---:|---:|
-| Complete engine | 4,719 | 3,639 | 1.5 | 4 | +2.249 ns |
+| Complete engine | 4,853 | 3,652 | 1.5 | 4 | +1.773 ns |
 | Standalone microCPU | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
 
 These figures describe one synthesis instrument.
+
+PR #76 adds 80 LUTs and six registers.
+
+The baseline used 4,773 LUTs and 3,646 registers.
+
+Memory LUTs remain 466; BRAM and DSP usage stay unchanged.
+
+WNS moves from +2.249 ns; timing remains met.
+
+The [PR measurement reports](https://github.com/kebag-logic/milan-fpga/tree/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author) record the comparison.
 
 See the [historical resource record](history/v1/RESOURCE_VALIDATION.md).
 

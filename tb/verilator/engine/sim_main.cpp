@@ -4763,6 +4763,33 @@ class GptpEngineHarness {
     slew_probe("slew: in-band pair after idle GM change stays inactive", -100, false);
     slew_probe("slew: second pair after idle GM change stays inactive", 0, false);
 
+    // Losing capability while tracking must also leave qualification unarmed.
+    // Bad and good Pdelay exchanges drive the entire loss/recovery on the wire.
+    const size_t idle_cap_edges = slew_edges.size();
+    const size_t idle_cap_rates = adj_seen.size();
+    expect("slew: idle capability loss starts inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle capability loss starts asCapable",
+           dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    pd_mode = PD_FAR;
+    expect("slew: bad delay drops asCapable while inactive",
+           wait_flags(FL_ASCAP, 0, 2500000), 1);
+    run_svc(200000);
+    expect("slew: idle incapable interval stays incapable", dut->pub_flags_o & FL_ASCAP, 0);
+    expect("slew: idle incapable interval stays inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle incapable interval has no level edge", slew_edges.size(), idle_cap_edges);
+    expect("slew: idle incapable interval leaves the rate alone", adj_seen.size(), idle_cap_rates);
+    pd_mode = PD_NORMAL;
+    expect("slew: idle capability recovers",
+           wait_flags(FL_ASCAP, FL_ASCAP, 5000000), 1);
+    announce(0x7507, 100, GMID + 2, 0, PEER_CID);
+    expect("slew: idle capability recovery selects slave duty", dut->pub_flags_o & FL_AMGM, 0);
+    expect("slew: idle capability recovery stays inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle capability recovery has no level edge", slew_edges.size(), idle_cap_edges);
+    expect("slew: idle capability recovery leaves the rate alone", adj_seen.size(), idle_cap_rates);
+    slew_probe("slew: in-band pair after asCapable recovery stays inactive", 0, false, false, true);
+    slew_probe("slew: second in-band pair after asCapable recovery stays inactive", 100, false);
+    expect("slew: idle capability recovery pairs have no level edge", slew_edges.size(), idle_cap_edges);
+
     slew_probe("slew: policy decision starts at +101 ns", 101, true);
     const size_t held_edges = slew_edges.size();
     run_svc(250000);

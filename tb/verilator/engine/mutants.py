@@ -98,6 +98,12 @@ MUTATIONS = [
      "                if (phc_slew_active_o &&\n",
      "                if (1'b1 &&\n",
      "slew: in-band pair after idle timeout stays inactive"),
+    ("slew idle asCapable loss arms qualification", "top/KL_gptp_engine.sv",
+     "                if (phc_slew_active_o &&\n"
+     "                    (!st_wdata_w[2] || !st_wdata_w[3]))\n",
+     "                if ((phc_slew_active_o && !st_wdata_w[3]) ||\n"
+     "                    !st_wdata_w[2])\n",
+     "slew: in-band pair after asCapable recovery stays inactive"),
     ("slew mastership keeps qualification", "top/KL_gptp_engine.sv",
      "                phc_slew_left_r   <= 2'd0;\n"
      "                phc_slew_active_o <= 1'b0;\n",
