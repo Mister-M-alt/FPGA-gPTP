@@ -103,7 +103,7 @@ The microCPU uses `st_addr_o[19:16]` for selection.
 | 1 | Read-only | Ingress time, egress time, credit |
 | 2 | Read-write | Sixty-four protocol scratch words |
 | 3 | Read-write | Publication staging bank |
-| 4 | Write-only | PHC rate and phase controls |
+| 4 | Read-write | PHC controls and policy completion qualifier |
 | 5 | Write-only | Timer arming interface |
 
 Scratch storage survives warm resets.
@@ -111,6 +111,16 @@ Scratch storage survives warm resets.
 Resettable claim-valid bits do not survive.
 
 Pairing validity bits do not survive either.
+
+The PHC slew qualifier also resets independently.
+
+Microcode writes its remaining completion pairs through PHC word 2.
+
+Nonzero decisions immediately assert `phc_slew_active_o`.
+
+A zero decision clears it with the next rate write.
+
+PHC word 3 retires an active correction during mastership.
 
 ## MicroCPU shape
 

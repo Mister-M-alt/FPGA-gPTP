@@ -404,6 +404,10 @@ CEASE_MS_C = 300_000            # resume after 5 min (--cease-ms overrides)
 # ---- servo constants (clock-aware, set by set_servo_gains) -----------------
 STEP_LINKUP_NS_C = 20000        # a link-up pair steps above this, ns (#68)
 STEP_LOCKED_NS_C = 100000       # a locked pair steps above this, ns (#68)
+# #75: distinguish transient phase correction from ordinary PI tracking.
+# Two consecutive consumed pairs inside this inclusive band complete a slew.
+# This is a completion tolerance, not another step threshold or a rate bound.
+SLEW_SETTLED_NS_C = 100
 RATE_PPM_C = 200                # the rate envelope, ppm: the integrator clamp
                                 # and, since #68, the whole written trim
 GAIN_S_C = 6                    # ns -> addend units: (off * GAIN_M) >> 6
@@ -824,8 +828,30 @@ def prog_leg_servo(base: int) -> Prog:
     # the rate estimate survives the step AND becomes the whole addend:
     # the re-base just made the stale proportional term moot
     p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
-    p.emit("BR", label="sv_rate")
+    p.emit("BR", label=LB["SVRATE"])
     p.label("sv_slew")
+    p.emit("BR", label=LB["SLEW"])
+    return p
+
+
+def prog_leg_slew(base: int) -> Prog:
+    """Publish transient-versus-tracking policy, then compute the PI trim."""
+    p = Prog(base)
+    # Publish the policy verdict before the affected rate write. PHC word 2
+    # holds the remaining in-band pairs (0..2), reset independently of scratch.
+    # The step gate already bounds RA to +-100 us. Its biased low word
+    # compares unsigned below 2B+1 exactly inside the signed tracking band.
+    p.emit("RDST", rd=RB, imm=RG_PHC | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RW, ra=RA, rb=0, cnd=ALU_ADD, imm=SLEW_SETTLED_NS_C)
+    p.emit("CMP", ra=RW, rb=0, fmt=FMT_D, imm=2 * SLEW_SETTLED_NS_C + 1)
+    p.emit("BRS", cnd=BRS_LT, label="sv_tracking")
+    p.emit("MOVE", rd=RB, ra=0, imm=3)                       # reload, then -1
+    p.label("sv_tracking")
+    p.emit("CMP", ra=RB, rb=0, fmt=FMT_Q, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="sv_decided")
+    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_SUB, imm=1)
+    p.label("sv_decided")
+    p.emit("WRST", ra=RB, imm=RG_PHC | 2, fmt=FMT_Q)
     p.emit("MOVE", rd=RB, ra=0, imm=RUNTIME["gain_m"])
     p.emit("MD", rd=RT, ra=RA, rb=RB, cnd=MD_MULS)           # off * M
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SAR, imm=GAIN_S_C)
@@ -837,7 +863,13 @@ def prog_leg_servo(base: int) -> Prog:
     p.emit("ALU", rd=RB, ra=RT, rb=0, cnd=ALU_SAR, imm=2)
     p.emit("ALU", rd=RT, ra=RT, rb=RB, cnd=ALU_SUB)          # kp = 3/4
     p.emit("ALU", rd=RT, ra=RT, rb=RC, cnd=ALU_ADD)          # + I
-    p.label("sv_rate")
+    p.emit("BR", label=LB["SVRATE"])
+    return p
+
+
+def prog_leg_svrate(base: int) -> Prog:
+    """Replace the rate and finish a consumed pair's policy transaction."""
+    p = Prog(base)
     # the whole trim, proportional plus integral, stays inside the rate
     # envelope the parent's egress reconstruction enforces
     e_sat(p, RT, RUNTIME["ilim"], "sv_a")                    # +-200 ppm
@@ -1609,6 +1641,12 @@ def prog_become(base: int) -> Prog:
     best-vector record to ourselves, and swap the slave's receipt watches
     for the Sync and Announce transmit cadences."""
     p = Prog(base)
+    # Retire the slave's phase correction before publishing mastership.
+    # Word 3 replaces the trim with the retained rate estimate and clears
+    # the slew verdict on that same PHC write, just as a step's rate tail.
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)
+    p.emit("WRST", ra=RT, imm=RG_PHC | 3, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 0, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)
@@ -1983,6 +2021,7 @@ LEG_FNS = [
     ("PDPOST", prog_leg_pdpost), ("PDPAIR", prog_leg_pdpair),
     ("SRTO", prog_leg_srto),
     ("FUTO", prog_leg_futo), ("SERVO", prog_leg_servo),
+    ("SLEW", prog_leg_slew), ("SVRATE", prog_leg_svrate),
     ("RESUME", prog_leg_resume), ("PDREQ", prog_leg_pdreq),
     ("TXLOST", prog_leg_txlost), ("TXT1OK", prog_leg_txt1ok),
 ]
@@ -2017,9 +2056,11 @@ def build(mac: int, seq_seed: int = 0,
         nxt = min(x for x in fbases if x > b)
         assert b + sz <= nxt, f"fixed {b} is {sz} words, next entry {nxt}"
 
-    # free gaps between fixed programs (µPC 0..15 stays clear)
+    # Free gaps between fixed programs, including the unused 0..15 prefix.
+    # The engine only dispatches the fixed entries above; shared legs can
+    # safely occupy this prefix. Reset never executes an instruction.
     gaps = []
-    prev_end = 16
+    prev_end = 0
     for b, sz in sorted(fixed_sz):
         if b > prev_end:
             gaps.append([prev_end, b])

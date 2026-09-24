@@ -29,7 +29,8 @@
 //                  3  publish bank      RW  (0 gm id, 1 parent id,
 //                                            2 flags, 3 pdelay ns,
 //                                            6 path count, 8..14 path tail)
-//                  4  PHC control       WO  (0 rate addend, 1 step)
+//                  4  PHC control       RW  (0 rate, 1 step, 2 slew verdict,
+//                                            3 integral-only rate)
 //                  5  timer arm         WO  (slot = addr, delta ms = data)
 //
 //                gather: free-running millisecond time.
@@ -103,6 +104,9 @@ module KL_gptp_engine
     output logic [31:0] phc_addend_o,
     output logic        phc_step_we_o,
     output logic [63:0] phc_step_o,
+    //! Policy correction level; rises on its decision, clears with the
+    //! completing/replacement rate. Holds across missing Sync/asCapable loss.
+    output logic        phc_slew_active_o,
 
     //! publish bank as wires — the retired software contract
     output logic [63:0] pub_gm_id_o,
@@ -690,6 +694,11 @@ module KL_gptp_engine
   wire [3:0] ann_pub_count_clamped_w = (ann_pub_count_r > 8'd8)
       ? 4'd8 : ann_pub_count_r[3:0];
 
+  //! Policy-owned completion qualifier: remaining in-band pairs, 0..2.
+  //! Separate from the exported level: a zero verdict stages completion,
+  //! but the old PHC rate remains affected until its replacement is written.
+  logic [1:0] phc_slew_left_r;
+
   logic [63:0] st_rd_mux_w;
   always_comb begin : st_read_mux
     unique case (st_addr_w[19:16])
@@ -746,6 +755,7 @@ module KL_gptp_engine
           default: st_rd_mux_w = 64'd0;
         endcase
       end
+      4'd4: st_rd_mux_w = {62'd0, phc_slew_left_r};
       default: st_rd_mux_w = 64'd0;
     endcase
   end
@@ -782,6 +792,8 @@ module KL_gptp_engine
       phc_addend_o    <= '0;
       phc_step_we_o   <= 1'b0;
       phc_step_o      <= '0;
+      phc_slew_active_o <= 1'b0;
+      phc_slew_left_r   <= 2'd0;
       tmr_arm_we_w    <= 1'b0;
       tmr_arm_slot_w  <= '0;
       tmr_arm_delta_w <= '0;
@@ -857,7 +869,14 @@ module KL_gptp_engine
             unique case (st_addr_w[3:0])
               4'd0: pub_gm_r     <= st_wdata_w;
               4'd1: pub_parent_r <= st_wdata_w;
-              4'd2: pub_flags_r  <= st_wdata_w[31:0];
+              4'd2: begin
+                pub_flags_r <= st_wdata_w[31:0];
+                //! A lapse in trustworthy measurements breaks settling
+                //! qualification, but leaves the applied correction active.
+                if (phc_slew_active_o &&
+                    (!st_wdata_w[2] || !st_wdata_w[3]))
+                  phc_slew_left_r <= 2'd2;
+              end
               4'd3: pub_pdelay_r <= st_wdata_w[31:0];
               4'd4: pub_offset_r <= st_wdata_w[31:0];
               4'd5: pub_annq_r   <= st_wdata_w;
@@ -895,13 +914,33 @@ module KL_gptp_engine
             endcase
           end
           4'd4: begin
-            if (st_addr_w[0]) begin
-              phc_step_we_o <= 1'b1;
-              phc_step_o    <= st_wdata_w;
-            end else begin
-              phc_addend_we_o <= 1'b1;
-              phc_addend_o    <= st_wdata_w[31:0];
-            end
+            unique case (st_addr_w[1:0])
+              2'd0: begin
+                phc_addend_we_o <= 1'b1;
+                phc_addend_o    <= st_wdata_w[31:0];
+                phc_slew_active_o <= (phc_slew_left_r != 2'd0);
+              end
+              2'd1: begin
+                phc_step_we_o <= 1'b1;
+                phc_step_o    <= st_wdata_w;
+                //! Keep an existing level until the step's rate tail.
+                phc_slew_left_r <= 2'd0;
+              end
+              2'd2: begin
+                phc_slew_left_r <= st_wdata_w[1:0];
+                if (st_wdata_w[1:0] != 2'd0)
+                  phc_slew_active_o <= 1'b1;
+              end
+              2'd3: begin
+                //! Mastership explicitly retires the slave's phase term.
+                if (phc_slew_active_o) begin
+                  phc_addend_we_o <= 1'b1;
+                  phc_addend_o    <= st_wdata_w[31:0];
+                end
+                phc_slew_left_r   <= 2'd0;
+                phc_slew_active_o <= 1'b0;
+              end
+            endcase
           end
           4'd5: begin
             tmr_arm_we_w    <= 1'b1;

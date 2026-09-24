@@ -99,6 +99,9 @@ Prefer independent protocol formulas and frame builders.
 - Proves the link-up and locked step thresholds.
 - Keeps the lock across timeouts, failovers and mastership.
 - Keeps every written addend inside 200 ppm.
+- Checks slew decisions, completion, and held intervals.
+- Checks reset, lost capability, missing Sync, steps, and mastership.
+- Rejects tied-low and early-clear slew indications.
 - Exercises reset, backpressure, ordering, and timeouts.
 - Reorders and withholds timestamp results.
 - Holds every result offer until acceptance.

@@ -30,6 +30,7 @@ REQUIRED = {
         "txts_ns_i",
         "phc_addend_we_o",
         "phc_step_we_o",
+        "phc_slew_active_o",
         "gx_data_r <= {32'd0, ms_now_w};",
         # the accepted-beat result face and the admission credit (#31)
         "txts_ready_o",
@@ -46,6 +47,7 @@ REQUIRED = {
         ".txts_ns_i",
         ".phc_addend_we_o",
         ".phc_step_we_o",
+        ".phc_slew_active_o",
         ".txts_ready_o",
         ".txts_ok_i",
         ".txts_gen_i",

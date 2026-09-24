@@ -153,6 +153,7 @@ Restore credit to resume every normal cadence.
 | `phc_addend_o[31:0]` | Carries signed Q8.24 ns-per-tick rate trim |
 | `phc_step_we_o` | Applies one phase step |
 | `phc_step_o[63:0]` | Carries signed phase adjustment nanoseconds |
+| `phc_slew_active_o` | Registered level covering transient policy correction |
 
 Treat each write-enable as a pulse.
 
@@ -162,7 +163,11 @@ Apply its data during that cycle.
 
 Each write-enable stays high for exactly one `clk_i` cycle.
 
-Only a consumed slave Sync and Follow_Up pair writes.
+Consumed slave Sync and Follow_Up pairs write corrections.
+
+Mastership also retires any active slave correction.
+
+That transition writes the integral-only rate, without stepping.
 
 Each consumed pair writes exactly one addend pulse.
 
@@ -203,7 +208,9 @@ The offset is local time minus grandmaster time.
 
 An offset of exactly the threshold slews.
 
-Every other pair slews through the rate path.
+Every other pair runs the PI rate path.
+
+This includes ordinary tracking and transient offset correction.
 
 #### Link-up
 
@@ -268,6 +275,84 @@ A slew can overshoot while its trim rides the bound.
 A master over 200 ppm apart outruns the trim.
 
 Its offset then grows past 100 us and steps.
+
+#### Slew-active level
+
+[Issue #75](https://github.com/Mister-M-alt/FPGA-gPTP/issues/75) defines the consumer indication.
+
+`phc_slew_active_o` is a registered, `clk_i`-synchronous level.
+
+It marks transient offset correction through the rate path.
+
+The policy distinguishes correction from ordinary frequency tracking.
+
+Its tracking band is inclusive: -100 ns through +100 ns.
+
+This tolerance does not change either step threshold.
+
+The existing PI arithmetic and rate clamp remain unchanged.
+
+| Consumed pair | Policy decision |
+|---|---|
+| Offset exceeds the applicable step threshold | Step; no new slew |
+| Non-stepping offset outside the tracking band | Start or continue correction |
+| First consecutive pair inside the band | Keep an existing correction active |
+| Second consecutive pair inside the band | Complete the correction |
+| Tracking inside the band without an active correction | Stay inactive |
+
+Every outside-band pair restarts the two-pair completion qualification.
+
+One zero crossing therefore cannot complete a correction.
+
+The decision precedes the affected addend write.
+
+The level rises when microcode publishes that decision.
+
+It stays high throughout the interval between consumed pairs.
+
+Completion clears it alongside that pair's replacement addend pulse.
+
+Ordinary PI tracking continues, including nonzero frequency trims.
+
+A step alone never raises this level.
+
+Neither the synchronization flag nor addend magnitude determines it.
+
+| Event | Level and correction behavior |
+|---|---|
+| Synchronous reset | Clear level and qualification immediately |
+| Warm reset | Retained scratch cannot revive the level |
+| asCapable loss | Hold level and applied rate; restart completion qualification |
+| Missing Sync; 375 ms receipt timeout | Hold level and rate; restart qualification at timeout |
+| Missing Follow_Up; 125 ms timeout | Discard pending pair; retain level and rate |
+| Grandmaster identity change | Hold level and rate; restart qualification |
+| Replacement step | Hold through step; clear with its integral-only addend |
+| Becoming grandmaster | Replace active correction with integral-only rate; clear together |
+| Returning to slave duty | Next consumed pair makes the policy decision |
+
+Reset the consumer's retained rate when resetting the engine.
+
+Loss of capability alone cannot remove an applied correction.
+
+A held slew can therefore remain active indefinitely.
+
+There is no elapsed-time completion or 0.5 s watchdog.
+
+Completion follows the measured policy verdict above.
+
+Sample this level with the PHC control signals.
+
+It is independent of `pub_commit_o`.
+
+Consumers must preserve alignment with their effective PHC rate.
+
+Discard every measurement window overlapping the level's high interval.
+
+A partly overlapping window remains affected after deassertion.
+
+The parent must carry this level through `KL_gptp_shadow`.
+
+That consumer connection belongs to [parent #545](https://github.com/kebag-logic/milan-fpga/issues/545).
 
 #### Publication during a slew
 
@@ -337,6 +422,7 @@ Set `CLK_HZ_P` to the actual engine frequency.
 - Drive admission credit as a level.
 - Apply PHC pulses once.
 - Count each step pulse as one step.
+- Align the slew level with effective rate changes.
 - Derive addend envelopes from the generator clock.
 - Capture publication only on commit.
 - Review the open interface risk.
