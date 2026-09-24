@@ -34,6 +34,14 @@ match a claim. The gate is kept because it is the second half of a stated
 rule that pairs it with the t1 validity beside it, whose own removal IS
 caught below; it is defence in depth with no reachable arm, not a checked
 behaviour. Closing that would need a reachable state, not another mutant.
+
+The lapse hook's asCapable term is also defence in depth. Removing only
+that term survives: Sync pairs cannot be consumed while incapable, and
+the 375 ms Sync receipt watch clears sync-ok before capability can recover
+through two good Pdelay exchanges at 1 s cadence. Only mastership disarms
+that watch, and mastership retires the qualifier itself. This is a
+reachability argument from the current policy, not an executed proof;
+revisit it if the timer or capability recovery rules change.
 """
 
 from __future__ import annotations
@@ -71,6 +79,36 @@ VFLAGS = [
 
 #: (name, file under hdl/, pattern, replacement, the property it should break)
 MUTATIONS = [
+    # ---- #75: the policy level must cover the entire affected interval ----
+    ("slew level tied low", "top/KL_gptp_engine.sv",
+     "      // gather: atomic millisecond snapshot",
+     "      phc_slew_active_o <= 1'b0; // injected tied-low output\n"
+     "      // gather: atomic millisecond snapshot",
+     "slew: policy decision starts at +101 ns"),
+    ("slew clears at the first in-band pair", GENERATOR,
+     "    p.emit(\"MOVE\", rd=RB, ra=0, imm=3)                       # reload, then -1",
+     "    p.emit(\"MOVE\", rd=RB, ra=0, imm=2)                       # early completion",
+     "slew: first in-band pair cannot clear"),
+    ("slew clears before the replacement rate", "top/KL_gptp_engine.sv",
+     "                if (st_wdata_w[1:0] != 2'd0)\n"
+     "                  phc_slew_active_o <= 1'b1;",
+     "                phc_slew_active_o <= (st_wdata_w[1:0] != 2'd0);",
+     "slew: no clear precedes the replacement rate"),
+    ("slew idle lapse arms qualification", "top/KL_gptp_engine.sv",
+     "                if (phc_slew_active_o &&\n",
+     "                if (1'b1 &&\n",
+     "slew: in-band pair after idle timeout stays inactive"),
+    ("slew idle asCapable loss arms qualification", "top/KL_gptp_engine.sv",
+     "                if (phc_slew_active_o &&\n"
+     "                    (!st_wdata_w[2] || !st_wdata_w[3]))\n",
+     "                if ((phc_slew_active_o && !st_wdata_w[3]) ||\n"
+     "                    !st_wdata_w[2])\n",
+     "slew: in-band pair after asCapable recovery stays inactive"),
+    ("slew mastership keeps qualification", "top/KL_gptp_engine.sv",
+     "                phc_slew_left_r   <= 2'd0;\n"
+     "                phc_slew_active_o <= 1'b0;\n",
+     "                phc_slew_active_o <= 1'b0;\n",
+     "slew: in-band return from GM stays inactive"),
     # ---- the result face: acceptance, and what acceptance protects -------
     ("result face always ready", "top/KL_gptp_engine.sv",
      "assign txts_ready_o  = !txts_pend_r && rst_n;",
@@ -364,7 +402,17 @@ def main() -> int:
                 print(f"[FAIL] mutation {name!r} did not build; a mutant that "
                       f"cannot build proves nothing about the harness")
                 continue
-            answer = verdict(*run_harness(exe, rundir))
+            rc, output = run_harness(exe, rundir)
+            answer = verdict(rc, output)
+            # #75 controls must fail their specific behavioral check; an
+            # unrelated existing failure cannot stand in for that evidence.
+            if breaks.startswith("slew:") and answer == "caught":
+                named = [line for line in output.splitlines()
+                         if line.startswith("FAIL ") and breaks in line]
+                if not named:
+                    answer = "missed its named check"
+                else:
+                    print(named[0])
             if answer == "caught":
                 passes += 1
                 print(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")

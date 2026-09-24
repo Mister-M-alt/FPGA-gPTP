@@ -286,6 +286,7 @@ class GptpEngineHarness {
     postpone_only_the_initiating_beats_without_credit();
     stall_every_byte_position_of_one_frame();
     hold_the_media_dependent_transmit_flags();
+    exercise_the_slew_level_contract();
     keep_every_addend_inside_the_consumer_envelope();
 
     printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
@@ -478,6 +479,12 @@ class GptpEngineHarness {
   //! envelope (#68): the count outside it, and the count exactly on it
   uint64_t adj_out_of_envelope = 0;
   uint64_t adj_on_the_rail = 0;
+  struct SlewEdge { uint64_t cycle; bool active; };
+  std::vector<SlewEdge> slew_edges;
+  bool slew_previous = false;
+  uint64_t slew_async_changes = 0;
+  uint64_t slew_early_clears = 0;
+  std::vector<bool> slew_at_step;
 
   uint64_t phc() { return static_cast<uint64_t>(phc_acc >> 24); }
 
@@ -494,6 +501,7 @@ class GptpEngineHarness {
     }
     drive_result_face();
     dut->clk_i = 0; dut->eval();
+    if (bool(dut->phc_slew_active_o) != slew_previous) slew_async_changes++;
     //! the accepted beat is sampled where the engine samples it
     const bool ts_beat = ts_offer && dut->txts_ready_o;
     const bool tx_fire = dut->tx_valid_o && dut->tx_ready_i;
@@ -501,6 +509,12 @@ class GptpEngineHarness {
     const bool tx_sof = dut->tx_sof_o;
     const bool tx_eof = dut->tx_eof_o;
     dut->clk_i = 1; dut->eval();
+    const bool slew = dut->phc_slew_active_o;
+    if (slew != slew_previous) {
+      slew_edges.push_back({cyc, slew});
+      if (!slew && dut->rst_n && !dut->phc_addend_we_o) slew_early_clears++;
+      slew_previous = slew;
+    }
     if (dut->pub_commit_o) {
       commits_seen++;
       PubSnap s{};
@@ -521,6 +535,7 @@ class GptpEngineHarness {
       if (a == SV_AMAX || a == -SV_AMAX) adj_on_the_rail++;
     }
     if (dut->phc_step_we_o) {
+      slew_at_step.push_back(dut->phc_slew_active_o);
       steps_seen.push_back(dut->phc_step_o);
       step_cyc.push_back(cyc);
       phc_acc += static_cast<unsigned __int128>(
@@ -1062,6 +1077,7 @@ class GptpEngineHarness {
     //! ready is low through reset: a beat the engine would not record must
     //! not look accepted to the producer
     expect("reset holds the result face closed", dut->txts_ready_o, 0);
+    expect("slew: cold reset clears the level", dut->phc_slew_active_o, 0);
     dut->rst_n = 1;
 
     // Before the ROM init leg has written S_CID, no complete all-hop loop
@@ -3233,6 +3249,7 @@ class GptpEngineHarness {
         {"long slew, master -90 us", -90000, 40},
     };
     for (const auto &j : jumps) {
+      const size_t edge0 = slew_edges.size();
       char n[96];
       cl_mst_base += static_cast<uint64_t>(j.jump);
       int64_t widest_pos = 0;
@@ -3247,6 +3264,11 @@ class GptpEngineHarness {
         if ((dut->pub_flags_o & FL_SYNCOK) == 0) unlocked++;
         if ((dut->pub_flags_o & FL_ASCAP) == 0) uncapable++;
         const int64_t off = closed_loop_pair(k);
+        if (k == 0)
+          expect("slew: real jump starts the level", dut->phc_slew_active_o, 1);
+        if (k >= j.pairs - 8)
+          expect("slew: ordinary frequency tracking stays inactive",
+                 dut->phc_slew_active_o, 0);
         if (last_adj() != adj_bits(svm.addend)) mismatches++;
         const int64_t a = static_cast<int32_t>(last_adj());
         widest_pos = a > widest_pos ? a : widest_pos;
@@ -3280,6 +3302,15 @@ class GptpEngineHarness {
       const int32_t final_off = static_cast<int32_t>(dut->pub_offset_o);
       snprintf(n, sizeof n, "%s: the loop settles back to lock", j.tag);
       expect(n, final_off > -200 && final_off < 200, 1);
+      expect("slew: real correction has one uninterrupted interval",
+             slew_edges.size() - edge0, 2);
+      if (slew_edges.size() == edge0 + 2) {
+        expect("slew: real correction clears on a rate write",
+               slew_edges.back().active, 0);
+        printf("SLEW TRACE %s: active for %llu cycles (2 MHz), final offset %d ns, trim %d\n",
+               j.tag, static_cast<unsigned long long>(slew_edges.back().cycle -
+                   slew_edges[edge0].cycle), final_off, phc_adj);
+      }
     }
     expect("long slew: no step pulse", steps_seen.size(), s0);
   }
@@ -4645,6 +4676,252 @@ class GptpEngineHarness {
            adj_seen.size() >= 100 ? 1 : 0, 1);
     expect("consumer envelope: some addends sit exactly on it",
            adj_on_the_rail >= 10 ? 1 : 0, 1);
+  }
+
+  //! A #75 policy probe uses wire frames and watches every output edge.
+  //! The scripted band/settling verdict is supplied by the scenario, never
+  //! read from an internal register, a pulse or the published sync flag.
+  void slew_probe(const char *tag, int64_t off, bool active, bool step = false,
+                  bool linkup = false) {
+    const size_t e0 = slew_edges.size();
+    const size_t a0 = adj_seen.size();
+    const size_t s0 = steps_seen.size();
+    const bool before = dut->phc_slew_active_o;
+    const uint64_t local = phc() + 1000000;
+    const uint16_t seq = slew_seq++;
+    Frame sync = ptp(0x0, seq, 0, 0x0200, 10);
+    sync.ts(0);
+    send_frame(sync.b, local);
+    run(2000);
+    expect("slew: Sync alone cannot change the policy level",
+           slew_edges.size(), e0);
+    Frame fu = follow_up(seq, 0, local - static_cast<uint64_t>(pdm.d)
+                                      - static_cast<uint64_t>(off));
+    send_frame(fu.b, local + 500);
+    const uint64_t decision_after = cyc;
+    run(6000);
+    servo_mirror(off, linkup);
+    expect(tag, dut->phc_slew_active_o, active);
+    expect("slew: probe offset consumed", dut->pub_offset_o,
+           static_cast<uint32_t>(off));
+    expect("slew: probe writes one rate", adj_seen.size(), a0 + 1);
+    expect("slew: probe step count", steps_seen.size(), s0 + (step ? 1 : 0));
+    expect("slew: arithmetic remains the PI policy", last_adj(), adj_bits(svm.addend));
+    expect("slew: exactly the scripted transition",
+           slew_edges.size() - e0, before != active ? 1 : 0);
+    if (before != active && slew_edges.size() > e0 && adj_seen.size() > a0) {
+      const auto &edge = slew_edges[e0];
+      if (active) {
+        expect("slew: decision asserts before its affected rate",
+               edge.active && edge.cycle >= decision_after &&
+                   edge.cycle < adj_cyc.back(), 1);
+      } else {
+        expect("slew: completion clears with its replacement rate",
+               !edge.active && edge.cycle == adj_cyc.back(), 1);
+      }
+    }
+    if (step && steps_seen.size() > s0)
+      expect("slew: step retains only the pre-existing interval",
+             slew_at_step.back(), before);
+  }
+
+  uint16_t slew_seq = 0x7500;
+
+  // Each phase continues from the state left by its predecessor.
+  void exercise_the_slew_level_contract() {
+    start_slew_contract_with_inactive_tracking();
+    keep_slew_inactive_across_idle_lapses();
+    keep_slew_inactive_across_capability_loss();
+    exercise_slew_boundaries_and_replacement_steps();
+    hold_slew_across_missing_pairs_and_gm_change();
+    retire_slew_on_mastership_and_resume_tracking();
+    hold_slew_across_capability_loss();
+    clear_slew_on_warm_reset();
+  }
+
+  void start_slew_contract_with_inactive_tracking() {
+    pd_mode = PD_NORMAL;
+    pd_seen = txf.size();
+    warm_reset();
+    expect("slew: reset starts inactive", dut->phc_slew_active_o, 0);
+    expect("slew: lifecycle setup earns asCapable",
+           wait_flags(FL_ASCAP, FL_ASCAP, 9000000), 1);
+    announce(0x7500, 100, GMID, 0, PEER_CID);
+    slew_probe("slew: link-up step never asserts", 25000, false, true, true);
+    for (int64_t off : {0, 100, -100, 0})
+      slew_probe("slew: tracking band never asserts", off, false);
+    expect("slew: tracking includes a nonzero frequency trim", phc_adj != 0, 1);
+  }
+
+  void keep_slew_inactive_across_idle_lapses() {
+    // An idle receipt lapse must not arm the completion qualifier. Check
+    // both the lapse itself and fresh consumed pairs, including every edge.
+    const size_t idle_edges = slew_edges.size();
+    const size_t idle_rates = adj_seen.size();
+    run_svc(800000); // 400 ms exceeds the 375 ms Sync receipt watch
+    expect("slew: idle timeout clears sync-ok", dut->pub_flags_o & FL_SYNCOK, 0);
+    expect("slew: idle timeout stays asCapable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    expect("slew: idle timeout stays inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle timeout has no level edge", slew_edges.size(), idle_edges);
+    expect("slew: idle timeout leaves the rate alone", adj_seen.size(), idle_rates);
+    slew_probe("slew: in-band pair after idle timeout stays inactive", 0, false);
+    slew_probe("slew: second pair after idle timeout stays inactive", 100, false);
+
+    // Change identity while already inactive and still a capable slave.
+    announce(0x7506, 100, GMID + 2, 0, PEER_CID);
+    expect("slew: idle GM change selects the new identity", dut->pub_gm_id_o, GMID + 2);
+    expect("slew: idle GM change clears sync-ok", dut->pub_flags_o & FL_SYNCOK, 0);
+    expect("slew: idle GM change stays slave", dut->pub_flags_o & FL_AMGM, 0);
+    expect("slew: idle GM change stays inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle GM change has no level edge", slew_edges.size(), idle_edges);
+    slew_probe("slew: in-band pair after idle GM change stays inactive", -100, false);
+    slew_probe("slew: second pair after idle GM change stays inactive", 0, false);
+  }
+
+  void keep_slew_inactive_across_capability_loss() {
+    // Losing capability while tracking must also leave qualification unarmed.
+    // Bad and good Pdelay exchanges drive the entire loss/recovery on the wire.
+    const size_t idle_cap_edges = slew_edges.size();
+    const size_t idle_cap_rates = adj_seen.size();
+    expect("slew: idle capability loss starts inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle capability loss starts asCapable",
+           dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    pd_mode = PD_FAR;
+    expect("slew: bad delay drops asCapable while inactive",
+           wait_flags(FL_ASCAP, 0, 2500000), 1);
+    run_svc(200000);
+    expect("slew: idle incapable interval stays incapable", dut->pub_flags_o & FL_ASCAP, 0);
+    expect("slew: idle incapable interval stays inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle incapable interval has no level edge", slew_edges.size(), idle_cap_edges);
+    expect("slew: idle incapable interval leaves the rate alone", adj_seen.size(), idle_cap_rates);
+    pd_mode = PD_NORMAL;
+    expect("slew: idle capability recovers",
+           wait_flags(FL_ASCAP, FL_ASCAP, 5000000), 1);
+    announce(0x7507, 100, GMID + 2, 0, PEER_CID);
+    expect("slew: idle capability recovery selects slave duty", dut->pub_flags_o & FL_AMGM, 0);
+    expect("slew: idle capability recovery stays inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle capability recovery has no level edge", slew_edges.size(), idle_cap_edges);
+    expect("slew: idle capability recovery leaves the rate alone", adj_seen.size(), idle_cap_rates);
+    slew_probe("slew: in-band pair after asCapable recovery stays inactive", 0, false, false, true);
+    slew_probe("slew: second in-band pair after asCapable recovery stays inactive", 100, false);
+    expect("slew: idle capability recovery pairs have no level edge", slew_edges.size(), idle_cap_edges);
+  }
+
+  void exercise_slew_boundaries_and_replacement_steps() {
+    slew_probe("slew: policy decision starts at +101 ns", 101, true);
+    const size_t held_edges = slew_edges.size();
+    run_svc(250000);
+    expect("slew: level covers the entire interval between pairs",
+           slew_edges.size(), held_edges);
+    expect("slew: high between pairs", dut->phc_slew_active_o, 1);
+    slew_probe("slew: first in-band pair cannot clear", 100, true);
+    slew_probe("slew: -101 ns restarts settling", -101, true);
+    slew_probe("slew: zero crossing cannot clear early", 0, true);
+    slew_probe("slew: second in-band pair completes", -100, false);
+    slew_probe("slew: tracking continues after completion", 50, false);
+    slew_probe("slew: policy decision starts at -101 ns", -101, true);
+    slew_probe("slew: replacement step clears at its rate", -100001, false, true);
+    slew_probe("slew: locked step never starts an interval", 100001, false, true);
+    slew_probe("slew: exactly 100 us starts an interval", 100000, true);
+    slew_probe("slew: first settled pair before lapse", 0, true);
+  }
+
+  void hold_slew_across_missing_pairs_and_gm_change() {
+    // One unpaired Sync times out. Its late FU must neither replace the
+    // held rate nor count as the second settled sample.
+    const size_t lapse_edges = slew_edges.size();
+    const size_t lapse_rates = adj_seen.size();
+    const uint64_t local = phc() + 1000000;
+    const uint16_t missing_seq = slew_seq++;
+    Frame sync = ptp(0x0, missing_seq, 0, 0x0200, 10);
+    sync.ts(0);
+    send_frame(sync.b, local);
+    run_svc(270000);
+    Frame late = follow_up(missing_seq, 0, local - static_cast<uint64_t>(pdm.d));
+    send_frame(late.b, local + 500);
+    run(6000);
+    expect("slew: missing Follow_Up holds the interval", slew_edges.size(), lapse_edges);
+    expect("slew: late Follow_Up cannot retire the rate", adj_seen.size(), lapse_rates);
+    run_svc(800000);
+    expect("slew: missing Sync clears sync-ok", dut->pub_flags_o & FL_SYNCOK, 0);
+    expect("slew: missing Sync holds the affected interval", slew_edges.size(), lapse_edges);
+    expect("slew: missing Sync holds the affected rate", adj_seen.size(), lapse_rates);
+    slew_probe("slew: timeout restarts completion qualification", 0, true);
+    slew_probe("slew: two fresh pairs complete after timeout", 0, false);
+
+    slew_probe("slew: next correction starts", -5000, true);
+    slew_probe("slew: first settled pair before GM change", 0, true);
+    announce(0x7501, 100, GMID + 1, 0, PEER_CID);
+    expect("slew: GM identity change holds active", dut->phc_slew_active_o, 1);
+    slew_probe("slew: GM change restarts completion qualification", 0, true);
+    slew_probe("slew: new GM can complete correction", 0, false);
+  }
+
+  void retire_slew_on_mastership_and_resume_tracking() {
+    slew_probe("slew: active before mastership", 5000, true);
+    const size_t master_rates = adj_seen.size();
+    const size_t master_edges = slew_edges.size();
+    announce(0x7502, 250, GMID + 1, 0, PEER_CID);
+    expect("slew: parent degradation returns to GM", dut->pub_flags_o & FL_AMGM, FL_AMGM);
+    expect("slew: mastership retires the phase correction", dut->phc_slew_active_o, 0);
+    expect("slew: mastership writes one replacement rate", adj_seen.size(), master_rates + 1);
+    expect("slew: mastership keeps the integral-only rate", last_adj(), adj_bits(-svm.intg));
+    expect("slew: mastership has one falling edge", slew_edges.size(), master_edges + 1);
+    if (slew_edges.size() > master_edges && adj_seen.size() > master_rates)
+      expect("slew: mastership clears with its rate", slew_edges.back().cycle, adj_cyc.back());
+    run_svc(250000);
+    expect("slew: GM duty remains inactive", dut->phc_slew_active_o, 0);
+
+    announce(0x7503, 100, GMID, 0, PEER_CID);
+    expect("slew: return from GM selects slave duty", dut->pub_flags_o & FL_AMGM, 0);
+    expect("slew: return from GM starts inactive", dut->phc_slew_active_o, 0);
+    slew_probe("slew: in-band return from GM stays inactive", 0, false);
+    slew_probe("slew: second in-band return pair stays inactive", 0, false);
+    slew_probe("slew: return from GM uses locked slew", 50000, true);
+  }
+
+  void hold_slew_across_capability_loss() {
+    pd_mode = PD_FAR;
+    expect("slew: bad delay drops asCapable", wait_flags(FL_ASCAP, 0, 2500000), 1);
+    const size_t lost_edges = slew_edges.size();
+    const size_t lost_rates = adj_seen.size();
+    expect("slew: asCapable loss holds the correction", dut->phc_slew_active_o, 1);
+    slew_probe_unconsumed();
+    run_svc(200000);
+    expect("slew: incapable interval has no falling edge", slew_edges.size(), lost_edges);
+    expect("slew: incapable interval holds the rate", adj_seen.size(), lost_rates);
+    pd_mode = PD_NORMAL;
+    expect("slew: capability can recover", wait_flags(FL_ASCAP, FL_ASCAP, 5000000), 1);
+    announce(0x7504, 100, GMID, 0, PEER_CID);
+    slew_probe("slew: recovery pair retains active", 5000, true, false, true);
+  }
+
+  void clear_slew_on_warm_reset() {
+    dut->rst_n = 0;
+    tick();
+    expect("slew: warm reset clears on its first clock", dut->phc_slew_active_o, 0);
+    run(7);
+    dut->rst_n = 1;
+    run(4000);
+    expect("slew: retained scratch cannot revive the level", dut->phc_slew_active_o, 0);
+    expect("slew: after reset capability returns", wait_flags(FL_ASCAP, FL_ASCAP, 9000000), 1);
+    announce(0x7505, 100, GMID, 0, PEER_CID);
+    slew_probe("slew: post-reset link-up step stays inactive", 25000, false, true, true);
+    slew_probe("slew: subsequent policy correction starts", -5000, true);
+    slew_probe("slew: warm-reset qualification starts afresh", 0, true);
+    slew_probe("slew: warm-reset qualification completes", 0, false);
+    expect("slew: every change is clk-synchronous", slew_async_changes, 0);
+    expect("slew: no clear precedes the replacement rate", slew_early_clears, 0);
+  }
+
+  void slew_probe_unconsumed() {
+    const size_t a0 = adj_seen.size();
+    const size_t s0 = steps_seen.size();
+    const uint64_t local = phc() + 1000000;
+    sync_pair(slew_seq++, local, local - static_cast<uint64_t>(pdm.d));
+    expect("slew: incapable pair cannot complete correction", dut->phc_slew_active_o, 1);
+    expect("slew: incapable pair writes no rate", adj_seen.size(), a0);
+    expect("slew: incapable pair writes no step", steps_seen.size(), s0);
   }
 
   //! One warm reset, and the settling run behind it.

@@ -28,6 +28,8 @@ lint:
 docs: diagrams-check
 	python3 scripts/check_docs.py
 	python3 scripts/check_docs.py --selftest
+	python3 scripts/check_source_evidence.py
+	python3 scripts/check_source_evidence.py --selftest
 
 diagrams-check:
 	python3 scripts/generate_diagrams.py --check

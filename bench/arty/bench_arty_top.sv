@@ -294,6 +294,7 @@ module bench_arty_top (
       .phc_addend_o       (phc_add_w),
       .phc_step_we_o      (phc_step_we_w),
       .phc_step_o         (phc_step_w),
+      .phc_slew_active_o (),
       .pub_gm_id_o        (pub_gm_w),
       .pub_parent_id_o    (pub_parent_w),
       .pub_flags_o        (pub_flags_w),
