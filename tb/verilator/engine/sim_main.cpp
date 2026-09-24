@@ -4740,6 +4740,29 @@ class GptpEngineHarness {
       slew_probe("slew: tracking band never asserts", off, false);
     expect("slew: tracking includes a nonzero frequency trim", phc_adj != 0, 1);
 
+    // An idle receipt lapse must not arm the completion qualifier. Check
+    // both the lapse itself and fresh consumed pairs, including every edge.
+    const size_t idle_edges = slew_edges.size();
+    const size_t idle_rates = adj_seen.size();
+    run_svc(800000); // 400 ms exceeds the 375 ms Sync receipt watch
+    expect("slew: idle timeout clears sync-ok", dut->pub_flags_o & FL_SYNCOK, 0);
+    expect("slew: idle timeout stays asCapable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    expect("slew: idle timeout stays inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle timeout has no level edge", slew_edges.size(), idle_edges);
+    expect("slew: idle timeout leaves the rate alone", adj_seen.size(), idle_rates);
+    slew_probe("slew: in-band pair after idle timeout stays inactive", 0, false);
+    slew_probe("slew: second pair after idle timeout stays inactive", 100, false);
+
+    // Change identity while already inactive and still a capable slave.
+    announce(0x7506, 100, GMID + 2, 0, PEER_CID);
+    expect("slew: idle GM change selects the new identity", dut->pub_gm_id_o, GMID + 2);
+    expect("slew: idle GM change clears sync-ok", dut->pub_flags_o & FL_SYNCOK, 0);
+    expect("slew: idle GM change stays slave", dut->pub_flags_o & FL_AMGM, 0);
+    expect("slew: idle GM change stays inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle GM change has no level edge", slew_edges.size(), idle_edges);
+    slew_probe("slew: in-band pair after idle GM change stays inactive", -100, false);
+    slew_probe("slew: second pair after idle GM change stays inactive", 0, false);
+
     slew_probe("slew: policy decision starts at +101 ns", 101, true);
     const size_t held_edges = slew_edges.size();
     run_svc(250000);
@@ -4801,6 +4824,10 @@ class GptpEngineHarness {
     expect("slew: GM duty remains inactive", dut->phc_slew_active_o, 0);
 
     announce(0x7503, 100, GMID, 0, PEER_CID);
+    expect("slew: return from GM selects slave duty", dut->pub_flags_o & FL_AMGM, 0);
+    expect("slew: return from GM starts inactive", dut->phc_slew_active_o, 0);
+    slew_probe("slew: in-band return from GM stays inactive", 0, false);
+    slew_probe("slew: second in-band return pair stays inactive", 0, false);
     slew_probe("slew: return from GM uses locked slew", 50000, true);
     pd_mode = PD_FAR;
     expect("slew: bad delay drops asCapable", wait_flags(FL_ASCAP, 0, 2500000), 1);

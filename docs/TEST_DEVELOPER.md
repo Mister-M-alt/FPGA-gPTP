@@ -102,6 +102,9 @@ Prefer independent protocol formulas and frame builders.
 - Checks slew decisions, completion, and held intervals.
 - Checks reset, lost capability, missing Sync, steps, and mastership.
 - Rejects tied-low and early-clear slew indications.
+- Keeps in-band tracking inactive after idle timeouts and GM changes.
+- Keeps in-band returns from mastership inactive.
+- Rejects idle qualification and retained mastership qualification mutants.
 - Exercises reset, backpressure, ordering, and timeouts.
 - Reorders and withholds timestamp results.
 - Holds every result offer until acceptance.

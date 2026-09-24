@@ -122,6 +122,20 @@ A zero decision clears it with the next rate write.
 
 PHC word 3 retires an active correction during mastership.
 
+Publication flags also control qualification through an RTL-owned hook.
+
+Region 3, word 2 writes trigger this hook.
+
+Bit 2 means asCapable; bit 3 means sync-ok.
+
+Either cleared bit reloads two completion pairs while active.
+
+The hook preserves the active level and applied rate.
+
+While inactive, these writes must leave qualification unarmed.
+
+Preserve this coupling when changing either region or flag.
+
 ## MicroCPU shape
 
 - ROM contains 1,024 forty-eight-bit instructions.
