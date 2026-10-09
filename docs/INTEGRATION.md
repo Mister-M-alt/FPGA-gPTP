@@ -189,6 +189,29 @@ Reset zeroes both data outputs.
 
 Each step pulse is exactly one phase step.
 
+### Peer delay across a phase step
+
+A servo step invalidates the crossing rate-estimation history.
+It retains the last valid ratio and link delay.
+The next clean exchange seeds a new rate window.
+A complete overlapping exchange still proves peer liveness.
+Its mixed-epoch timestamps cannot replace the retained delay.
+Ordinary missing-response and multiple-responder accounting remains active.
+The next request resumes measurement normally.
+
+These references are from IEEE 802.1AS-2020.
+
+| Clause | Responsibility |
+|---|---|
+| 11.2.2 | Capability through peer delay |
+| 11.2.19.3.3 | Neighbour rate estimation |
+| 11.2.19.3.4 | Link-delay calculation |
+| 11.2.20 | Responder timestamp pair |
+
+Parent issue #621 exercises both signed 10 ms steps.
+Its real-counter regression uses an independent peer LocalClock.
+The parent integration test checks media and public counters.
+
 Count step pulses to count phase steps.
 
 ### Step versus slew policy
