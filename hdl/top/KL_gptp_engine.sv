@@ -185,29 +185,21 @@ module KL_gptp_engine
   //! into the event-queue slot below, because a
   //! live response claim can deliberately hold one behind arbitrary
   //! accepted traffic.
-  //! The message bank is block RAM: the parser is its only writer and the
-  //! state port its only reader, and that port already returns data one
-  //! clock after the request, from st_rdata_r. The block RAM's output latch
-  //! answers bank reads in that register's place (bank_ram below), so a read
-  //! keeps its address cycle, its data cycle and its old-data result when
-  //! the parser writes the same word in that cycle. Two 32-bit halves map to
-  //! two RAMB18 rather than one RAMB36 (milan-fpga #640, lane M7).
-  (* ram_style = "block" *) logic [31:0] bank_lo_r [0:63];
-  (* ram_style = "block" *) logic [31:0] bank_hi_r [0:63];
+  (* ram_style = "distributed" *) logic [63:0] bank_r    [0:63];
   (* ram_style = "distributed" *) logic [63:0] scratch_r [0:63];
   logic bank_sel_r;
 
   //! Hold the just-parsed source identity and port without adding read ports
-  //! to the message bank. An event pushes two cycles after its frame's EOF,
-  //! whereas a zero-gap successor cannot reach these header fields in fewer
-  //! than 42 byte clocks, so they still belong to the event being enqueued.
+  //! to bank_r. An event pushes two cycles after its frame's EOF, whereas a
+  //! zero-gap successor cannot reach these header fields in fewer than 42
+  //! byte clocks, so they still belong to the event being enqueued.
   logic [63:0] frame_cid_r;
   logic [15:0] frame_pn_r;
 
   //! One complete frozen Announce context, written by the parser's existing
   //! single bank-write stream and read serially by the µCPU. Keeping the
   //! original 5-bit bank addresses makes this one compact 32x64 LUTRAM rather
-  //! than a wide register snapshot or a multi-read replica of the bank.
+  //! than a wide register snapshot or a multi-read replica of bank_r.
   (* ram_style = "distributed" *) logic [63:0] ann_ctx_r [0:31];
   //! Publication needs the selected path in one state-port transaction. Keep
   //! only that payload beside the serial-read context: the count plus w17..w23
@@ -251,8 +243,7 @@ module KL_gptp_engine
   //! µcode's init-once flag (scratch S_INIT) DEPENDS on this being zero.
   initial begin : ram_poweron
     for (int i = 0; i < 64; i++) begin
-      bank_lo_r[i] = '0;
-      bank_hi_r[i] = '0;
+      bank_r[i]    = '0;
       scratch_r[i] = '0;
       if (i < 32) ann_ctx_r[i] = '0;
     end
@@ -288,6 +279,7 @@ module KL_gptp_engine
         if (ann_fin_wait_r == 3'd1) ann_ctx_busy_r <= 1'b0;
       end
       if (bank_we_w) begin
+        bank_r[{bank_sel_r, bank_addr_w}] <= bank_wdata_w;
         if (bank_addr_w == 5'd2) frame_cid_r <= bank_wdata_w;
         if (bank_addr_w == 5'd3) frame_pn_r  <= bank_wdata_w[15:0];
         if (ann_frame_capture_r || ann_deferred_capture_w) begin
@@ -614,9 +606,6 @@ module KL_gptp_engine
   logic  [7:0] st_wstrb_w;
   logic        st_rvalid_r;
   logic [63:0] st_rdata_r;
-  //! what the µCPU reads: the bank's block-RAM latch after a bank read,
-  //! st_rdata_r after any other read (each is zero after the other's)
-  logic [63:0] st_rdata_w;
   logic        gx_req_w;
   logic  [7:0] gx_sel_w;
   logic        gx_valid_r;
@@ -651,7 +640,7 @@ module KL_gptp_engine
       .st_wstrb_o         (st_wstrb_w),
       .st_ready_i         (1'b1),
       .st_rvalid_i        (st_rvalid_r),
-      .st_rdata_i         (st_rdata_w),
+      .st_rdata_i         (st_rdata_r),
       .st_err_i           (1'b0),
       .gx_req_o           (gx_req_w),
       .gx_sel_o           (gx_sel_w),
@@ -720,14 +709,14 @@ module KL_gptp_engine
                                   disp_ev_r[31:16], 32'd0};
             5'd2: st_rd_mux_w = disp_pd_cid_r;
             5'd3: st_rd_mux_w = {48'd0, disp_pd_pn_r};
-            default: st_rd_mux_w = 64'd0;   //! bank RAM, st_rd_bank_w
+            default: st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
           endcase
         end else if (disp_announce_r) begin
-          //! Complete frozen Announce epoch at the message bank's addresses;
+          //! Complete frozen Announce epoch at the same addresses as bank_r;
           //! fixed-vector and BMCA reads therefore cannot mix parser epochs.
           st_rd_mux_w = ann_ctx_r[st_addr_w[4:0]];
         end else begin
-          st_rd_mux_w = 64'd0;              //! bank RAM, st_rd_bank_w
+          st_rd_mux_w = bank_r[{disp_bank_r, st_addr_w[4:0]}];
         end
       end
       //! word 0 ingress, word 1 egress, word 2 the transmit admission
@@ -770,37 +759,6 @@ module KL_gptp_engine
       default: st_rd_mux_w = 64'd0;
     endcase
   end
-
-  //! Region 0 reads that the message bank answers: every word outside the
-  //! frozen Announce context and the queued Pdelay_Req's three snapshot words.
-  //! The arms above return zero for them; st_rdata_w takes the RAM latch.
-  logic st_rd_w, st_rd_bank_w;
-  logic [5:0]  bank_waddr_w, bank_raddr_w;
-  logic [63:0] bank_q_r;
-  assign st_rd_w      = st_req_w && !st_we_w;
-  assign st_rd_bank_w = (st_addr_w[19:16] == 4'd0) &&
-                        (disp_pdreq_r ? !(st_addr_w[4:0] inside {5'd0, 5'd2, 5'd3})
-                                      : !disp_announce_r);
-  assign bank_waddr_w = {bank_sel_r, bank_addr_w};
-  assign bank_raddr_w = {disp_bank_r, st_addr_w[4:0]};
-
-  //! One write port (the parser) and one read port (the state port). The
-  //! read samples the array before this edge's write, as the distributed
-  //! read did. The output latch is cleared in reset and by every read the
-  //! bank does not answer, and st_rdata_r is zero after every read it does
-  //! answer, so their OR is exactly what st_rdata_r alone used to hold.
-  always_ff @(posedge clk_i) begin : bank_ram
-    if (rst_n && bank_we_w) begin
-      bank_lo_r[bank_waddr_w] <= bank_wdata_w[31:0];
-      bank_hi_r[bank_waddr_w] <= bank_wdata_w[63:32];
-    end
-    if (!rst_n || st_rd_w) begin
-      if (!rst_n || !st_rd_bank_w) bank_q_r <= 64'd0;
-      else bank_q_r <= {bank_hi_r[bank_raddr_w], bank_lo_r[bank_raddr_w]};
-    end
-  end : bank_ram
-
-  assign st_rdata_w = bank_q_r | st_rdata_r;
 
   //! Timer bootstrap: nothing arms a timer before µcode runs, and no µcode
   //! runs before an event. Arm the Pdelay cadence and Announce receipt watch
@@ -878,7 +836,7 @@ module KL_gptp_engine
 
       // one-shot read completion
       st_rvalid_r <= st_req_w && !st_we_w && !st_rvalid_r;
-      if (st_rd_w) st_rdata_r <= st_rd_mux_w;
+      if (st_req_w && !st_we_w) st_rdata_r <= st_rd_mux_w;
 
       // writes: single-cycle, full-width (µcode contract; the byte
       // strobes exist for the base ISA's sake and are not honoured here)
