@@ -32,24 +32,28 @@ Measurements used Vivado 2026.1.
 
 The target was `xc7a100tfgg484-2` at 100 MHz.
 
-Measurements finished on 2026-09-24 for PR #76.
+Measurements finished on 2026-10-10 for milan-fpga #640, lane M7.
 
 | Block | LUTs | Registers | BRAM tiles | DSPs | WNS |
 |---|---:|---:|---:|---:|---:|
-| Complete engine | 4,853 | 3,652 | 1.5 | 4 | +1.773 ns |
+| Complete engine | 4,748 | 3,396 | 1.5 | 4 | +2.249 ns |
 | Standalone microCPU | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
 
-These figures describe one synthesis instrument.
+These figures describe one synthesis instrument, `make ooc`.
 
-PR #76 adds 80 LUTs and six registers.
+The timer's deadlines move from registers to distributed RAM.
 
-The baseline used 4,773 LUTs and 3,646 registers.
+The engine sheds 105 LUTs since PR #76.
 
-Memory LUTs remain 466; BRAM and DSP usage stay unchanged.
+It also sheds 256 registers.
 
-WNS moves from +2.249 ns; timing remains met.
+Memory LUTs rise from 466 to 490.
 
-The [PR measurement reports](https://github.com/kebag-logic/milan-fpga/tree/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author) record the comparison.
+BRAM and DSP usage stay unchanged.
+
+WNS moves from +1.773 ns; timing remains met.
+
+The standalone microCPU repeats the PR #76 figures exactly.
 
 See the [historical resource record](history/v1/RESOURCE_VALIDATION.md).
 
