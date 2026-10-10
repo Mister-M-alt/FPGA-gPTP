@@ -7,6 +7,15 @@
 > Archived: 2026-08-31
 >
 > Current successor: [current project guide](../../../README.md)
+>
+> Flow note (2026-10-10, issue #70): this page names `syn/ooc` as the
+> recipe of its out-of-context figures. From the first commit `c99f7a8`
+> through main `5dce647a` that recipe issued `create_clock` after
+> `synth_design`, so those figures come from unconstrained synthesis and
+> each slack is a post-synthesis report, not a synthesis-time result.
+> Figures quoted from other repositories keep their own recipes.
+> Constrained figures sit beside unconstrained ones in the
+> [manager guide](../../MANAGER.md#latest-measured-snapshot).
 
 <!-- SPDX-License-Identifier: CERN-OHL-W-2.0 -->
 # gptp-processor — the 802.1AS time-sync plane
