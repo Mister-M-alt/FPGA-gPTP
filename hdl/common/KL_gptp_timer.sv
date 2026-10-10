@@ -73,7 +73,11 @@ module KL_gptp_timer #(
 
   // ---------------------------------------------------------- slot store
   logic [SLOTS_P-1:0] armed_r;
-  logic [31:0]        deadline_r [0:SLOTS_P-1];
+  //! Distributed RAM, one write (the arm port) and one read (the sweep), as
+  //! the register array was used (milan-fpga #640, lane M7). Reset does not
+  //! clear it: the sweep reads a deadline only for an armed slot, and every
+  //! arm writes its deadline in the same cycle.
+  (* ram_style = "distributed" *) logic [31:0] deadline_r [0:SLOTS_P-1];
 
   logic [SW_C-1:0] sweep_r;
   logic            sweeping_r;
@@ -84,6 +88,11 @@ module KL_gptp_timer #(
   logic signed [31:0] delta_w;
   assign delta_w = $signed(deadline_r[sweep_r] - ms_now_r);
 
+  always_ff @(posedge clk_i) begin : deadline_ram
+    if (rst_n && arm_we_i)
+      deadline_r[arm_slot_i] <= ms_now_r + arm_delta_ms_i;
+  end : deadline_ram
+
   always_ff @(posedge clk_i) begin : slots
     if (!rst_n) begin
       armed_r     <= '0;
@@ -91,14 +100,11 @@ module KL_gptp_timer #(
       sweeping_r  <= 1'b0;
       pend_r      <= 1'b0;
       pend_slot_r <= '0;
-      for (int i = 0; i < SLOTS_P; i++) deadline_r[i] <= '0;
     end else begin
       // arm port wins over the sweep's disarm (an arm in the expiry
       // cycle re-arms, which is the periodic-cadence idiom)
-      if (arm_we_i) begin
-        armed_r[arm_slot_i]    <= (arm_delta_ms_i != 32'd0);
-        deadline_r[arm_slot_i] <= ms_now_r + arm_delta_ms_i;
-      end
+      if (arm_we_i)
+        armed_r[arm_slot_i] <= (arm_delta_ms_i != 32'd0);
 
       if (ms_tick_w && !sweeping_r) begin
         sweeping_r <= 1'b1;
