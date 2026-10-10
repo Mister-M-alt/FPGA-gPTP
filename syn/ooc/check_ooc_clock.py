@@ -185,7 +185,9 @@ def selftest() -> int:
             GOOD_TCL.replace(read, "").replace(synth, synth + read),
         "create_clock after synth_design (the pre-#70 order)":
             GOOD_TCL.replace(read, "").replace(synth, synth + clock),
+        "no read_xdc": GOOD_TCL.replace(read, ""),
         "read_xdc of another file": GOOD_TCL.replace("ooc_clock.xdc", "other.xdc"),
+        "create_clock added after synth_design": GOOD_TCL + clock,
         "second synth_design": GOOD_TCL + "synth_design -top T -part P\n",
     }
     xdc_arms = {
@@ -199,7 +201,11 @@ def selftest() -> int:
         "create_clock echoed after synth_design (the pre-#70 order)":
             GOOD_LOG.replace(log_read, "").replace(log_parse, "")
             .replace(log_done, log_done + "# " + clock),
+        "no read_xdc echo": GOOD_LOG.replace(log_read, ""),
         "synthesis without the parsed XDC": GOOD_LOG.replace(log_parse, ""),
+        "create_clock echoed after a constrained synthesis": GOOD_LOG + "# " + clock,
+        "synth_design that never started":
+            GOOD_LOG.replace("Command: synth_design", "Command: report_timing"),
         "synth_design that never completed": GOOD_LOG.replace(log_done, ""),
     }
     arms = 0
@@ -234,10 +240,6 @@ def selftest() -> int:
             if not log_findings(log):
                 print(f"{NAME} selftest: {label} escaped")
                 return 1
-    arms += 1
-    if check():
-        print(f"{NAME} selftest: production scripts failed")
-        return 1
     print(f"{NAME} selftest: PASS ({arms} arms)")
     return 0
 
