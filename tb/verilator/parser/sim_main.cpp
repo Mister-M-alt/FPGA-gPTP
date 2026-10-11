@@ -162,6 +162,7 @@ class RxParserHarness {
   void check_adjacent_refusals_are_each_counted();
   void check_the_drop_count_advanced();
   void check_rx_err_on_any_byte_drops_the_frame();
+  void check_rx_err_writes_before_on_and_after_the_flag();
   int report();
 
   const milan::tb::Model<VKL_gptp_rx_parser> model;
@@ -176,9 +177,12 @@ class RxParserHarness {
   bool ev_seen = false;
   uint8_t ev_code = 0;
   uint16_t ev_seq = 0;
-  //! every bank write since reset, and those feed_err saw after the edge
-  //! of the first byte it flagged
+  //! every bank write since reset, and feed_err's split of one feed's
+  //! writes at the edge of the first byte it flagged: before that edge,
+  //! on it, and after it
   int bank_writes = 0;
+  int writes_before_err = 0;
+  int writes_on_err = 0;
   int writes_after_err = 0;
 
   //! the drop count before the drop arms, so the last check can assert the
@@ -251,25 +255,30 @@ void RxParserHarness::feed_gap(const std::vector<uint8_t> &a,
 }
 
 //! stream one frame with rx_err_i raised on bytes [from, to] and on no
-//! other, and count the bank writes after the first flagged byte's own
-//! edge: those of the later bytes and of the deferred end-of-frame
+//! other, and split every bank write of the feed at the first flagged
+//! byte: those of the earlier bytes' edges, the one of its own edge, and
+//! those after it, of the later bytes and of the deferred end-of-frame
 void RxParserHarness::feed_err(const std::vector<uint8_t> &bytes,
                                size_t from, size_t to) {
   bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
-  int writes_then = bank_writes;
+  const int writes0 = bank_writes;
+  int writes_before = bank_writes, writes_through = bank_writes;
   for (size_t i = 0; i < bytes.size(); i++) {
+    if (i == from) writes_before = bank_writes;
     dut->rx_valid_i = 1;
     dut->rx_data_i  = bytes[i];
     dut->rx_sof_i   = (i == 0);
     dut->rx_eof_i   = (i + 1 == bytes.size());
     dut->rx_err_i   = (i >= from) && (i <= to);
     tick();
-    if (i == from) writes_then = bank_writes;
+    if (i == from) writes_through = bank_writes;
   }
   dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
   dut->rx_err_i = 0;
   for (int i = 0; i < kDrainTicks; i++) tick();
-  writes_after_err = bank_writes - writes_then;
+  writes_before_err = writes_before - writes0;
+  writes_on_err = writes_through - writes_before;
+  writes_after_err = bank_writes - writes_through;
 }
 
 // reset
@@ -1220,8 +1229,10 @@ void RxParserHarness::check_the_drop_count_advanced() {
 // the flag dispatches, so a refusal does not outlive its frame. Last, a
 // flag raised in every gap of a frame streamed with rx_valid_i low
 // between its bytes belongs to no byte, and that frame dispatches.
-void RxParserHarness::check_rx_err_on_any_byte_drops_the_frame() {
-  struct ErrArm { const char *tag; Frame f; uint8_t ev; };
+//! the four message types the rx_err sweeps cover, each a valid frame with
+//! the event code it raises
+struct ErrArm { const char *tag; Frame f; uint8_t ev; };
+static std::vector<ErrArm> rx_err_arms() {
   Hdr hs; hs.mtype = 0x0; hs.seq = 0x3500; hs.flags = 0x0208;
   hs.srcid = 0xAABBCCFFFE001122ull; hs.srcpn = 1; hs.logint = 0xFD;
   Frame sync = common(hs, 10);
@@ -1235,12 +1246,17 @@ void RxParserHarness::check_rx_err_on_any_byte_drops_the_frame() {
   Frame pdresp = common(hr, 20);
   pdresp.u48(0x00000000ABCDull); pdresp.u32(0x075BCD15);
   pdresp.u64(0xDEADBEEFCAFEF00Dull); pdresp.u16(1);
-  const ErrArm arms[] = {
+  return {
     {"sync", sync, 1},
     {"fu", fu_frame(0x3508, 0x0003, 28, 0x0080C2, 1), 2},
     {"pdreq", pdreq, 4},
     {"pdresp", pdresp, 5},
   };
+}
+
+void RxParserHarness::check_rx_err_on_any_byte_drops_the_frame() {
+  const std::vector<ErrArm> arms = rx_err_arms();
+  Frame sync = arms[0].f;
   for (const ErrArm &a : arms) {
     char n[80];
     const size_t len = a.f.b.size();
@@ -1306,6 +1322,44 @@ void RxParserHarness::check_rx_err_on_any_byte_drops_the_frame() {
   }
 }
 
+// The oracle the ruling on #35 asks for (comment 6105869522) counts every
+// bank write of a flagged frame and splits them at the flagged byte's own
+// edge: before it, on it and after it. The parser streams each field into
+// the bank as it completes, so the ruling accepts the words written up to
+// and including that edge and forbids any after it. On the first byte, a
+// middle one (byte 29, whose edge completes correctionField's word w1) and
+// the eof byte of the four swept types and of an Announce, the one type
+// with a write that lands after its eof (the deferred hop-count word w12),
+// the frame counts one drop, raises no event and writes nothing after the
+// flag; the writes before and on it are printed as the record.
+void RxParserHarness::check_rx_err_writes_before_on_and_after_the_flag() {
+  std::vector<ErrArm> arms = rx_err_arms();
+  arms.push_back({"ann", announce_frame(0x350B, AGM, 0, ASRC, {}), 3});
+  for (const ErrArm &a : arms) {
+    char n[80];
+    const size_t len = a.f.b.size();
+    size_t dropped = 0, silent = 0, unwritten = 0;
+    for (size_t p : {size_t{0}, size_t{29}, len - 1}) {
+      uint16_t d0 = dut->drop_cnt_o;
+      feed_err(a.f.b, p, p);
+      const int drops = dut->drop_cnt_o - d0;
+      dropped += (drops == 1);
+      silent += (ev_count == 0);
+      unwritten += (writes_after_err == 0);
+      printf("INFO %s rx_err at byte %zu of %zu: drops +%d, events %d, "
+             "writes before %d, on %d, after %d\n", a.tag, p, len, drops,
+             ev_count, writes_before_err, writes_on_err, writes_after_err);
+    }
+    snprintf(n, sizeof n, "%s rx_err at first, middle, eof: one drop", a.tag);
+    expect_eq(n, dropped, 3);
+    snprintf(n, sizeof n, "%s rx_err at first, middle, eof: no event", a.tag);
+    expect_eq(n, silent, 3);
+    snprintf(n, sizeof n, "%s rx_err at first, middle, eof: no write after",
+             a.tag);
+    expect_eq(n, unwritten, 3);
+  }
+}
+
 int RxParserHarness::report() {
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   return fails ? 1 : 0;
@@ -1332,6 +1386,7 @@ int RxParserHarness::run() {
   check_adjacent_refusals_are_each_counted();
   check_the_drop_count_advanced();
   check_rx_err_on_any_byte_drops_the_frame();
+  check_rx_err_writes_before_on_and_after_the_flag();
   return report();
 }
 

@@ -7,7 +7,9 @@ Why this exists. FPGA-gPTP #35: `rx_err_i` was read only in the end-of-frame
 branch, so a flag on any earlier byte was ignored and the frame dispatched,
 and the suite stayed green because it only ever raised the flag with the
 last byte. The repair latches the flag on any byte, and `sim_main.cpp` now
-raises it at every byte position of four message types. Checks that never
+raises it at every byte position of four message types, and splits every
+bank write of a flagged frame into those before, on and after the flagged
+byte, none allowed after it (the ruling in #35). Checks that never
 fail are indistinguishable from checks that assert nothing, so each defect
 below is planted in the real parser RTL, one at a time, and the SAME harness
 must fail on it. The unmutated build must still pass, without which the arm
@@ -49,11 +51,19 @@ VFLAGS = [
 LATCH = "        if (rx_err_i) bad_r <= 1'b1;\n"
 EOF_TERM = "fin_ok_r <= !bad_r && !rx_err_i && (cnt_r >= min_end_w) &&"
 TYPES = ("sync", "fu", "pdreq", "pdresp")
+#: the before/on/after oracle adds an Announce, whose deferred hop-count
+#: word is the one write that can land after an eof
+ORACLE_TYPES = TYPES + ("ann",)
 
 
-def each(check: str) -> tuple[str, ...]:
+def each(check: str, types: tuple[str, ...] = TYPES) -> tuple[str, ...]:
     """The named check, once per message type the sweep covers."""
-    return tuple(f"{t} {check}" for t in TYPES)
+    return tuple(f"{t} {check}" for t in types)
+
+
+def oracle(check: str) -> tuple[str, ...]:
+    """The named first/middle/eof oracle check, once per type it covers."""
+    return each(f"rx_err at first, middle, eof: {check}", ORACLE_TYPES)
 
 
 #: (name, [(pattern, replacement), ...] in the parser, checks that must FAIL)
@@ -62,16 +72,19 @@ MUTATIONS = [
      [(LATCH, "")],
      each("rx_err at every byte: one drop") +
      each("rx_err at every byte: no event") +
-     each("rx_err at every byte: no later write")),
+     each("rx_err at every byte: no later write") +
+     oracle("one drop") + oracle("no event") + oracle("no write after")),
     ("a first-byte flag lost to the sof clear",
      [(LATCH, ""),
       ("      if (rx_valid_i) begin\n        if (rx_sof_i) begin\n",
        "      if (rx_valid_i) begin\n" + LATCH + "        if (rx_sof_i) begin\n")],
-     each("rx_err at every byte: one drop")),
+     each("rx_err at every byte: one drop") + oracle("one drop")),
     ("the eof byte's own flag ignored",
      [(EOF_TERM, "fin_ok_r <= !bad_r && (cnt_r >= min_end_w) &&")],
      each("rx_err at every byte: one drop") +
-     each("rx_err at every byte: no event")),
+     each("rx_err at every byte: no event") +
+     oracle("one drop") + oracle("no event") +
+     ("ann rx_err at first, middle, eof: no write after",)),
     ("every flagged byte counts a drop",
      [(LATCH, "        if (rx_err_i) begin\n"
               "          bad_r <= 1'b1;\n"
