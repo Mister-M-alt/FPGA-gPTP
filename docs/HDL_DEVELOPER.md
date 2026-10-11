@@ -171,6 +171,45 @@ Consumers sample only during `pub_commit_o`.
 
 Inactive path entries must remain zero.
 
+## Out-of-context measurement
+
+`make ooc` synthesizes both tops out of context.
+
+Each script first reads `syn/ooc/ooc_clock.xdc`.
+
+That file defines the 10 ns `clk_i` clock.
+
+Synthesis therefore optimizes against that period.
+
+`syn/ooc/check_ooc_clock.py` fails runs that break this order.
+
+It checks both scripts before Vivado starts.
+
+It checks both Vivado logs afterwards.
+
+Measured at main `5dce647a` on 2026-10-11:
+
+| Top | Flow | LUTs | Registers | BRAM tiles | DSPs | WNS |
+|---|---|---:|---:|---:|---:|---:|
+| `KL_gptp_engine` | Constrained | 4,852 | 3,652 | 1.5 | 4 | +1.773 ns |
+| `KL_gptp_engine` | Unconstrained | 4,853 | 3,652 | 1.5 | 4 | +1.773 ns |
+| `KL_gptp_ucpu` | Constrained | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
+| `KL_gptp_ucpu` | Unconstrained | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
+
+Both flows used Vivado 2026.1 and `xc7a100tfgg484-2`.
+
+Both used `-mode out_of_context` and the default directive.
+
+Constrained runs read the clock before `synth_design`.
+
+Unconstrained runs created it after `synth_design`.
+
+Unconstrained slack is only a post-synthesis report.
+
+OOC figures dated before issue #70 used the unconstrained flow.
+
+No placement or routing runs here.
+
 ## Change checklist
 
 - Preserve single-clock assumptions.
@@ -186,4 +225,5 @@ Inactive path entries must remain zero.
 - Update both WaveDrom sources when timing changes.
 - Update Draw.io after structural changes.
 - Regenerate every committed diagram.
+- Keep the OOC clock ahead of synthesis.
 - Run lint and complete simulations.
