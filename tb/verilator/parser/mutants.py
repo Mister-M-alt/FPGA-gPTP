@@ -23,6 +23,9 @@ written into the tree.
 
 The first mutant is the planted control the issue asks for: it deletes the
 latch and so restores exactly the end-of-frame-only read the base shipped.
+The last is the defect the ruling in #35 asks for: a refused frame's words
+may stay in the write bank, so a clean frame behind it that skips one field
+write would hand its event the refused frame's word.
 """
 
 from __future__ import annotations
@@ -66,6 +69,17 @@ def oracle(check: str) -> tuple[str, ...]:
     return each(f"rx_err at first, middle, eof: {check}", ORACLE_TYPES)
 
 
+#: (clean, refused) pairs of the stale-word check
+PAIRS = (("sync", "sync"), ("sync", "pdresp"), ("fu", "fu"), ("fu", "pdresp"),
+         ("pdreq", "pdreq"), ("pdreq", "sync"), ("pdresp", "pdresp"),
+         ("pdresp", "fu"))
+
+
+def pairs(check: str) -> tuple[str, ...]:
+    """The named stale-word check, once per pair it covers."""
+    return tuple(f"{c} after a refused {r}: {check}" for c, r in PAIRS)
+
+
 #: (name, [(pattern, replacement), ...] in the parser, checks that must FAIL)
 MUTATIONS = [
     ("rx_err read only at eof (the planted control)",
@@ -98,11 +112,27 @@ MUTATIONS = [
     ("the refusal outlives its frame",
      [("          bad_r    <= 1'b0;\n", "")],
      each("control after the errors: event") +
-     each("control after the errors: no drop")),
+     each("control after the errors: no drop") +
+     pairs("one drop") + pairs("event")),
     ("rx_err sampled between bytes",
      [(LATCH + "      end\n", "      end\n      if (rx_err_i) bad_r <= 1'b1;\n")],
      ("rx_err in every gap between bytes: sync event",
       "rx_err in every gap between bytes: no drop")),
+    # the planted defect the ruling in #35 asks for: the clean frame behind
+    # a refused one skips its source-identity write, so the refused frame's
+    # w2 is what its event would read
+    ("a refusal skips the next frame's w2 write",
+     [("  logic        bad_r;          //! poisoned: consume to eof, then drop\n",
+       "  logic        bad_r;          //! poisoned: consume to eof, then drop\n"
+       "  logic        was_bad_r;\n"),
+      ("      bad_r       <= 1'b0;\n",
+       "      bad_r       <= 1'b0;\n      was_bad_r   <= 1'b0;\n"),
+      ("          bad_r    <= 1'b0;\n",
+       "          bad_r    <= 1'b0;\n          was_bad_r <= bad_r;\n"),
+      ("              bank_we_o    <= !bad_r;\n              bank_addr_o  <= 5'd2;\n",
+       "              bank_we_o    <= !bad_r && !was_bad_r;\n"
+       "              bank_addr_o  <= 5'd2;\n")],
+     pairs("every word is this frame's")),
 ]
 
 
