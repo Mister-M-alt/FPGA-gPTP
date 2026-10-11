@@ -2,8 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
 # Runs both OOC measurements into syn/ooc/work/. Needs Vivado 2026.1.
-# check_ooc_clock.py fails the run when either script, or the log Vivado
-# wrote for it, shows synthesis without the clock of ooc_clock.xdc (#70).
+# check_ooc_clock.py fails the run before Vivado unless both scripts read
+# this repository's ooc_clock.xdc before synth_design (#70). After both
+# syntheses it fails the run unless each log shows that file parsed inside
+# synthesis and no critical warning, and each timing report shows clk at
+# 10 ns bound to clk_i with no unclocked register.
 #
 # Rule 13 strict mode is `errexit` only here; the other two thirds are DECLINED
 # and this is the record of why, not an oversight.

@@ -18,3 +18,6 @@ synth_design -mode out_of_context -top KL_gptp_ucpu -part xc7a100tfgg484-2 \
 report_utilization -hierarchical -file ucpu_util_hier.rpt
 report_utilization -file ucpu_util.rpt
 report_timing_summary -delay_type max -max_paths 3 -file ucpu_timing.rpt
+# The timing summary's Clock Summary has no source column; this names the
+# port clk is bound to, which check_ooc_clock.py requires to be clk_i.
+report_clocks -append -file ucpu_timing.rpt
