@@ -185,7 +185,17 @@ Synthesis therefore optimizes against that period.
 
 It checks both scripts before Vivado starts.
 
-It checks both Vivado logs afterwards.
+Afterwards it checks each log and timing report.
+
+The log must parse this repository's XDC inside synthesis.
+
+Neither log may carry a critical warning.
+
+Each timing report must show `clk` at 10 ns.
+
+Its `report_clocks` section must bind `clk` to `clk_i`.
+
+No register may lack a clock.
 
 Measured at main `5dce647a` on 2026-10-11:
 
