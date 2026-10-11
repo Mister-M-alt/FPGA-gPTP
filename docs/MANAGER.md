@@ -28,18 +28,32 @@ No certification claim is made.
 
 ## Latest measured snapshot
 
-Measurements used Vivado 2026.1.
+Measurements used Vivado 2026.1 out-of-context synthesis.
 
 The target was `xc7a100tfgg484-2` at 100 MHz.
 
-Measurements finished on 2026-09-24 for PR #76.
+Both flows measured main `5dce647a` on 2026-10-11.
 
-| Block | LUTs | Registers | BRAM tiles | DSPs | WNS |
-|---|---:|---:|---:|---:|---:|
-| Complete engine | 4,853 | 3,652 | 1.5 | 4 | +1.773 ns |
-| Standalone microCPU | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
+| Block | Flow | LUTs | Registers | BRAM tiles | DSPs | WNS |
+|---|---|---:|---:|---:|---:|---:|
+| Complete engine | Constrained | 4,852 | 3,652 | 1.5 | 4 | +1.773 ns |
+| Complete engine | Unconstrained | 4,853 | 3,652 | 1.5 | 4 | +1.773 ns |
+| Standalone microCPU | Constrained | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
+| Standalone microCPU | Unconstrained | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
 
-These figures describe one synthesis instrument.
+The constrained flow reads the clock before synthesis.
+
+The unconstrained flow created the clock after synthesis.
+
+Only constrained WNS reflects a synthesis timing target.
+
+Constraining the clock removed one engine LUT; nothing else moved.
+
+The [HDL guide](HDL_DEVELOPER.md#out-of-context-measurement) describes both flows.
+
+PR #76 measurements finished on 2026-09-24.
+
+They used the unconstrained flow.
 
 PR #76 adds 80 LUTs and six registers.
 

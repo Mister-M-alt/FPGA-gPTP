@@ -36,6 +36,7 @@ diagrams-check:
 	python3 scripts/generate_diagrams.py --selftest
 
 ooc:
+	python3 syn/ooc/check_ooc_clock.py --selftest
 	syn/ooc/run.sh
 
 clean:
