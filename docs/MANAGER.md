@@ -81,7 +81,6 @@ The [generator](../hdl/ucode/gen_gptp_ucode.py) rejects overflow and overlapping
 
 ## Open risks
 
-- [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) covers mid-frame receive errors.
 - Parent gitlink updates require separate review.
 - Physical acceptance remains product-specific.
 

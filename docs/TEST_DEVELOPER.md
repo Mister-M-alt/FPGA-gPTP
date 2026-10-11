@@ -32,6 +32,7 @@ No handwritten C harness exists.
 | `make -C tb/verilator/parser` | Frame parsing and refusal paths |
 | `make -C tb/verilator/engine` | Whole-plane protocol behavior |
 | `make -C tb/verilator/engine mutants` | Engine mutation controls |
+| `make -C tb/verilator/parser mutants` | Parser receive-error mutation controls |
 | `make -C bench/arty test` | MII timestamp-tag transport |
 | `make lint` | Engine and bench lint |
 | `make` | Every required local gate |
@@ -90,6 +91,8 @@ Prefer independent protocol formulas and frame builders.
 - Checks bank writes and emitted events.
 - Covers valid, malformed, truncated, and padded frames.
 - Exercises error and domain refusal paths.
+- Raises receive errors at every byte position.
+- Proves those error checks through planted defects.
 
 ### Engine suite
 

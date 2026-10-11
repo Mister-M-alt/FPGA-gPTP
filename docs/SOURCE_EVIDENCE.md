@@ -9,6 +9,7 @@ Line numbers describe the current branch layout.
 |---|---|---|
 | Single clock domain | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L58) | `make lint` |
 | Four instantiated blocks | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L160) | `make lint` |
+| Any-byte receive refusal | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv) | Parser suite and named mutation controls |
 | Deferred receive event | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L386) | Parser suite |
 | Four-entry event queue | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L405) | Engine suite |
 | Parser arbitration priority | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L432) | Engine suite |
@@ -35,10 +36,7 @@ Line numbers describe the current branch layout.
 | Load-bearing engine checks | [`mutants.py`](../tb/verilator/engine/mutants.py) | Engine suite |
 | Parent default enabled | [Pinned parent source](https://github.com/kebag-logic/milan-fpga/blob/3178b13638d11d67376a24ca52ee1332cbe23ad3/hdl/milan/milan_datapath.sv#L89) | Parent integration gates |
 
-Open issues qualify unresolved claims.
-
-- [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) qualifies receive error handling.
-
 Closed work still binds its interface.
 
 - [Issue #31](https://github.com/Mister-M-alt/FPGA-gPTP/issues/31) defines the result face above.
+- [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) defines the receive refusal above.

@@ -43,8 +43,6 @@ Detailed commands appear in the [test guide](docs/TEST_DEVELOPER.md).
 
 ## Known risks
 
-- [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) tracks mid-frame error handling.
-
 No certification claim is made.
 
 ## Documentation

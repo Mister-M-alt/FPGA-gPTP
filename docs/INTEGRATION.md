@@ -44,7 +44,7 @@ Keep every input synchronous to `clk_i`.
 | `rx_data_i[7:0]` | Input | Carries destination-MAC-first bytes |
 | `rx_sof_i` | Input | Marks the first byte |
 | `rx_eof_i` | Input | Marks the final byte |
-| `rx_err_i` | Input | Qualifies terminal frame failure |
+| `rx_err_i` | Input | Refuses the frame from any byte |
 | `rx_ts_i[63:0]` | Input | Stable during the SOF transfer |
 
 Parent sends preclassified `0x88F7` frames.
@@ -57,11 +57,17 @@ The engine never backpressures receive traffic.
 
 `rx_valid_i` may insert gaps between bytes.
 
-Assert receive errors with the final byte.
+Assert receive errors with any byte of the frame.
+
+Each refused frame counts exactly one drop.
+
+Pulsed and held errors refuse alike.
+
+Errors raised between valid bytes are ignored.
 
 Current parent integration drives `rx_err_i` low.
 
-[Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) tracks mid-frame error handling.
+[Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) records this any-byte contract.
 
 ## Transmit interface
 
