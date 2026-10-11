@@ -34,7 +34,11 @@ Line numbers describe the current branch layout.
 | C++ test harnesses | [`tb/verilator`](../tb/verilator) | `make` |
 | PHC and result face contract | [`check_phc_contract.py`](../tb/check_phc_contract.py) | `make contract` |
 | Load-bearing engine checks | [`mutants.py`](../tb/verilator/engine/mutants.py) | Engine suite |
-| Parent default enabled | [Pinned parent source](https://github.com/kebag-logic/milan-fpga/blob/3178b13638d11d67376a24ca52ee1332cbe23ad3/hdl/milan/milan_datapath.sv#L89) | Parent integration gates |
+| Parent default enabled | [Pinned parent parameter](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L73) | Parent integration gates |
+| Fabric owns product time | [Pinned parent contract](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L6) | Parent integration gates |
+| Option-off verifies comparisons only | [Pinned parent boundary](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/ARCHITECTURE_HW_SW_SPLIT.md#L165-L175) | Parent integration gates |
+
+These parent ownership citations resolve at `ac2c5e77`.
 
 Closed work still binds its interface.
 

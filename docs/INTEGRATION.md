@@ -7,13 +7,19 @@ This guide defines the external engine contract.
 
 ## Parent ownership
 
-Parent integration enables `GPTP_PLANE_EN_P` by default.
+Parent integration enables [`GPTP_PLANE_EN_P` by default](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L73).
 
-The disabled mode supports comparison builds only.
+[Fabric gPTP](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L6) owns product time synchronization.
+
+[One atomic bank](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L48) supplies every public consumer.
+
+The disabled mode supports [verification-only comparison builds only](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L49).
+
+Product configurations [cannot disable the plane](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L43-L44).
+
+These references pin parent `dev` at `ac2c5e77`.
 
 This repository contains no nested submodules.
-
-[Pinned parent source](https://github.com/kebag-logic/milan-fpga/blob/3178b13638d11d67376a24ca52ee1332cbe23ad3/hdl/milan/milan_datapath.sv#L89) records that default.
 
 Parent integration owns these surrounding services:
 
@@ -23,6 +29,24 @@ Parent integration owns these surrounding services:
 - PHC implementation and adjustment application.
 - Publication capture after commit.
 - Per-configuration microcode generation.
+
+### Option-off behavior
+
+`GPTP_PLANE_EN_P=0` has [no supported product image](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/ARCHITECTURE_HW_SW_SPLIT.md#L165).
+
+This verification path has [zero runtime gPTP owners](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170).
+
+| Surface | Option-off behavior | Parent evidence |
+|---|---|---|
+| Control TX | Passes straight through | [Datapath bypass](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L7614-L7624) |
+| PHC rate and phase controls | Select the CSR face | [PHC selection](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L2850-L2858) |
+| PHC settime | Remains on the CSR face | [Epoch control](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L2850-L2852) |
+| GM, parent, PathTrace, peer delay | Zero | [Safe publications](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170) |
+| Sync and asCapable | Zero | [Safe health](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170) |
+| AVTP `tu` | One | [Uncertain time](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170) |
+| Publication writes | Inert; cannot manufacture live state | [Write behavior](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170) |
+
+Review the [remaining acceptance gaps](MANAGER.md#open-risks) before product adoption.
 
 ## Clock and reset
 
