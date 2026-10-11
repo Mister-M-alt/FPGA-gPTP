@@ -61,6 +61,16 @@ Assert receive errors with any byte of the frame.
 
 Each refused frame counts exactly one drop.
 
+A refused frame raises no event.
+
+No bank write follows the flagged byte's own edge.
+
+Words written up to that edge are undefined.
+
+No event references a refused frame's words.
+
+The next accepted event reads only its own frame.
+
 Pulsed and held errors refuse alike.
 
 Errors raised between valid bytes are ignored.
@@ -68,6 +78,8 @@ Errors raised between valid bytes are ignored.
 Current parent integration drives `rx_err_i` low.
 
 [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) records this any-byte contract.
+
+[Its bank ruling](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35#issuecomment-6105869522) sets the write boundary.
 
 ## Transmit interface
 

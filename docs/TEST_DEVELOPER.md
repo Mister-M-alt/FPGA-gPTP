@@ -92,6 +92,8 @@ Prefer independent protocol formulas and frame builders.
 - Covers valid, malformed, truncated, and padded frames.
 - Exercises error and domain refusal paths.
 - Raises receive errors at every byte position.
+- Counts bank writes before, on, and after errors.
+- Proves refused frames leave no stale words.
 - Proves those error checks through planted defects.
 
 ### Engine suite

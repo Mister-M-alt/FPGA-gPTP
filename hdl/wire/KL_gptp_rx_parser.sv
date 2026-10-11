@@ -58,8 +58,12 @@
 //                hold it to eof; both refuse the frame once. Raised
 //                between bytes, with rx_valid_i low, it belongs to no
 //                byte and is ignored. No bank write follows the flagged
-//                byte; words written before it stay in the write bank
-//                like those of any refused frame, unnamed by any event.
+//                byte's own edge; words written up to and including it
+//                stay in the write bank like those of any refused frame,
+//                unnamed by any event. Their contents are undefined: the
+//                next accepted frame writes every word its event names
+//                before raising it, so that event reads only that frame's
+//                data (FPGA-gPTP #35, the bank ruling).
 //
 //                Message bank map (64-bit words, region 0 of the µCPU
 //                state port):
@@ -106,7 +110,10 @@ module KL_gptp_rx_parser
     input  wire  [7:0]  rx_data_i,
     input  wire         rx_sof_i,     //! asserted with the first byte
     input  wire         rx_eof_i,     //! asserted with the last byte
-    input  wire         rx_err_i,     //! abort, with any byte: drop the frame
+    //! abort, with any byte: one counted drop, no event and no bank
+    //! write after that byte's own edge; the words written up to and
+    //! including it are undefined and named by no event (header)
+    input  wire         rx_err_i,
     input  wire  [63:0] local_clock_id_i, //! complete PathTrace loop check
     input  wire         local_clock_valid_i,
 
