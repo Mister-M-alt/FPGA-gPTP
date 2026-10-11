@@ -206,7 +206,7 @@ Unconstrained runs created it after `synth_design`.
 
 Unconstrained slack is only a post-synthesis report.
 
-OOC figures dated before issue #70 used the unconstrained flow.
+This repository's `syn/ooc` figures before #70 were unconstrained.
 
 No placement or routing runs here.
 
