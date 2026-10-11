@@ -11,8 +11,8 @@
 // transportSpecific, wrong PTP version, foreign domainNumber, truncation,
 // a short messageLength (one arm per type the per-type table names), a
 // Follow_Up without its information TLV, a Pdelay_Req shorter than its
-// two reserved fields, rx_err; and that a Sync padded to the 60-byte
-// Ethernet minimum is accepted.
+// two reserved fields, rx_err at eof and at every other byte; and that a
+// Sync padded to the 60-byte Ethernet minimum is accepted.
 
 #include <cstdint>
 #include <cstdio>
@@ -141,6 +141,7 @@ class RxParserHarness {
   void feed(const std::vector<uint8_t> &bytes, bool err_at_eof);
   void feed_gap(const std::vector<uint8_t> &a,
                 const std::vector<uint8_t> &b, int gap);
+  void feed_err(const std::vector<uint8_t> &bytes, size_t from, size_t to);
   void reset_the_parser();
   void check_announce_with_a_two_hop_path_trace();
   void check_a_declared_suffix_binds_parsing_to_the_message();
@@ -160,6 +161,7 @@ class RxParserHarness {
   void check_unlisted_message_types_are_refused();
   void check_adjacent_refusals_are_each_counted();
   void check_the_drop_count_advanced();
+  void check_rx_err_on_any_byte_drops_the_frame();
   int report();
 
   const milan::tb::Model<VKL_gptp_rx_parser> model;
@@ -174,6 +176,10 @@ class RxParserHarness {
   bool ev_seen = false;
   uint8_t ev_code = 0;
   uint16_t ev_seq = 0;
+  //! every bank write since reset, and those feed_err saw after the edge
+  //! of the first byte it flagged
+  int bank_writes = 0;
+  int writes_after_err = 0;
 
   //! the drop count before the drop arms, so the last check can assert the
   //! total every arm between them added
@@ -196,7 +202,10 @@ void RxParserHarness::expect_eq(const char *what, uint64_t got, uint64_t exp) {
 void RxParserHarness::tick() {
   dut->clk_i = 0; dut->eval();
   dut->clk_i = 1; dut->eval();
-  if (dut->bank_we_o) bank[dut->bank_addr_o] = dut->bank_wdata_o;
+  if (dut->bank_we_o) {
+    bank[dut->bank_addr_o] = dut->bank_wdata_o;
+    bank_writes++;
+  }
   if (dut->ev_valid_o) {
     ev_seen = true;
     ev_code = dut->ev_code_o;
@@ -239,6 +248,28 @@ void RxParserHarness::feed_gap(const std::vector<uint8_t> &a,
     if (f == &a) for (int i = 0; i < gap; i++) tick();
   }
   for (int i = 0; i < kDrainTicks; i++) tick();
+}
+
+//! stream one frame with rx_err_i raised on bytes [from, to] and on no
+//! other, and count the bank writes after the first flagged byte's own
+//! edge: those of the later bytes and of the deferred end-of-frame
+void RxParserHarness::feed_err(const std::vector<uint8_t> &bytes,
+                               size_t from, size_t to) {
+  bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
+  int writes_then = bank_writes;
+  for (size_t i = 0; i < bytes.size(); i++) {
+    dut->rx_valid_i = 1;
+    dut->rx_data_i  = bytes[i];
+    dut->rx_sof_i   = (i == 0);
+    dut->rx_eof_i   = (i + 1 == bytes.size());
+    dut->rx_err_i   = (i >= from) && (i <= to);
+    tick();
+    if (i == from) writes_then = bank_writes;
+  }
+  dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+  dut->rx_err_i = 0;
+  for (int i = 0; i < kDrainTicks; i++) tick();
+  writes_after_err = bank_writes - writes_then;
 }
 
 // reset
@@ -1176,6 +1207,105 @@ void RxParserHarness::check_the_drop_count_advanced() {
             static_cast<uint16_t>(drops0 + 44));
 }
 
+// rx_err_i with any byte of a frame refuses that frame (FPGA-gPTP #35).
+// It used to be read only in the end-of-frame branch, so a flag on any
+// earlier byte was ignored and the frame dispatched: on a 58-byte Sync an
+// error at byte 20 or 40 gave drops +0 and events +1, and only one at
+// byte 57, the eof, gave drops +1 and events +0. For a Sync, a Follow_Up,
+// a Pdelay_Req and a Pdelay_Resp the flag is raised for one byte at every
+// position, sof and eof included, and each frame must count exactly one
+// drop, raise no event and see no bank write after the flagged byte.
+// Then the flag held from byte 20 through eof, the shape a MAC that holds
+// it produces, still counts exactly one drop; then the same frame without
+// the flag dispatches, so a refusal does not outlive its frame. Last, a
+// flag raised in every gap of a frame streamed with rx_valid_i low
+// between its bytes belongs to no byte, and that frame dispatches.
+void RxParserHarness::check_rx_err_on_any_byte_drops_the_frame() {
+  struct ErrArm { const char *tag; Frame f; uint8_t ev; };
+  Hdr hs; hs.mtype = 0x0; hs.seq = 0x3500; hs.flags = 0x0208;
+  hs.srcid = 0xAABBCCFFFE001122ull; hs.srcpn = 1; hs.logint = 0xFD;
+  Frame sync = common(hs, 10);
+  sync.u48(0x000012345678ull); sync.u32(0x1DCD6500);
+  Hdr hq; hq.mtype = 0x2; hq.seq = 0x3502; hq.srcid = 0x00220FFFFE334455ull;
+  hq.srcpn = 2;
+  Frame pdreq = common(hq, 20);
+  for (int i = 0; i < 20; i++) pdreq.u8(0);
+  Hdr hr; hr.mtype = 0x3; hr.seq = 0x3503; hr.flags = 0x0200;
+  hr.srcid = 0x00220FFFFE334455ull; hr.srcpn = 2;
+  Frame pdresp = common(hr, 20);
+  pdresp.u48(0x00000000ABCDull); pdresp.u32(0x075BCD15);
+  pdresp.u64(0xDEADBEEFCAFEF00Dull); pdresp.u16(1);
+  const ErrArm arms[] = {
+    {"sync", sync, 1},
+    {"fu", fu_frame(0x3508, 0x0003, 28, 0x0080C2, 1), 2},
+    {"pdreq", pdreq, 4},
+    {"pdresp", pdresp, 5},
+  };
+  for (const ErrArm &a : arms) {
+    char n[80];
+    const size_t len = a.f.b.size();
+    size_t dropped = 0, silent = 0, unwritten = 0;
+    std::vector<size_t> missed;
+    for (size_t p = 0; p < len; p++) {
+      uint16_t d0 = dut->drop_cnt_o;
+      feed_err(a.f.b, p, p);
+      const bool one = dut->drop_cnt_o == static_cast<uint16_t>(d0 + 1);
+      dropped += one;
+      silent += (ev_count == 0);
+      unwritten += (writes_after_err == 0);
+      if (!one || ev_count || writes_after_err) missed.push_back(p);
+    }
+    snprintf(n, sizeof n, "%s rx_err at every byte: one drop", a.tag);
+    expect_eq(n, dropped, len);
+    snprintf(n, sizeof n, "%s rx_err at every byte: no event", a.tag);
+    expect_eq(n, silent, len);
+    snprintf(n, sizeof n, "%s rx_err at every byte: no later write", a.tag);
+    expect_eq(n, unwritten, len);
+    for (size_t p : missed)
+      printf("  %s: rx_err at byte %zu of %zu was not refused cleanly\n",
+             a.tag, p, len);
+
+    uint16_t d0 = dut->drop_cnt_o;
+    feed_err(a.f.b, 20, len - 1);
+    snprintf(n, sizeof n, "%s rx_err held from byte 20 to eof: one drop",
+             a.tag);
+    expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 1));
+    snprintf(n, sizeof n, "%s rx_err held from byte 20 to eof: no event",
+             a.tag);
+    expect_eq(n, ev_count, 0);
+
+    d0 = dut->drop_cnt_o;
+    feed(a.f.b, false);
+    snprintf(n, sizeof n, "%s control after the errors: event", a.tag);
+    expect_eq(n, ev_seen ? ev_code : 0, a.ev);
+    snprintf(n, sizeof n, "%s control after the errors: no drop", a.tag);
+    expect_eq(n, dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
+    for (size_t i = 0; i < sync.b.size(); i++) {
+      if (i > 0) {                     // a gap cycle carrying the flag
+        dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+        dut->rx_err_i = 1;
+        tick();
+      }
+      dut->rx_valid_i = 1;
+      dut->rx_data_i  = sync.b[i];
+      dut->rx_sof_i   = (i == 0);
+      dut->rx_eof_i   = (i + 1 == sync.b.size());
+      dut->rx_err_i   = 0;
+      tick();
+    }
+    dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+    for (int i = 0; i < kDrainTicks; i++) tick();
+    expect_eq("rx_err in every gap between bytes: sync event",
+              ev_seen ? ev_code : 0, 1);
+    expect_eq("rx_err in every gap between bytes: no drop",
+              dut->drop_cnt_o, d0);
+  }
+}
+
 int RxParserHarness::report() {
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   return fails ? 1 : 0;
@@ -1201,6 +1331,7 @@ int RxParserHarness::run() {
   check_unlisted_message_types_are_refused();
   check_adjacent_refusals_are_each_counted();
   check_the_drop_count_advanced();
+  check_rx_err_on_any_byte_drops_the_frame();
   return report();
 }
 
