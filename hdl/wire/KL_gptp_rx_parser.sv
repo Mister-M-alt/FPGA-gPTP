@@ -29,7 +29,7 @@
 //                a Follow_Up whose information TLV header is not the
 //                one 11.4.4.3 prescribes (Table 11-9 makes the TLV a
 //                field of the 76-octet Follow_Up, 11.4.4.2.2 places it
-//                first), rx_err_i. The domain and messageLength arms
+//                first), rx_err_i (below). The domain and messageLength arms
 //                sit at header bytes 4 and 2..3, ahead of every
 //                message-bank write, so a foreign-domain or short-
 //                declared frame leaves nothing a handler could read.
@@ -48,6 +48,22 @@
 //                overwrites it. TLVs after the information TLV are not
 //                parsed (11.4.1: ignore a TLV and attempt the next), so
 //                a messageLength above 76 is accepted.
+//
+//                rx_err_i contract (FPGA-gPTP #35): the flag is sampled
+//                with every byte of a frame (rx_valid_i high), the first
+//                and the last included, and wherever it falls the frame
+//                is consumed to its eof and refused with exactly one
+//                counted drop and no event, however many of its bytes
+//                carry it. A driver may pulse it on the corrupt byte or
+//                hold it to eof; both refuse the frame once. Raised
+//                between bytes, with rx_valid_i low, it belongs to no
+//                byte and is ignored. No bank write follows the flagged
+//                byte's own edge; words written up to and including it
+//                stay in the write bank like those of any refused frame,
+//                unnamed by any event. Their contents are undefined: the
+//                next accepted frame writes every word its event names
+//                before raising it, so that event reads only that frame's
+//                data (FPGA-gPTP #35, the bank ruling).
 //
 //                Message bank map (64-bit words, region 0 of the µCPU
 //                state port):
@@ -94,7 +110,10 @@ module KL_gptp_rx_parser
     input  wire  [7:0]  rx_data_i,
     input  wire         rx_sof_i,     //! asserted with the first byte
     input  wire         rx_eof_i,     //! asserted with the last byte
-    input  wire         rx_err_i,     //! abort: drop silently
+    //! abort, with any byte: one counted drop, no event and no bank
+    //! write after that byte's own edge; the words written up to and
+    //! including it are undefined and named by no event (header)
+    input  wire         rx_err_i,
     input  wire  [63:0] local_clock_id_i, //! complete PathTrace loop check
     input  wire         local_clock_valid_i,
 
@@ -605,7 +624,8 @@ module KL_gptp_rx_parser
           //! bad_r is sampled as registered. Fixed header/FU poison arms sit
           //! below their type minima. Announce TLV headers and the first path
           //! identity can legitimately end on EOF, so their current-byte bad
-          //! terms and chain completion are included explicitly below.
+          //! terms and chain completion are included explicitly below, as
+          //! is the eof byte's own rx_err_i (an earlier one is in bad_r).
           if (rx_eof_i) begin
             run_r    <= 1'b0;
             fin_r    <= 1'b1;
@@ -623,6 +643,13 @@ module KL_gptp_rx_parser
           // one-byte frame: malformed by construction, counted above
           run_r <= 1'b0;
         end
+
+        //! rx_err_i with ANY byte poisons its frame, the first and the last
+        //! included: consumed to eof, one counted drop, no event (FPGA-gPTP
+        //! #35). Below the sof arm, so the flag on a first byte outlasts
+        //! that arm's clear. The eof byte's own flag also reaches fin_ok_r
+        //! directly, since this register settles on the same edge
+        if (rx_err_i) bad_r <= 1'b1;
       end
     end
   end

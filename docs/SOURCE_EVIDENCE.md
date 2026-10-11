@@ -9,7 +9,8 @@ Line numbers describe the current branch layout.
 |---|---|---|
 | Single clock domain | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L58) | `make lint` |
 | Four instantiated blocks | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L160) | `make lint` |
-| Deferred receive event | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L374) | Parser suite |
+| Any-byte receive refusal | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv) | Parser suite and named mutation controls |
+| Deferred receive event | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L393) | Parser suite |
 | Four-entry event queue | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L405) | Engine suite |
 | Parser arbitration priority | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L432) | Engine suite |
 | Priority timestamp return | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L343) | Engine suite |
@@ -29,7 +30,7 @@ Line numbers describe the current branch layout.
 | Step-versus-slew policy | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
 | Registered policy slew level | [Port](../hdl/top/KL_gptp_engine.sv#L109), [word 2](../hdl/top/KL_gptp_engine.sv#L929), [word 3](../hdl/top/KL_gptp_engine.sv#L934), [policy](../hdl/ucode/gen_gptp_ucode.py#L837) | Engine suite and named mutation controls |
 | PHC rate envelope | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
-| Ignored receive flag bits | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L456) | Engine suite |
+| Ignored receive flag bits | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L475) | Engine suite |
 | C++ test harnesses | [`tb/verilator`](../tb/verilator) | `make` |
 | PHC and result face contract | [`check_phc_contract.py`](../tb/check_phc_contract.py) | `make contract` |
 | Load-bearing engine checks | [`mutants.py`](../tb/verilator/engine/mutants.py) | Engine suite |
@@ -39,10 +40,7 @@ Line numbers describe the current branch layout.
 
 These parent ownership citations resolve at `ac2c5e77`.
 
-Open issues qualify unresolved claims.
-
-- [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) qualifies receive error handling.
-
 Closed work still binds its interface.
 
 - [Issue #31](https://github.com/Mister-M-alt/FPGA-gPTP/issues/31) defines the result face above.
+- [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) defines the receive refusal above.

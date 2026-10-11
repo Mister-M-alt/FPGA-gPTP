@@ -26,6 +26,8 @@ The parser accepts one byte each valid cycle.
 
 It validates headers before dispatching events.
 
+A receive error on any byte refuses its frame.
+
 Accepted data enters ping-pong message banks.
 
 Ingress timestamps follow the same bank selection.

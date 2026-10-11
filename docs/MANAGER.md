@@ -101,7 +101,6 @@ The [generator](../hdl/ucode/gen_gptp_ucode.py) rejects overflow and overlapping
 
 | Gap | Status | Tracking |
 |---|---|---|
-| Mid-frame receive errors | Fix in review; not merged here | [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35), [PR #80](https://github.com/Mister-M-alt/FPGA-gPTP/pull/80) |
 | Donor asymmetry input, calibration triple, live tuner | Open | [Issue #58](https://github.com/Mister-M-alt/FPGA-gPTP/issues/58) |
 | Physical synchronization, GM recovery, conformance, and fabric publication | Acceptance still owed against the reference peer | [Parent #117](https://github.com/kebag-logic/milan-fpga/issues/117) |
 | Physical timestamp calibration and ingress/egress split | Incomplete | [Parent #64](https://github.com/kebag-logic/milan-fpga/issues/64), [parent #488](https://github.com/kebag-logic/milan-fpga/issues/488) |

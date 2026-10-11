@@ -48,7 +48,6 @@ Detailed commands appear in the [test guide](docs/TEST_DEVELOPER.md).
 
 ## Known risks
 
-- [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) remains in [review](https://github.com/Mister-M-alt/FPGA-gPTP/pull/80): mid-frame receive errors.
 - [Issue #58](https://github.com/Mister-M-alt/FPGA-gPTP/issues/58) remains open: asymmetry, calibration, and live tuning.
 - [Parent #117](https://github.com/kebag-logic/milan-fpga/issues/117) still owes physical acceptance against the reference peer.
 - [Parent #64](https://github.com/kebag-logic/milan-fpga/issues/64) and [#488](https://github.com/kebag-logic/milan-fpga/issues/488) still owe physical timestamp calibration.
