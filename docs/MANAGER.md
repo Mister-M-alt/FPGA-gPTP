@@ -100,15 +100,17 @@ See the [historical resource record](history/v1/RESOURCE_VALIDATION.md).
 
 ## Current ROM budget
 
-Shipping usage: 1,008 of 1,024 words (98.4%).
+Shipping usage: 1,016 of 1,024 words (99.2%).
 
-Only 16 words remain free, spread across packing gaps.
+Only eight words remain free, spread across packing gaps.
 
 Shared legs may occupy the formerly reserved prefix.
 
 That prefix spans addresses 0..15.
 
-The current map places `SERVO@0` and `FUTO@13` there.
+The current map places `SERVO@0` in that prefix.
+
+`FUTO@249` sits outside it.
 
 Engine dispatch entries start at address 16.
 
