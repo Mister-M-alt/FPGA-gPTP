@@ -7,13 +7,19 @@ This guide defines the external engine contract.
 
 ## Parent ownership
 
-Parent integration enables `GPTP_PLANE_EN_P` by default.
+Parent integration enables [`GPTP_PLANE_EN_P` by default](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L73).
 
-The disabled mode supports comparison builds only.
+[Fabric gPTP](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L6) owns product time synchronization.
+
+[One atomic bank](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L48) supplies every public consumer.
+
+The disabled mode supports [verification-only comparison builds only](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L49).
+
+Product configurations [cannot disable the plane](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L43-L44).
+
+These references pin parent `dev` at `ac2c5e77`.
 
 This repository contains no nested submodules.
-
-[Pinned parent source](https://github.com/kebag-logic/milan-fpga/blob/3178b13638d11d67376a24ca52ee1332cbe23ad3/hdl/milan/milan_datapath.sv#L89) records that default.
 
 Parent integration owns these surrounding services:
 
@@ -23,6 +29,24 @@ Parent integration owns these surrounding services:
 - PHC implementation and adjustment application.
 - Publication capture after commit.
 - Per-configuration microcode generation.
+
+### Option-off behavior
+
+`GPTP_PLANE_EN_P=0` has [no supported product image](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/ARCHITECTURE_HW_SW_SPLIT.md#L165).
+
+This verification path has [zero runtime gPTP owners](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170).
+
+| Surface | Option-off behavior | Parent evidence |
+|---|---|---|
+| Control TX | Passes straight through | [Datapath bypass](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L7614-L7624) |
+| PHC rate and phase controls | Select the CSR face | [PHC selection](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L2850-L2858) |
+| PHC settime | Remains on the CSR face | [Epoch control](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L2850-L2852) |
+| GM, parent, PathTrace, peer delay | Zero | [Safe publications](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170) |
+| Sync and asCapable | Zero | [Safe health](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170) |
+| AVTP `tu` | One | [Uncertain time](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170) |
+| Publication writes | Inert; cannot manufacture live state | [Write behavior](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/README.md#L167-L170) |
+
+Review the [remaining acceptance gaps](MANAGER.md#open-risks) before product adoption.
 
 ## Clock and reset
 
@@ -44,7 +68,7 @@ Keep every input synchronous to `clk_i`.
 | `rx_data_i[7:0]` | Input | Carries destination-MAC-first bytes |
 | `rx_sof_i` | Input | Marks the first byte |
 | `rx_eof_i` | Input | Marks the final byte |
-| `rx_err_i` | Input | Qualifies terminal frame failure |
+| `rx_err_i` | Input | Refuses the frame from any byte |
 | `rx_ts_i[63:0]` | Input | Stable during the SOF transfer |
 
 Parent sends preclassified `0x88F7` frames.
@@ -57,11 +81,29 @@ The engine never backpressures receive traffic.
 
 `rx_valid_i` may insert gaps between bytes.
 
-Assert receive errors with the final byte.
+Assert receive errors with any byte of the frame.
+
+Each refused frame counts exactly one drop.
+
+A refused frame raises no event.
+
+No bank write follows the flagged byte's own edge.
+
+Words written up to that edge are undefined.
+
+No event references a refused frame's words.
+
+The next accepted event reads only its own frame.
+
+Pulsed and held errors refuse alike.
+
+Errors raised between valid bytes are ignored.
 
 Current parent integration drives `rx_err_i` low.
 
-[Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) tracks mid-frame error handling.
+[Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) records this any-byte contract.
+
+[Its bank ruling](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35#issuecomment-6105869522) sets the write boundary.
 
 ## Transmit interface
 
@@ -188,6 +230,29 @@ Both data outputs hold their values between pulses.
 Reset zeroes both data outputs.
 
 Each step pulse is exactly one phase step.
+
+### Peer delay across a phase step
+
+A servo step invalidates the crossing rate-estimation history.
+It retains the last valid ratio and link delay.
+The next clean exchange seeds a new rate window.
+A complete overlapping exchange still proves peer liveness.
+Its mixed-epoch timestamps cannot replace the retained delay.
+Ordinary missing-response and multiple-responder accounting remains active.
+The next request resumes measurement normally.
+
+These references are from IEEE 802.1AS-2020.
+
+| Clause | Responsibility |
+|---|---|
+| 11.2.2 | Capability through peer delay |
+| 11.2.19.3.3 | Neighbour rate estimation |
+| 11.2.19.3.4 | Link-delay calculation |
+| 11.2.20 | Responder timestamp pair |
+
+Parent issue #621 exercises both signed 10 ms steps.
+Its real-counter regression uses an independent peer LocalClock.
+The parent integration test checks media and public counters.
 
 Count step pulses to count phase steps.
 

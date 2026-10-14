@@ -11,9 +11,21 @@ VFLAGS = --cc --exe --build -j 0 \
 SRCS = $(RTL_DIR)/ucpu/gptp_ucpu_pkg.sv $(RTL_DIR)/wire/KL_gptp_rx_parser.sv
 CPP  = sim_main.cpp
 
+.PHONY: all run mutants clean
+.DEFAULT_GOAL := all
+all: run mutants
+
 run:
 	$(VERILATOR) $(VFLAGS) $(SRCS) $(CPP) -o Vparser_sim
 	./obj_dir/Vparser_sim
+
+# Rule 8: prove the rx_err_i checks above are load-bearing. Eight defects
+# are injected into the real parser RTL, one at a time, and each must fail
+# every check it names in the SAME harness; the unmutated build must still
+# pass. Mutants are built in a temporary directory, so nothing is written
+# into the tree.
+mutants:
+	python3 mutants.py
 
 clean:
 	rm -rf obj_dir

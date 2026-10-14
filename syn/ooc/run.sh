@@ -2,6 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
 # Runs both OOC measurements into syn/ooc/work/. Needs Vivado 2026.1.
+# check_ooc_clock.py fails the run before Vivado unless both scripts read
+# this repository's ooc_clock.xdc before synth_design (#70). After both
+# syntheses it fails the run unless each log shows that file parsed inside
+# synthesis and no critical warning, and each timing report shows clk at
+# 10 ns bound to clk_i with no unclocked register.
 #
 # Rule 13 strict mode is `errexit` only here; the other two thirds are DECLINED
 # and this is the record of why, not an oversight.
@@ -23,6 +28,7 @@
 #               not every /bin/sh implements.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
+python3 "$HERE/check_ooc_clock.py"
 VIVADO_SETTINGS=${VIVADO_SETTINGS:-$HOME/Xilinx/2026.1/Vivado/settings64.sh}
 . "$VIVADO_SETTINGS"
 mkdir -p "$HERE/work"
@@ -30,6 +36,7 @@ cd "$HERE/work"
 python3 "$HERE/../../hdl/ucode/gen_gptp_ucode.py" -o gptp_ucode.hex
 vivado -mode batch -source "$HERE/ucpu_ooc.tcl"   -nojournal -log ucpu_ooc.log
 vivado -mode batch -source "$HERE/engine_ooc.tcl" -nojournal -log engine_ooc.log
+python3 "$HERE/check_ooc_clock.py" --log ucpu_ooc.log engine_ooc.log
 echo "==== ucpu ===="
 grep -A2 "Slice LUTs\|Block RAM Tile\|DSPs" ucpu_util.rpt | head -20
 echo "==== engine ===="

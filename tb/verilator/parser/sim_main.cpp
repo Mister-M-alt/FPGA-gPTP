@@ -11,8 +11,10 @@
 // transportSpecific, wrong PTP version, foreign domainNumber, truncation,
 // a short messageLength (one arm per type the per-type table names), a
 // Follow_Up without its information TLV, a Pdelay_Req shorter than its
-// two reserved fields, rx_err; and that a Sync padded to the 60-byte
-// Ethernet minimum is accepted.
+// two reserved fields, rx_err at eof and at every other byte, with every
+// bank write of a flagged frame counted; that no word a refused frame
+// leaves reaches the next accepted frame's event; and that a Sync padded
+// to the 60-byte Ethernet minimum is accepted.
 
 #include <cstdint>
 #include <cstdio>
@@ -141,6 +143,9 @@ class RxParserHarness {
   void feed(const std::vector<uint8_t> &bytes, bool err_at_eof);
   void feed_gap(const std::vector<uint8_t> &a,
                 const std::vector<uint8_t> &b, int gap);
+  void feed_err(const std::vector<uint8_t> &bytes, size_t from, size_t to);
+  void feed_refused_then(const std::vector<uint8_t> &refused,
+                         const std::vector<uint8_t> &clean);
   void reset_the_parser();
   void check_announce_with_a_two_hop_path_trace();
   void check_a_declared_suffix_binds_parsing_to_the_message();
@@ -160,6 +165,9 @@ class RxParserHarness {
   void check_unlisted_message_types_are_refused();
   void check_adjacent_refusals_are_each_counted();
   void check_the_drop_count_advanced();
+  void check_rx_err_on_any_byte_drops_the_frame();
+  void check_rx_err_writes_before_on_and_after_the_flag();
+  void check_a_refused_frame_leaves_no_stale_word();
   int report();
 
   const milan::tb::Model<VKL_gptp_rx_parser> model;
@@ -174,6 +182,17 @@ class RxParserHarness {
   bool ev_seen = false;
   uint8_t ev_code = 0;
   uint16_t ev_seq = 0;
+  //! the bank as the latest event saw it, and as feed_refused_then's
+  //! refused frame left it
+  std::map<uint32_t, uint64_t> ev_bank;
+  std::map<uint32_t, uint64_t> refused_left;
+  //! every bank write since reset, and feed_err's split of one feed's
+  //! writes at the edge of the first byte it flagged: before that edge,
+  //! on it, and after it
+  int bank_writes = 0;
+  int writes_before_err = 0;
+  int writes_on_err = 0;
+  int writes_after_err = 0;
 
   //! the drop count before the drop arms, so the last check can assert the
   //! total every arm between them added
@@ -196,13 +215,17 @@ void RxParserHarness::expect_eq(const char *what, uint64_t got, uint64_t exp) {
 void RxParserHarness::tick() {
   dut->clk_i = 0; dut->eval();
   dut->clk_i = 1; dut->eval();
-  if (dut->bank_we_o) bank[dut->bank_addr_o] = dut->bank_wdata_o;
+  if (dut->bank_we_o) {
+    bank[dut->bank_addr_o] = dut->bank_wdata_o;
+    bank_writes++;
+  }
   if (dut->ev_valid_o) {
     ev_seen = true;
     ev_code = dut->ev_code_o;
     ev_seq = dut->ev_seq_o;
     ev_count++;
     ev_w0.push_back(bank.count(0) ? bank[0] : 0);
+    ev_bank = bank;
   }
 }
 
@@ -238,6 +261,56 @@ void RxParserHarness::feed_gap(const std::vector<uint8_t> &a,
     dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
     if (f == &a) for (int i = 0; i < gap; i++) tick();
   }
+  for (int i = 0; i < kDrainTicks; i++) tick();
+}
+
+//! stream one frame with rx_err_i raised on bytes [from, to] and on no
+//! other, and split every bank write of the feed at the first flagged
+//! byte: those of the earlier bytes' edges, the one of its own edge, and
+//! those after it, of the later bytes and of the deferred end-of-frame
+void RxParserHarness::feed_err(const std::vector<uint8_t> &bytes,
+                               size_t from, size_t to) {
+  bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
+  const int writes0 = bank_writes;
+  int writes_before = bank_writes, writes_through = bank_writes;
+  for (size_t i = 0; i < bytes.size(); i++) {
+    if (i == from) writes_before = bank_writes;
+    dut->rx_valid_i = 1;
+    dut->rx_data_i  = bytes[i];
+    dut->rx_sof_i   = (i == 0);
+    dut->rx_eof_i   = (i + 1 == bytes.size());
+    dut->rx_err_i   = (i >= from) && (i <= to);
+    tick();
+    if (i == from) writes_through = bank_writes;
+  }
+  dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+  dut->rx_err_i = 0;
+  for (int i = 0; i < kDrainTicks; i++) tick();
+  writes_before_err = writes_before - writes0;
+  writes_on_err = writes_through - writes_before;
+  writes_after_err = bank_writes - writes_through;
+}
+
+//! stream a frame flagged on its eof byte and, with no idle cycle between,
+//! a clean frame behind it, keeping the bank across both: the engine moves
+//! to its other bank only on an accepted event (bank_sel_r in
+//! KL_gptp_engine.sv), so a refused frame and its successor share one
+void RxParserHarness::feed_refused_then(const std::vector<uint8_t> &refused,
+                                        const std::vector<uint8_t> &clean) {
+  ev_seen = false; ev_count = 0; ev_w0.clear(); ev_bank.clear();
+  for (const std::vector<uint8_t> *f : {&refused, &clean}) {
+    for (size_t i = 0; i < f->size(); i++) {
+      dut->rx_valid_i = 1;
+      dut->rx_data_i  = (*f)[i];
+      dut->rx_sof_i   = (i == 0);
+      dut->rx_eof_i   = (i + 1 == f->size());
+      dut->rx_err_i   = (f == &refused) && (i + 1 == f->size());
+      tick();
+    }
+    if (f == &refused) refused_left = bank;
+  }
+  dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+  dut->rx_err_i = 0;
   for (int i = 0; i < kDrainTicks; i++) tick();
 }
 
@@ -1176,6 +1249,258 @@ void RxParserHarness::check_the_drop_count_advanced() {
             static_cast<uint16_t>(drops0 + 44));
 }
 
+// rx_err_i with any byte of a frame refuses that frame (FPGA-gPTP #35).
+// It used to be read only in the end-of-frame branch, so a flag on any
+// earlier byte was ignored and the frame dispatched: on a 58-byte Sync an
+// error at byte 20 or 40 gave drops +0 and events +1, and only one at
+// byte 57, the eof, gave drops +1 and events +0. For a Sync, a Follow_Up,
+// a Pdelay_Req and a Pdelay_Resp the flag is raised for one byte at every
+// position, sof and eof included, and each frame must count exactly one
+// drop, raise no event and see no bank write after the flagged byte's own
+// edge.
+// Then the flag held from byte 20 through eof, the shape a MAC that holds
+// it produces, still counts exactly one drop; then the same frame without
+// the flag dispatches, so a refusal does not outlive its frame. Last, a
+// flag raised in every gap of a frame streamed with rx_valid_i low
+// between its bytes belongs to no byte, and that frame dispatches.
+//! the four message types the rx_err sweeps cover, each a valid frame with
+//! the event code it raises
+struct ErrArm { const char *tag; Frame f; uint8_t ev; };
+static std::vector<ErrArm> rx_err_arms() {
+  Hdr hs; hs.mtype = 0x0; hs.seq = 0x3500; hs.flags = 0x0208;
+  hs.srcid = 0xAABBCCFFFE001122ull; hs.srcpn = 1; hs.logint = 0xFD;
+  Frame sync = common(hs, 10);
+  sync.u48(0x000012345678ull); sync.u32(0x1DCD6500);
+  Hdr hq; hq.mtype = 0x2; hq.seq = 0x3502; hq.srcid = 0x00220FFFFE334455ull;
+  hq.srcpn = 2;
+  Frame pdreq = common(hq, 20);
+  for (int i = 0; i < 20; i++) pdreq.u8(0);
+  Hdr hr; hr.mtype = 0x3; hr.seq = 0x3503; hr.flags = 0x0200;
+  hr.srcid = 0x00220FFFFE334455ull; hr.srcpn = 2;
+  Frame pdresp = common(hr, 20);
+  pdresp.u48(0x00000000ABCDull); pdresp.u32(0x075BCD15);
+  pdresp.u64(0xDEADBEEFCAFEF00Dull); pdresp.u16(1);
+  return {
+    {"sync", sync, 1},
+    {"fu", fu_frame(0x3508, 0x0003, 28, 0x0080C2, 1), 2},
+    {"pdreq", pdreq, 4},
+    {"pdresp", pdresp, 5},
+  };
+}
+
+//! a frame of one of the four swept types with every field drawn from
+//! `salt`, and the words its event names packed from those fields alone
+struct Salted { const char *tag; Frame f; uint8_t ev; uint16_t seq;
+                std::map<uint32_t, uint64_t> words; };
+static Salted salted(uint8_t mtype, unsigned salt) {
+  const uint64_t s = salt;
+  Hdr h; h.mtype = mtype; h.seq = static_cast<uint16_t>(0x3540 + s);
+  h.flags = static_cast<uint16_t>(0x0200 | s);
+  h.corr = 0x0011223344550000ull | (s << 8) | s;
+  h.srcid = 0xAABBCCFFFE000000ull | (s << 8) | s;
+  h.srcpn = static_cast<uint16_t>(0x0100 + s);
+  h.logint = static_cast<uint8_t>(0xE0 + s);
+  const uint64_t sec = 0x000012340000ull + s;
+  const uint32_t ns = 0x1DCD0000u + salt;
+  Salted r{"pdreq", common(h, 20), 4, h.seq,
+           {{0, w0_of(h)}, {1, h.corr}, {2, h.srcid}, {3, h.srcpn}}};
+  if (mtype == 0x0) {
+    r.tag = "sync"; r.ev = 1; r.f = common(h, 10);
+    r.f.u48(sec); r.f.u32(ns);
+    r.words[4] = sec; r.words[5] = ns;
+  } else if (mtype == 0x8) {
+    const uint32_t csro = 0xFFFFF000u + salt;
+    const uint16_t tbi = static_cast<uint16_t>(0x0700 + s);
+    r.tag = "fu"; r.ev = 2; r.f = common(h, 10 + 32);
+    r.f.u48(sec); r.f.u32(ns);
+    r.f.u16(0x0003); r.f.u16(28);                    // info TLV
+    r.f.u8(0x00); r.f.u8(0x80); r.f.u8(0xC2);        // orgId
+    r.f.u8(0); r.f.u8(0); r.f.u8(1);                 // orgSubType
+    r.f.u32(csro); r.f.u16(tbi);
+    for (int i = 0; i < 12; i++) r.f.u8(0);          // lastGmPhaseChange
+    r.f.u32(0x00000123);                             // scaledLastGmFreq
+    r.words[4] = sec; r.words[5] = ns;
+    r.words[11] = (static_cast<uint64_t>(csro) << 32) |
+                  (static_cast<uint64_t>(tbi) << 16);
+  } else if (mtype == 0x3) {
+    const uint64_t rqid = 0xDEADBEEFCAFE0000ull + s;
+    const uint16_t rqpn = static_cast<uint16_t>(0x0200 + s);
+    r.tag = "pdresp"; r.ev = 5; r.f = common(h, 20);
+    r.f.u48(sec); r.f.u32(ns); r.f.u64(rqid); r.f.u16(rqpn);
+    r.words[4] = sec; r.words[5] = ns; r.words[6] = rqid; r.words[7] = rqpn;
+  } else {
+    for (int i = 0; i < 20; i++) r.f.u8(0);          // two reserved fields
+  }
+  return r;
+}
+
+void RxParserHarness::check_rx_err_on_any_byte_drops_the_frame() {
+  const std::vector<ErrArm> arms = rx_err_arms();
+  Frame sync = arms[0].f;
+  for (const ErrArm &a : arms) {
+    char n[80];
+    const size_t len = a.f.b.size();
+    size_t dropped = 0, silent = 0, unwritten = 0;
+    std::vector<size_t> missed;
+    for (size_t p = 0; p < len; p++) {
+      uint16_t d0 = dut->drop_cnt_o;
+      feed_err(a.f.b, p, p);
+      const bool one = dut->drop_cnt_o == static_cast<uint16_t>(d0 + 1);
+      dropped += one;
+      silent += (ev_count == 0);
+      unwritten += (writes_after_err == 0);
+      if (!one || ev_count || writes_after_err) missed.push_back(p);
+    }
+    snprintf(n, sizeof n, "%s rx_err at every byte: one drop", a.tag);
+    expect_eq(n, dropped, len);
+    snprintf(n, sizeof n, "%s rx_err at every byte: no event", a.tag);
+    expect_eq(n, silent, len);
+    snprintf(n, sizeof n, "%s rx_err at every byte: no later write", a.tag);
+    expect_eq(n, unwritten, len);
+    for (size_t p : missed)
+      printf("  %s: rx_err at byte %zu of %zu was not refused cleanly\n",
+             a.tag, p, len);
+
+    uint16_t d0 = dut->drop_cnt_o;
+    feed_err(a.f.b, 20, len - 1);
+    snprintf(n, sizeof n, "%s rx_err held from byte 20 to eof: one drop",
+             a.tag);
+    expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 1));
+    snprintf(n, sizeof n, "%s rx_err held from byte 20 to eof: no event",
+             a.tag);
+    expect_eq(n, ev_count, 0);
+
+    d0 = dut->drop_cnt_o;
+    feed(a.f.b, false);
+    snprintf(n, sizeof n, "%s control after the errors: event", a.tag);
+    expect_eq(n, ev_seen ? ev_code : 0, a.ev);
+    snprintf(n, sizeof n, "%s control after the errors: no drop", a.tag);
+    expect_eq(n, dut->drop_cnt_o, d0);
+  }
+  {
+    uint16_t d0 = dut->drop_cnt_o;
+    bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
+    for (size_t i = 0; i < sync.b.size(); i++) {
+      if (i > 0) {                     // a gap cycle carrying the flag
+        dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+        dut->rx_err_i = 1;
+        tick();
+      }
+      dut->rx_valid_i = 1;
+      dut->rx_data_i  = sync.b[i];
+      dut->rx_sof_i   = (i == 0);
+      dut->rx_eof_i   = (i + 1 == sync.b.size());
+      dut->rx_err_i   = 0;
+      tick();
+    }
+    dut->rx_valid_i = 0; dut->rx_sof_i = 0; dut->rx_eof_i = 0;
+    for (int i = 0; i < kDrainTicks; i++) tick();
+    expect_eq("rx_err in every gap between bytes: sync event",
+              ev_seen ? ev_code : 0, 1);
+    expect_eq("rx_err in every gap between bytes: no drop",
+              dut->drop_cnt_o, d0);
+  }
+}
+
+// The oracle the ruling on #35 asks for (comment 6105869522) counts every
+// bank write of a flagged frame and splits them at the flagged byte's own
+// edge: before it, on it and after it. The parser streams each field into
+// the bank as it completes, so the ruling accepts the words written up to
+// and including that edge and forbids any after it. On the first byte, a
+// middle one (byte 29, whose edge completes correctionField's word w1) and
+// the eof byte of the four swept types and of an Announce, the one type
+// with a write that lands after its eof (the deferred hop-count word w12),
+// the frame counts one drop, raises no event and writes nothing after the
+// flag; the writes before and on it are printed as the record.
+void RxParserHarness::check_rx_err_writes_before_on_and_after_the_flag() {
+  std::vector<ErrArm> arms = rx_err_arms();
+  arms.push_back({"ann", announce_frame(0x350B, AGM, 0, ASRC, {}), 3});
+  for (const ErrArm &a : arms) {
+    char n[80];
+    const size_t len = a.f.b.size();
+    size_t dropped = 0, silent = 0, unwritten = 0;
+    for (size_t p : {size_t{0}, size_t{29}, len - 1}) {
+      uint16_t d0 = dut->drop_cnt_o;
+      feed_err(a.f.b, p, p);
+      const int drops = dut->drop_cnt_o - d0;
+      dropped += (drops == 1);
+      silent += (ev_count == 0);
+      unwritten += (writes_after_err == 0);
+      printf("INFO %s rx_err at byte %zu of %zu: drops +%d, events %d, "
+             "writes before %d, on %d, after %d\n", a.tag, p, len, drops,
+             ev_count, writes_before_err, writes_on_err, writes_after_err);
+    }
+    snprintf(n, sizeof n, "%s rx_err at first, middle, eof: one drop", a.tag);
+    expect_eq(n, dropped, 3);
+    snprintf(n, sizeof n, "%s rx_err at first, middle, eof: no event", a.tag);
+    expect_eq(n, silent, 3);
+    snprintf(n, sizeof n, "%s rx_err at first, middle, eof: no write after",
+             a.tag);
+    expect_eq(n, unwritten, 3);
+  }
+}
+
+// The ruling on #35 (comment 6105869522) leaves a refused frame's words in
+// the write bank, undefined and named by no event, so the real risk is one
+// of them reaching the next accepted frame's handler. A frame refused by a
+// flag on its eof byte, which leaves every word it writes, is followed with
+// no idle cycle by a clean frame of the same type, and then of a different
+// one whose words cover most of the clean frame's. The pair counts the one
+// drop, the clean frame raises the one event with its own code and
+// sequence, and as that event sees the bank every word its type names holds
+// that frame's own field. Each frame draws its fields from its own salt, so
+// no word of the refused frame, or of any earlier one, equals the clean
+// frame's: a word the clean frame failed to write shows as stale.
+void RxParserHarness::check_a_refused_frame_leaves_no_stale_word() {
+  //! {clean, refused} message types
+  const uint8_t pairs[][2] = {{0x0, 0x0}, {0x0, 0x3}, {0x8, 0x8}, {0x8, 0x3},
+                              {0x2, 0x2}, {0x2, 0x0}, {0x3, 0x3}, {0x3, 0x8}};
+  unsigned salt = 1;
+  for (const auto &pair : pairs) {
+    const Salted r = salted(pair[1], salt++);
+    const Salted v = salted(pair[0], salt++);
+    char n[96];
+    uint16_t d0 = dut->drop_cnt_o;
+    feed_refused_then(r.f.b, v.f.b);
+    snprintf(n, sizeof n, "%s after a refused %s: one drop", v.tag, r.tag);
+    expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 1));
+    snprintf(n, sizeof n, "%s after a refused %s: event", v.tag, r.tag);
+    expect_eq(n, ev_count == 1 ? (static_cast<uint64_t>(ev_code) << 16) | ev_seq
+                               : 0,
+              (static_cast<uint64_t>(v.ev) << 16) | v.seq);
+    size_t own = 0;
+    for (const auto &[addr, word] : v.words) {
+      const auto seen = ev_bank.find(addr);
+      if (seen != ev_bank.end() && seen->second == word) {
+        own++;
+        continue;
+      }
+      const auto was = r.words.find(addr);
+      const bool stale = seen != ev_bank.end() && was != r.words.end() &&
+                         was->second == seen->second;
+      printf("  %s after a refused %s: w%u holds %016llx, not %016llx%s\n",
+             v.tag, r.tag, addr,
+             static_cast<unsigned long long>(
+                 seen != ev_bank.end() ? seen->second : 0),
+             static_cast<unsigned long long>(word),
+             stale ? ", the refused frame's word" : "");
+    }
+    snprintf(n, sizeof n, "%s after a refused %s: every word is this frame's",
+             v.tag, r.tag);
+    expect_eq(n, own, v.words.size());
+    size_t kept = 0, beyond = 0;
+    for (const auto &[addr, word] : r.words) {
+      const auto at = refused_left.find(addr);
+      if (at == refused_left.end() || at->second != word) continue;
+      kept++;
+      beyond += !v.words.count(addr);
+    }
+    printf("INFO %s after a refused %s: it left %zu of its %zu words, "
+           "%zu of them outside the %s words\n", v.tag, r.tag, kept,
+           r.words.size(), beyond, v.tag);
+  }
+}
+
 int RxParserHarness::report() {
   printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
   return fails ? 1 : 0;
@@ -1201,6 +1526,9 @@ int RxParserHarness::run() {
   check_unlisted_message_types_are_refused();
   check_adjacent_refusals_are_each_counted();
   check_the_drop_count_advanced();
+  check_rx_err_on_any_byte_drops_the_frame();
+  check_a_refused_frame_leaves_no_stale_word();
+  check_rx_err_writes_before_on_and_after_the_flag();
   return report();
 }
 

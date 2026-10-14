@@ -7,6 +7,24 @@
 > Archived: 2026-08-31
 >
 > Current successor: [current project guide](../../../README.md)
+>
+> Flow note (2026-10-10, issue #70): this page names `syn/ooc` as the
+> recipe of its out-of-context figures. From the first commit `c99f7a8`
+> through main `5dce647a` that recipe issued `create_clock` after
+> `synth_design`, so those figures come from unconstrained synthesis and
+> each slack is a post-synthesis report, not a synthesis-time result.
+> Figures quoted from other repositories keep their own recipes.
+> Constrained figures sit beside unconstrained ones in the
+> [manager guide](../../MANAGER.md#latest-measured-snapshot).
+
+> Integration note (2026-10-11, issue #48): the default-off account below
+> preserves the earlier state, also recorded in closed [issue #13](https://github.com/Mister-M-alt/FPGA-gPTP/issues/13).
+> Parent `dev` at `ac2c5e77` now [defaults `GPTP_PLANE_EN_P` on](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L73).
+> [Fabric gPTP owns product time](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L6).
+> [Option-off remains verification-only and ownerless](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/ARCHITECTURE_HW_SW_SPLIT.md#L165-L175), with safe failure publications.
+> See the [current integration contract](../../INTEGRATION.md#parent-ownership)
+> and [remaining issue-linked gaps](../../MANAGER.md#open-risks).
+> Parent [#117](https://github.com/kebag-logic/milan-fpga/issues/117) still owns physical acceptance against the reference peer.
 
 <!-- SPDX-License-Identifier: CERN-OHL-W-2.0 -->
 # gptp-processor — the 802.1AS time-sync plane

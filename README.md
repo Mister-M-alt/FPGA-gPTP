@@ -18,8 +18,9 @@ The engine keeps protocol work inside programmable logic.
 
 ## Current shape
 
-- Parent integration enables this plane by default.
-- The disabled mode supports comparison builds only.
+- Parent `GPTP_PLANE_EN_P` [defaults on](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/hdl/milan/milan_datapath.sv#L73).
+- [Fabric gPTP](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L6) owns product time synchronization.
+- The disabled mode supports [verification-only comparison builds only](https://github.com/kebag-logic/milan-fpga/blob/ac2c5e77bba1c0ae20ce2f69f711a1d17ead94a5/docs/design/GPTP_PLANE.md#L49).
 - One synchronous clock domain carries all processing.
 - RX consumes validated, preclassified gPTP frames.
 - TX honors downstream byte-level backpressure.
@@ -28,6 +29,10 @@ The engine keeps protocol work inside programmable logic.
 - Egress timestamp results arrive on accepted beats.
 - Admission credit postpones only initiating transmissions.
 - Publication outputs expose committed protocol state.
+
+Parent evidence is pinned at `ac2c5e77`.
+
+The [integration guide](docs/INTEGRATION.md#option-off-behavior) details option-off behavior.
 
 ## Verify quickly
 
@@ -43,7 +48,11 @@ Detailed commands appear in the [test guide](docs/TEST_DEVELOPER.md).
 
 ## Known risks
 
-- [Issue #35](https://github.com/Mister-M-alt/FPGA-gPTP/issues/35) tracks mid-frame error handling.
+- [Issue #58](https://github.com/Mister-M-alt/FPGA-gPTP/issues/58) remains open: asymmetry, calibration, and live tuning.
+- [Parent #117](https://github.com/kebag-logic/milan-fpga/issues/117) still owes physical acceptance against the reference peer.
+- [Parent #64](https://github.com/kebag-logic/milan-fpga/issues/64) and [#488](https://github.com/kebag-logic/milan-fpga/issues/488) still owe physical timestamp calibration.
+
+The [manager guide](docs/MANAGER.md#open-risks) separates donor and product gaps.
 
 No certification claim is made.
 

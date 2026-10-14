@@ -7,6 +7,15 @@
 > Archived: 2026-09-01
 >
 > Current successor: [current integration guide](../../../INTEGRATION.md)
+>
+> Flow note (2026-10-10, issue #70): the out-of-context figures here came
+> from the prototype line's `syn/ooc` recipe, which started from the round
+> that created this repository. In that round's commit `c99f7a8` the recipe
+> issued `create_clock` after `synth_design`, so its figures come from
+> unconstrained synthesis and each slack is a post-synthesis report. The
+> prototype line's later scripts are not retained here; the order is
+> verified for `c99f7a8` only. Constrained figures sit beside unconstrained
+> ones in the [manager guide](../../../MANAGER.md#latest-measured-snapshot).
 
 <!-- SPDX-License-Identifier: CERN-OHL-W-2.0 -->
 # Deploying the gPTP engine on an FPGA — step by step

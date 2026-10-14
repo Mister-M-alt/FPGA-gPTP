@@ -26,6 +26,8 @@ The parser accepts one byte each valid cycle.
 
 It validates headers before dispatching events.
 
+A receive error on any byte refuses its frame.
+
 Accepted data enters ping-pong message banks.
 
 Ingress timestamps follow the same bank selection.
@@ -171,6 +173,55 @@ Consumers sample only during `pub_commit_o`.
 
 Inactive path entries must remain zero.
 
+## Out-of-context measurement
+
+`make ooc` synthesizes both tops out of context.
+
+Each script first reads `syn/ooc/ooc_clock.xdc`.
+
+That file defines the 10 ns `clk_i` clock.
+
+Synthesis therefore optimizes against that period.
+
+`syn/ooc/check_ooc_clock.py` fails runs that break this order.
+
+It checks both scripts before Vivado starts.
+
+Afterwards it checks each log and timing report.
+
+The log must parse this repository's XDC inside synthesis.
+
+Neither log may carry a critical warning.
+
+Each timing report must show `clk` at 10 ns.
+
+Its `report_clocks` section must bind `clk` to `clk_i`.
+
+No register may lack a clock.
+
+Measured at main `5dce647a` on 2026-10-11:
+
+| Top | Flow | LUTs | Registers | BRAM tiles | DSPs | WNS |
+|---|---|---:|---:|---:|---:|---:|
+| `KL_gptp_engine` | Constrained | 4,852 | 3,652 | 1.5 | 4 | +1.773 ns |
+| `KL_gptp_engine` | Unconstrained | 4,853 | 3,652 | 1.5 | 4 | +1.773 ns |
+| `KL_gptp_ucpu` | Constrained | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
+| `KL_gptp_ucpu` | Unconstrained | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
+
+Both flows used Vivado 2026.1 and `xc7a100tfgg484-2`.
+
+Both used `-mode out_of_context` and the default directive.
+
+Constrained runs read the clock before `synth_design`.
+
+Unconstrained runs created it after `synth_design`.
+
+Unconstrained slack is only a post-synthesis report.
+
+This repository's `syn/ooc` figures before #70 were unconstrained.
+
+No placement or routing runs here.
+
 ## Change checklist
 
 - Preserve single-clock assumptions.
@@ -186,4 +237,5 @@ Inactive path entries must remain zero.
 - Update both WaveDrom sources when timing changes.
 - Update Draw.io after structural changes.
 - Regenerate every committed diagram.
+- Keep the OOC clock ahead of synthesis.
 - Run lint and complete simulations.
