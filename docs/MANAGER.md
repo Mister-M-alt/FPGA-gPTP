@@ -69,19 +69,48 @@ WNS moves from +2.249 ns; timing remains met.
 
 The [PR measurement reports](https://github.com/kebag-logic/milan-fpga/tree/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author) record the comparison.
 
+### M7 timer-storage measurement
+
+Measurements finished on 2026-10-10 for milan-fpga #640, lane M7.
+
+| Block | LUTs | Registers | BRAM tiles | DSPs | WNS |
+|---|---:|---:|---:|---:|---:|
+| Complete engine | 4,748 | 3,396 | 1.5 | 4 | +2.249 ns |
+| Standalone microCPU | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
+
+These figures used the then-unconstrained `make ooc` flow.
+
+They describe timer storage at lane head `18dd997b`.
+
+The timer's deadlines move from registers to distributed RAM.
+
+The engine sheds 105 LUTs since PR #76.
+
+It also sheds 256 registers.
+
+Memory LUTs rise from 466 to 490.
+
+BRAM and DSP usage stay unchanged.
+
+WNS moves from +1.773 ns; timing remains met.
+
+The standalone microCPU repeats the PR #76 figures exactly.
+
 See the [historical resource record](history/v1/RESOURCE_VALIDATION.md).
 
 ## Current ROM budget
 
-Shipping usage: 1,008 of 1,024 words (98.4%).
+Shipping usage: 1,016 of 1,024 words (99.2%).
 
-Only 16 words remain free, spread across packing gaps.
+Only eight words remain free, spread across packing gaps.
 
 Shared legs may occupy the formerly reserved prefix.
 
 That prefix spans addresses 0..15.
 
-The current map places `SERVO@0` and `FUTO@13` there.
+The current map places `SERVO@0` in that prefix.
+
+`FUTO@249` sits outside it.
 
 Engine dispatch entries start at address 16.
 

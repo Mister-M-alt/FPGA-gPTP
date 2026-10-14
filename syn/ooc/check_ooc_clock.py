@@ -266,8 +266,9 @@ clk    10.000      {0.000 5.000}  P           {clk_i}
 """
 
 
-def selftest() -> int:
-    """Plant each defect and require the check to name it."""
+def selftest_arms(xdc: Path, tcl: Path, log: Path, report: Path) -> list[
+        tuple[str, dict[Path, str | None], list[str]]]:
+    """Build the planted files and required findings for each clock defect."""
     read = "read_xdc $SPEC/syn/ooc/ooc_clock.xdc\n"
     synth = "    -generic UCODE_HEX_P=gptp_ucode.hex\n"
     clock = "create_clock -period 10.000 -name clk [get_ports clk_i]\n"
@@ -277,97 +278,103 @@ def selftest() -> int:
     log_count = "39 Infos, 65 Warnings, 0 Critical Warnings and 0 Errors encountered.\n"
     summary = "clk    {0.000 5.000}      10.000          100.000\n"
     sources = "clk    10.000      {0.000 5.000}  P           {clk_i}\n"
+    # R614-1's arm: the top's clock port renamed, so create_clock found
+    # no port, and synthesis and timing ran with no clock at all.
+    renamed = {
+        log: GOOD_LOG.replace(
+            "Finished Parsing", "CRITICAL WARNING: [Vivado 12-4739] create_clock:No valid "
+            "object(s) found for '-objects [get_ports clk_i]'. [@XDC@:9]\nFinished Parsing")
+        .replace(log_count, log_count.replace("0 Critical", "2 Critical")),
+        report: GOOD_RPT.replace("no_clock (0)", "no_clock (1003)")
+        .split("| Clock Summary")[0] + "Clock Report\n\nClock  Period(ns)  Waveform(ns)  "
+        "Attributes  Sources\n\n",
+    }
+    # (label, planted files, words a finding must carry; None deletes a file)
+    return [
+        ("read_xdc moved after synth_design",
+         {tcl: GOOD_TCL.replace(read, "").replace(synth, synth + read)},
+         ["read_xdc after synth_design"]),
+        ("create_clock after synth_design (the pre-#70 order)",
+         {tcl: GOOD_TCL.replace(read, "").replace(synth, synth + clock)},
+         ["create_clock after synth_design"]),
+        ("no read_xdc", {tcl: GOOD_TCL.replace(read, "")}, ["is not read before"]),
+        ("read_xdc of another file",
+         {tcl: GOOD_TCL.replace("ooc_clock.xdc", "other.xdc")}, ["is not read before"]),
+        ("read_xdc of a foreign ooc_clock.xdc of the same basename",
+         {tcl: GOOD_TCL.replace(read, "read_xdc /elsewhere/ooc_clock.xdc\n")},
+         ["is not read before"]),
+        ("create_clock added after synth_design", {tcl: GOOD_TCL + clock},
+         ["create_clock after synth_design"]),
+        ("second synth_design", {tcl: GOOD_TCL + "synth_design -top T -part P\n"},
+         ["expected one synth_design"]),
+        ("8 ns period", {xdc: GOOD_XDC.replace("10.000", "8.000")}, ["clock is 8.000 ns"]),
+        ("clock on another port", {xdc: GOOD_XDC.replace("clk_i", "clk_o")}, ["on clk_o"]),
+        ("no clock", {xdc: "# fixture\n"}, ["expected one create_clock"]),
+        ("XDC with two create_clock lines", {xdc: GOOD_XDC + clock},
+         ["expected one create_clock"]),
+        ("read_xdc echoed after synth_design",
+         {log: GOOD_LOG.replace(log_read, "").replace(log_done, log_done + log_read)},
+         ["is not read before", "read_xdc after synth_design"]),
+        ("create_clock echoed after synth_design (the pre-#70 order)",
+         {log: GOOD_LOG.replace(log_read, "").replace(log_parse, "")
+          .replace(log_done, log_done + "# " + clock)},
+         ["create_clock after synth_design"]),
+        ("no read_xdc echo", {log: GOOD_LOG.replace(log_read, "")}, ["is not read before"]),
+        ("synthesis without the parsed XDC", {log: GOOD_LOG.replace(log_parse, "")},
+         ["did not parse"]),
+        ("foreign ooc_clock.xdc of the same basename read and parsed",
+         {log: GOOD_LOG.replace("$SPEC/syn/ooc/ooc_clock.xdc", "/elsewhere/ooc_clock.xdc")
+          .replace("@XDC@", "/elsewhere/ooc_clock.xdc")},
+         ["is not read before", "did not parse"]),
+        ("ooc_clock.xdc parsed from another checkout",
+         {log: GOOD_LOG.replace("@XDC@", "/elsewhere/syn/ooc/ooc_clock.xdc")},
+         ["did not parse"]),
+        ("create_clock echoed after a constrained synthesis", {log: GOOD_LOG + "# " + clock},
+         ["create_clock after synth_design"]),
+        ("synth_design that never started",
+         {log: GOOD_LOG.replace("Command: synth_design", "Command: report_timing")},
+         ["never started"]),
+        ("synth_design that never completed", {log: GOOD_LOG.replace(log_done, "")},
+         ["did not complete"]),
+        ("critical-warning count above zero",
+         {log: GOOD_LOG.replace("0 Critical Warnings", "1 Critical Warnings")},
+         ["session ends with 1 critical warnings"]),
+        ("no session message count", {log: GOOD_LOG.replace(log_count, "")},
+         ["no session message count"]),
+        ("critical warning after the session count",
+         {log: GOOD_LOG + "CRITICAL WARNING: [Timing 38-1] planted\n"},
+         ["CRITICAL WARNING: [Timing 38-1]"]),
+        ("wrong period",
+         {report: GOOD_RPT.replace("{0.000 5.000}      10.000          100.000",
+                                   "{0.000 4.000}      8.000           125.000")
+          .replace("10.000      {0.000 5.000}", "8.000       {0.000 4.000}")},
+         ["Clock Summary is"]),
+        ("second clock", {report: GOOD_RPT.replace(summary, summary + summary)},
+         ["Clock Summary is"]),
+        ("clock bound to another port",
+         {report: GOOD_RPT.replace(sources, sources.replace("clk_i", "rst_i"))},
+         ["not bound to clk_i"]),
+        ("unclocked registers", {report: GOOD_RPT.replace("no_clock (0)", "no_clock (12)")},
+         ["checking no_clock reports"]),
+        ("no timing report", {report: None}, ["fixture_timing.rpt: missing"]),
+        ("renamed clock port (R614-1)", renamed,
+         ["CRITICAL WARNING: [Vivado 12-4739]", "session ends with 2 critical warnings",
+          "Clock Summary is", "not bound to clk_i", "checking no_clock reports"]),
+    ]
+
+
+def selftest() -> int:
+    """Plant each defect and require the check to name it."""
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         xdc, tcl = root / XDC, root / SCRIPTS[-1]
         log, report = root / "fixture_ooc.log", root / "fixture_timing.rpt"
         good = {xdc: GOOD_XDC, log: GOOD_LOG, report: GOOD_RPT}
         good.update({root / script: GOOD_TCL for script in SCRIPTS})
-        # R614-1's arm: the top's clock port renamed, so create_clock found
-        # no port, and synthesis and timing ran with no clock at all.
-        renamed = {
-            log: GOOD_LOG.replace(
-                "Finished Parsing", "CRITICAL WARNING: [Vivado 12-4739] create_clock:No valid "
-                "object(s) found for '-objects [get_ports clk_i]'. [@XDC@:9]\nFinished Parsing")
-            .replace(log_count, log_count.replace("0 Critical", "2 Critical")),
-            report: GOOD_RPT.replace("no_clock (0)", "no_clock (1003)")
-            .split("| Clock Summary")[0] + "Clock Report\n\nClock  Period(ns)  Waveform(ns)  "
-            "Attributes  Sources\n\n",
-        }
-        # (label, planted files, words a finding must carry; None deletes a file)
-        arms: list[tuple[str, dict[Path, str | None], list[str]]] = [
-            ("read_xdc moved after synth_design",
-             {tcl: GOOD_TCL.replace(read, "").replace(synth, synth + read)},
-             ["read_xdc after synth_design"]),
-            ("create_clock after synth_design (the pre-#70 order)",
-             {tcl: GOOD_TCL.replace(read, "").replace(synth, synth + clock)},
-             ["create_clock after synth_design"]),
-            ("no read_xdc", {tcl: GOOD_TCL.replace(read, "")}, ["is not read before"]),
-            ("read_xdc of another file",
-             {tcl: GOOD_TCL.replace("ooc_clock.xdc", "other.xdc")}, ["is not read before"]),
-            ("read_xdc of a foreign ooc_clock.xdc of the same basename",
-             {tcl: GOOD_TCL.replace(read, "read_xdc /elsewhere/ooc_clock.xdc\n")},
-             ["is not read before"]),
-            ("create_clock added after synth_design", {tcl: GOOD_TCL + clock},
-             ["create_clock after synth_design"]),
-            ("second synth_design", {tcl: GOOD_TCL + "synth_design -top T -part P\n"},
-             ["expected one synth_design"]),
-            ("8 ns period", {xdc: GOOD_XDC.replace("10.000", "8.000")}, ["clock is 8.000 ns"]),
-            ("clock on another port", {xdc: GOOD_XDC.replace("clk_i", "clk_o")}, ["on clk_o"]),
-            ("no clock", {xdc: "# fixture\n"}, ["expected one create_clock"]),
-            ("XDC with two create_clock lines", {xdc: GOOD_XDC + clock},
-             ["expected one create_clock"]),
-            ("read_xdc echoed after synth_design",
-             {log: GOOD_LOG.replace(log_read, "").replace(log_done, log_done + log_read)},
-             ["is not read before", "read_xdc after synth_design"]),
-            ("create_clock echoed after synth_design (the pre-#70 order)",
-             {log: GOOD_LOG.replace(log_read, "").replace(log_parse, "")
-              .replace(log_done, log_done + "# " + clock)},
-             ["create_clock after synth_design"]),
-            ("no read_xdc echo", {log: GOOD_LOG.replace(log_read, "")}, ["is not read before"]),
-            ("synthesis without the parsed XDC", {log: GOOD_LOG.replace(log_parse, "")},
-             ["did not parse"]),
-            ("foreign ooc_clock.xdc of the same basename read and parsed",
-             {log: GOOD_LOG.replace("$SPEC/syn/ooc/ooc_clock.xdc", "/elsewhere/ooc_clock.xdc")
-              .replace("@XDC@", "/elsewhere/ooc_clock.xdc")},
-             ["is not read before", "did not parse"]),
-            ("ooc_clock.xdc parsed from another checkout",
-             {log: GOOD_LOG.replace("@XDC@", "/elsewhere/syn/ooc/ooc_clock.xdc")},
-             ["did not parse"]),
-            ("create_clock echoed after a constrained synthesis", {log: GOOD_LOG + "# " + clock},
-             ["create_clock after synth_design"]),
-            ("synth_design that never started",
-             {log: GOOD_LOG.replace("Command: synth_design", "Command: report_timing")},
-             ["never started"]),
-            ("synth_design that never completed", {log: GOOD_LOG.replace(log_done, "")},
-             ["did not complete"]),
-            ("critical-warning count above zero",
-             {log: GOOD_LOG.replace("0 Critical Warnings", "1 Critical Warnings")},
-             ["session ends with 1 critical warnings"]),
-            ("no session message count", {log: GOOD_LOG.replace(log_count, "")},
-             ["no session message count"]),
-            ("critical warning after the session count",
-             {log: GOOD_LOG + "CRITICAL WARNING: [Timing 38-1] planted\n"},
-             ["CRITICAL WARNING: [Timing 38-1]"]),
-            ("wrong period",
-             {report: GOOD_RPT.replace("{0.000 5.000}      10.000          100.000",
-                                       "{0.000 4.000}      8.000           125.000")
-              .replace("10.000      {0.000 5.000}", "8.000       {0.000 4.000}")},
-             ["Clock Summary is"]),
-            ("second clock", {report: GOOD_RPT.replace(summary, summary + summary)},
-             ["Clock Summary is"]),
-            ("clock bound to another port",
-             {report: GOOD_RPT.replace(sources, sources.replace("clk_i", "rst_i"))},
-             ["not bound to clk_i"]),
-            ("unclocked registers", {report: GOOD_RPT.replace("no_clock (0)", "no_clock (12)")},
-             ["checking no_clock reports"]),
-            ("no timing report", {report: None}, ["fixture_timing.rpt: missing"]),
-            ("renamed clock port (R614-1)", renamed,
-             ["CRITICAL WARNING: [Vivado 12-4739]", "session ends with 2 critical warnings",
-              "Clock Summary is", "not bound to clk_i", "checking no_clock reports"]),
-        ]
+        arms = selftest_arms(xdc, tcl, log, report)
 
         def findings(planted: dict[Path, str | None]) -> list[str]:
+            """Restore the fixture, plant one defect, and collect its findings."""
             for path, text in {**good, **planted}.items():
                 if text is None:
                     path.unlink(missing_ok=True)

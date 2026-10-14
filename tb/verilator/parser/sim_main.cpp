@@ -272,7 +272,8 @@ void RxParserHarness::feed_err(const std::vector<uint8_t> &bytes,
                                size_t from, size_t to) {
   bank.clear(); ev_seen = false; ev_count = 0; ev_w0.clear();
   const int writes0 = bank_writes;
-  int writes_before = bank_writes, writes_through = bank_writes;
+  int writes_before = bank_writes;
+  int writes_through = bank_writes;
   for (size_t i = 0; i < bytes.size(); i++) {
     if (i == from) writes_before = bank_writes;
     dut->rx_valid_i = 1;
@@ -1340,7 +1341,9 @@ void RxParserHarness::check_rx_err_on_any_byte_drops_the_frame() {
   for (const ErrArm &a : arms) {
     char n[80];
     const size_t len = a.f.b.size();
-    size_t dropped = 0, silent = 0, unwritten = 0;
+    size_t dropped = 0;
+    size_t silent = 0;
+    size_t unwritten = 0;
     std::vector<size_t> missed;
     for (size_t p = 0; p < len; p++) {
       uint16_t d0 = dut->drop_cnt_o;
@@ -1418,7 +1421,9 @@ void RxParserHarness::check_rx_err_writes_before_on_and_after_the_flag() {
   for (const ErrArm &a : arms) {
     char n[80];
     const size_t len = a.f.b.size();
-    size_t dropped = 0, silent = 0, unwritten = 0;
+    size_t dropped = 0;
+    size_t silent = 0;
+    size_t unwritten = 0;
     for (size_t p : {size_t{0}, size_t{29}, len - 1}) {
       uint16_t d0 = dut->drop_cnt_o;
       feed_err(a.f.b, p, p);
@@ -1488,7 +1493,8 @@ void RxParserHarness::check_a_refused_frame_leaves_no_stale_word() {
     snprintf(n, sizeof n, "%s after a refused %s: every word is this frame's",
              v.tag, r.tag);
     expect_eq(n, own, v.words.size());
-    size_t kept = 0, beyond = 0;
+    size_t kept = 0;
+    size_t beyond = 0;
     for (const auto &[addr, word] : r.words) {
       const auto at = refused_left.find(addr);
       if (at == refused_left.end() || at->second != word) continue;
