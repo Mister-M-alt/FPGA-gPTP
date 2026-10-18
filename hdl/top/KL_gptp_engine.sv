@@ -169,6 +169,10 @@ module KL_gptp_engine
   initial $readmemh(UCODE_HEX_P, cid_img_r);
   wire [63:0] rom_clock_id_w = {cid_img_r[ROM_CID_HI_C][31:0],
                                 cid_img_r[ROM_CID_LO_C][31:0]};
+  //! Bit 32 of the high word (ROM_GMCAP_BIT_C): thisClock's priority1 is
+  //! below 255. gmPriority is never worse than thisClock's own vector, so
+  //! then a grandmaster is always present (802.1AS-2020 10.3.13.2.4 g).
+  wire        rom_gm_capable_w = cid_img_r[ROM_CID_HI_C][32];
 
   KL_gptp_rx_parser u_parser (
       .clk_i        (clk_i),
@@ -702,9 +706,10 @@ module KL_gptp_engine
   //! GM/parent. If the local vector wins, BECOME overwrites it with `[self]`
   //! before the handler's sole COMMIT; a worse Announce never executes `take`
   //! and therefore cannot disturb the selected record. Every reset loads the
-  //! self publication, thisClock and {thisClock}, as the best record below
-  //! returns to the local vector (#82); outward wires stay gated to canonical
-  //! zero while the raw GM is zero.
+  //! self publication, thisClock and {thisClock}, and invalidates the best
+  //! record below, so only a newly received Announce competes with the local
+  //! vector (#82); outward wires stay gated to canonical zero while the raw GM
+  //! is zero.
   //! The raw public ABI is bounded to eight complete entries. Count zero is
   //! the honest publication for a selected fixed Announce without PathTrace;
   //! its GM remains separately published and every tail word is zero. Counts
@@ -1020,7 +1025,10 @@ module KL_gptp_engine
 
   assign pub_gm_id_o     = pub_gm_r;
   assign pub_parent_id_o = pub_parent_r;
-  assign pub_flags_o     = pub_flags_r;
+  //! gmPresent (#82): the µcode's bit 0 marks an elected peer; a
+  //! grandmaster-capable thisClock is present whenever none is
+  assign pub_flags_o     = {pub_flags_r[31:1],
+                            pub_flags_r[0] | rom_gm_capable_w};
   assign pub_pdelay_ns_o = pub_pdelay_r;
   assign pub_offset_o    = pub_offset_r;
   assign pub_annq_o      = pub_annq_r;

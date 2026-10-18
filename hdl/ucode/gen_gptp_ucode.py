@@ -19,6 +19,13 @@ rules keep a departed or retained peer out of that publication:
     BECGATE then drops an elected peer through SELF, with no mastership PHC
     transition. BECOME also ends in SELF, so both publish one way.
 
+gmPresent is TRUE when gmPriority's priority1 is below 255 (10.3.13.2.4 g).
+gmPriority is never worse than our own vector, so a grandmaster-capable
+plane always has a grandmaster present: at reset, after a drop and as
+master alike. The image marks that capability beside thisClock, and the
+engine publishes it in flags bit 0. The µcode's own bit 0 now means only "a
+peer is elected", so BECOME no longer sets it.
+
 FPGA-gPTP #39, found while the parent integrated complete egress-stamp tags:
 the Sync counter remained wider than its 16-bit wire field. At Sync 65,536,
 its bit 16 occupied the claim's new messageType nibble, so the type-0 return
@@ -414,6 +421,10 @@ OUR_PORTNUM_C = 1               # thisPort. ONE definition, read by both
 # program may occupy these words; the packer keeps them out of its gaps.
 ROM_CID_HI_C, ROM_CID_LO_C = 1022, 1023
 PUB_CID_C = 15
+# Bit 32 of the high word is set when thisClock is grandmaster-capable, its
+# priority1 below 255 (802.1AS-2020 10.3.13.2.4 g). The engine ORs it into
+# the published gmPresent, flags bit 0.
+ROM_GMCAP_BIT_C = 32
 
 # ---- our clock vector (Milan defaults) -------------------------------------
 P1_C, P2_C = 248, 248
@@ -487,7 +498,8 @@ def set_servo_gains(clk_hz: int) -> None:
     assert 0 < RUNTIME["gain_m"] < (1 << 24), RUNTIME["gain_m"]
     assert 2 * RUNTIME["ilim"] + 1 < (1 << 24), RUNTIME["ilim"]
 
-# publish flags bits
+# publish flags bits. The µcode's bit 0 means a peer is elected; the engine
+# also publishes it while thisClock is grandmaster-capable (#82)
 FL_PRESENT_C, FL_AMGM_C, FL_ASCAP_C, FL_SYNCOK_C = 1, 2, 4, 8
 
 # 802.1AS-2011 Table 11-7 controlField values for every message this plane
@@ -1693,9 +1705,10 @@ def prog_becgate(base: int) -> Prog:
     p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)
     p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="none")
-    # present and not master: a peer is elected. Drop it: no grandmaster
-    # is selected and sync is not ok, as after a reset (asCapable and the
-    # master bit are already clear, so the whole word is zero)
+    # present and not master: a peer is elected. Drop it: no peer is
+    # elected and sync is not ok, as after a reset (asCapable and the
+    # master bit are already clear, so the whole word is zero; the engine
+    # still publishes gmPresent for thisClock)
     p.emit("WRST", ra=0, imm=RG_PUB | 2, fmt=FMT_Q)
     p.emit("BR", label=LB["SELF"])
     p.label("none")
@@ -1714,7 +1727,8 @@ def prog_become(base: int) -> Prog:
     p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)
     p.emit("WRST", ra=RT, imm=RG_PHC | 3, fmt=FMT_Q)
-    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)
+    # no peer is elected: gmPresent is the engine's, from the image
+    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now
     p.emit("MOVE", rd=RT, ra=0, imm=2)
@@ -2182,7 +2196,9 @@ def build(mac: int, seq_seed: int = 0,
             rom[base + i] = word
         used += len(words)
     cid = clock_identity(mac)
-    for addr, word in ((ROM_CID_HI_C, cid >> 32),
+    gm_capable = RUNTIME["p1"] < 255
+    for addr, word in ((ROM_CID_HI_C,
+                        (cid >> 32) | (gm_capable << ROM_GMCAP_BIT_C)),
                        (ROM_CID_LO_C, cid & 0xFFFFFFFF)):
         assert rom[addr] is None, f"overlap at {addr}"
         rom[addr] = word
