@@ -115,10 +115,10 @@ module KL_gptp_engine
     output logic [31:0] pub_pdelay_ns_o,
     output logic [31:0] pub_offset_o,  //! last sync offset, ns (signed)
     output logic [63:0] pub_annq_o,    //! last received announce vector, raw
-    //! Raw selected PathTrace publication. A present sequence reports its
-    //! complete received length including the separately published GM at slot
-    //! zero; an absent TLV reports count zero. pub_path_o carries slots 1..7,
-    //! and every inactive tail slot is zero.
+    //! Raw selected PathTrace publication: its complete received length,
+    //! including the separately published GM at slot zero, or zero for an
+    //! absent TLV. pub_path_o carries slots 1..7; inactive slots are zero.
+    //! Before any election since reset: thisClock and {thisClock} (#82).
     output logic  [3:0] pub_path_count_o,
     output logic [7*64-1:0] pub_path_o,
     output logic        pub_commit_o,
@@ -621,6 +621,7 @@ module KL_gptp_engine
   logic        ucpu_tx_ready_w;
   logic [UPC_W_C-1:0] ucpu_dbg_upc_w;
   logic        ucpu_dbg_ovf_w;
+  logic        ucpu_commit_w;
 
   KL_gptp_ucpu #(
       .UCODE_HEX_P (UCODE_HEX_P)
@@ -657,7 +658,7 @@ module KL_gptp_engine
       .resp_len_o         (resp_len_w),
       .resp_status_o      (resp_status_w),
       .tx_ready_i         (ucpu_tx_ready_w),
-      .eff_commit_o       (pub_commit_o),
+      .eff_commit_o       (ucpu_commit_w),
       .eff_nvm_mark_o     (eff_nvm_mark_o),
       .eff_nvm_stb_o      (eff_nvm_stb_o),
       .eff_notify_class_o (eff_notify_class_o),
@@ -679,8 +680,8 @@ module KL_gptp_engine
   //! GM/parent. If the local vector wins, BECOME overwrites it with `[self]`
   //! before the handler's sole COMMIT; a worse Announce never executes `take`
   //! and therefore cannot disturb the selected record. Preserve this raw path
-  //! across warm reset with the scratch best vector; outward wires are gated
-  //! to canonical zero while the reset-cleared GM is zero.
+  //! across warm reset with the scratch best vector; while the reset-cleared
+  //! GM is zero, the outward wires publish thisClock and {thisClock} instead.
   // The initial writer is configuration state, not a second runtime driver.
   /* verilator lint_off MULTIDRIVEN */
   initial begin : pub_path_poweron
@@ -767,6 +768,12 @@ module KL_gptp_engine
   //! an asCapable port regain mastership and its Sync cadence.
   logic       boot_done_r;
   logic [7:0] boot_cnt_r;
+  //! Boot publication (#82). The shadow consumer copies the bank only on
+  //! pub_commit_o, so the reset-time self publication needs a commit too.
+  //! The µcode installs thisClock in its first timer beat on a cold start;
+  //! a warm reset keeps it. One engine commit follows, unless a µcode
+  //! COMMIT has already exposed the bank.
+  logic       boot_pub_pend_r, boot_pub_commit_r;
 `ifndef SYNTHESIS
   //! Address 7 may change raw path state before publication, but the BTCA
   //! contest must always resolve through address 6 before any COMMIT. This
@@ -788,6 +795,8 @@ module KL_gptp_engine
       pub_annq_r      <= '0;
       boot_done_r     <= 1'b0;
       boot_cnt_r      <= '0;
+      boot_pub_pend_r   <= 1'b1;
+      boot_pub_commit_r <= 1'b0;
       phc_addend_we_o <= 1'b0;
       phc_addend_o    <= '0;
       phc_step_we_o   <= 1'b0;
@@ -808,6 +817,15 @@ module KL_gptp_engine
       phc_addend_we_o <= 1'b0;
       phc_step_we_o   <= 1'b0;
       tmr_arm_we_w    <= 1'b0;
+      boot_pub_commit_r <= 1'b0;
+      //! #82: commit the reset-time bank once thisClock is known, while no
+      //! handler sits between its staging writes and its own COMMIT.
+      if (boot_pub_pend_r && local_clock_valid_r && !dbg_busy_o) begin
+        boot_pub_pend_r   <= 1'b0;
+        boot_pub_commit_r <= 1'b1;
+      end else if (ucpu_commit_w) begin
+        boot_pub_pend_r <= 1'b0;
+      end
 `ifndef SYNTHESIS
       if (local_clock_valid_r &&
           (local_clock_id_r != scratch_r[6'd25]))
@@ -960,15 +978,19 @@ module KL_gptp_engine
   end
   /* verilator lint_on MULTIDRIVEN */
 
-  assign pub_gm_id_o     = pub_gm_r;
+  //! #82: a zero GM is the reset value, before any election since reset.
+  wire        pub_gm_self_w = (pub_gm_r == 64'd0);
+  wire [63:0] local_gm_id_w = local_clock_valid_r ? local_clock_id_r : 64'd0;
+  assign pub_gm_id_o     = pub_gm_self_w ? local_gm_id_w : pub_gm_r;
   assign pub_parent_id_o = pub_parent_r;
   assign pub_flags_o     = pub_flags_r;
   assign pub_pdelay_ns_o = pub_pdelay_r;
   assign pub_offset_o    = pub_offset_r;
   assign pub_annq_o      = pub_annq_r;
-  assign pub_path_count_o = (pub_gm_r == 64'd0) ? 4'd0
-                                                 : pub_path_count_r;
-  assign pub_path_o       = (pub_gm_r == 64'd0) ? '0 : pub_path_r;
+  assign pub_path_count_o = pub_gm_self_w ? {3'd0, local_clock_valid_r}
+                                          : pub_path_count_r;
+  assign pub_path_o       = pub_gm_self_w ? '0 : pub_path_r;
+  assign pub_commit_o     = ucpu_commit_w || boot_pub_commit_r;
 
   // ------------------------------------------------------------ TX slot
   KL_gptp_tx_slot u_txslot (
