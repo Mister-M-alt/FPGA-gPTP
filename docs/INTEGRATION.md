@@ -477,7 +477,7 @@ The path holds one entry: thisClock.
 
 Parent identity keeps its reset value.
 
-Flags carry gmPresent alone.
+Flags carry gmPresent alone, or nothing with priority1 255.
 
 Reset loads exactly this state into the publication bank.
 
