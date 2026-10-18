@@ -475,7 +475,9 @@ The grandmaster output names thisClock.
 
 The path holds one entry: thisClock.
 
-Parent identity and flags keep their reset values.
+Parent identity keeps its reset value.
+
+Flags carry gmPresent alone.
 
 Reset loads exactly this state into the publication bank.
 
@@ -488,6 +490,22 @@ No microcode runs before that commit.
 thisClock is data in the generated microcode image.
 
 The engine reads it there at configuration.
+
+### Grandmaster presence
+
+Flags bit 0 publishes gmPresent.
+
+802.1AS-2020 10.3.13.2.4 g) defines it.
+
+A priority1 below 255 makes thisClock grandmaster-capable.
+
+The image marks that capability beside thisClock.
+
+A capable thisClock sets gmPresent in every publication.
+
+That includes reset, both departures and mastership.
+
+With priority1 255, only an elected peer sets it.
 
 ### Selection after reset
 
@@ -513,7 +531,9 @@ Losing asCapable drops the peer's vector at once.
 
 That drop commits within about one millisecond.
 
-Its commit also clears the presence and sync flags.
+Its commit clears the sync and mastership flags.
+
+gmPresent stays set for a capable thisClock.
 
 It leaves PHC control and the slew level untouched.
 
@@ -521,7 +541,7 @@ Announces on an incapable port elect nothing.
 
 Restored capability lets the best live peer win.
 
-Without Announces, the receipt watch then grants mastership.
+Without Announces, mastership follows within one receipt interval.
 
 ## Microcode configuration
 

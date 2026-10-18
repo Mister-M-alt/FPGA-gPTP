@@ -146,10 +146,19 @@ That slot runs the Announce receipt leg.
 
 Preserve this coupling when changing either region or flag.
 
+Microcode bit 0 means only that a peer is elected.
+
+The output also sets bit 0 for a grandmaster-capable thisClock.
+
+ROM word 1022 bit 32 marks that capability.
+
+Microcode reads of word 2 return the unmodified bits.
+
 ## MicroCPU shape
 
 - ROM contains 1,024 forty-eight-bit words.
 - Its last two words hold thisClock as data.
+- Bit 32 of word 1022 marks grandmaster capability.
 - Register storage contains sixteen sixty-four-bit words.
 - Integer logic supports common sixty-four-bit operations.
 - Shifts run serially.
