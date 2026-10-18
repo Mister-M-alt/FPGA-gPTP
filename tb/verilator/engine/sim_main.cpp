@@ -18,6 +18,10 @@
 //  1b     a Follow_Up for the boot request (sequence 0) ahead of any
 //         Resp, from the zero identity a never-armed pairing holds, is
 //         ignored: "armed with sequence 0" is not "nothing armed" (#8)
+//  1d     #82: before any peer the plane is its own grandmaster. The first
+//         commit after a cold reset lands with the first beat, which
+//         installs thisClock, and names thisClock with the one-entry path
+//         {thisClock} (802.1AS-2020 10.3.13.2.4 b, i)
 //  2b     a Pdelay_Resp (and its Follow_Up) sourced from OUR OWN
 //         clockIdentity, answering the outstanding request, is ignored:
 //         it neither moves the delay nor climbs the ladder (IEEE
@@ -136,6 +140,10 @@
 //         Announce keeps the common 10.5.2.2.6 ptpTimescale (#64)
 // 34      #68: every addend pulse of the whole run lies inside the +-200
 //         ppm envelope the parent's egress reconstruction derives
+// 35      #82: a warm reset commits thisClock and {thisClock} at once; a
+//         better peer then replaces both with its own grandmaster and
+//         three-entry path, and when it falls silent the mastership
+//         commit names thisClock and {thisClock} again
 //
 // All frames and expectations built independently from 802.1AS-2011 +
 // Milan v1.2 4.2.6. The pdelay model mirrors the SPEC formula in exact
@@ -211,6 +219,7 @@ class GptpEngineHarness {
   int run_suite() {
     bring_the_engine_out_of_reset();
     check_the_boot_pdelay_request();
+    publish_thisclock_before_any_peer();
     ignore_a_self_sourced_pdelay_request();
     answer_peer_requests_across_our_pending_stamp();
     separate_claims_differing_only_in_the_sequence_high_byte();
@@ -288,6 +297,7 @@ class GptpEngineHarness {
     hold_the_media_dependent_transmit_flags();
     exercise_the_slew_level_contract();
     keep_every_addend_inside_the_consumer_envelope();
+    return_to_thisclock_around_a_winning_peer();
 
     printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
     return fails ? 1 : 0;
@@ -385,6 +395,8 @@ class GptpEngineHarness {
     uint64_t parent;
     uint8_t count;
     uint64_t tail[PATH_TAIL_SLOTS];
+    uint64_t cyc;    //!< the harness cycle that sampled this commit
+    uint32_t flags;
   };
   std::vector<PubSnap> commit_snaps;
 
@@ -521,6 +533,8 @@ class GptpEngineHarness {
       s.gm = dut->pub_gm_id_o;
       s.parent = dut->pub_parent_id_o;
       s.count = dut->pub_path_count_o;
+      s.cyc = cyc;
+      s.flags = dut->pub_flags_o;
       for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++)
         s.tail[k] = static_cast<uint64_t>(dut->pub_path_o[2 * k])
                   | (static_cast<uint64_t>(dut->pub_path_o[2 * k + 1]) << 32);
@@ -980,6 +994,22 @@ class GptpEngineHarness {
          | (static_cast<uint64_t>(dut->pub_path_o[2 * slot + 1]) << 32);
   }
 
+  //! #82: the committed path is exactly `head` followed by `tail` (the
+  //! separately published grandmaster plus the identities behind it), with
+  //! every inactive tail slot zero. {thisClock} is count one, no tail.
+  static bool committed_path_is(const PubSnap &s,
+                                const std::vector<uint64_t> &tail) {
+    bool same = s.count == tail.size() + 1;
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++)
+      same &= s.tail[k] == (k < tail.size() ? tail[k] : 0);
+    return same;
+  }
+
+  //! the first commit sampled at or after index `mark`, if one landed
+  const PubSnap *first_commit_since(size_t mark) const {
+    return commit_snaps.size() > mark ? &commit_snaps[mark] : nullptr;
+  }
+
   void check_common(const char *tag, const std::vector<uint8_t> &f,
                     uint8_t mtype, uint16_t flags, int msglen,
                     uint8_t logint) {
@@ -1017,6 +1047,8 @@ class GptpEngineHarness {
 
 
   // ---- what one phase records for a later phase to read --------------------
+  //! the first commit index after the cold reset, graded by phase 1d
+  size_t cold_boot_mark = 0;
   //! phase 1's boot Pdelay_Req: the transmit slot whose egress timestamp is
   //! still outstanding through phase 1c, and the stamp finally returned for it
   size_t our_req_idx = 0;
@@ -1079,6 +1111,7 @@ class GptpEngineHarness {
     expect("reset holds the result face closed", dut->txts_ready_o, 0);
     expect("slew: cold reset clears the level", dut->phc_slew_active_o, 0);
     dut->rst_n = 1;
+    cold_boot_mark = commit_snaps.size();
 
     // Before the ROM init leg has written S_CID, no complete all-hop loop
     // comparison is possible. A first-event over-cap Announce with our identity
@@ -1111,6 +1144,22 @@ class GptpEngineHarness {
     }
     expect("asCapable low at boot", dut->pub_flags_o & FL_ASCAP, 0);
     T1 = 1000000ull;
+  }
+
+  // ---- 1d: #82 -- before any peer the plane is its own grandmaster -----
+  // 802.1AS-2020 10.3.13.2.4 b): with no port vector, gmPriority is the
+  // systemPriorityVector, so thisClock is the grandmaster, and i) makes
+  // pathTrace {thisClock}. A consumer copies the bank only on a commit, so
+  // the first commit after the cold reset must carry both. It must land by
+  // the end of the first one-second beat, whose init leg installs thisClock
+  void publish_thisclock_before_any_peer() {
+    const PubSnap *s = first_commit_since(cold_boot_mark);
+    expect("#82 cold boot: a commit lands with the first beat",
+           s != nullptr, 1);
+    expect("#82 cold boot: first commit names thisClock",
+           s ? s->gm : 0, OUR_CID);
+    expect("#82 cold boot: first commit path is {thisClock}",
+           s && committed_path_is(*s, {}), 1);
   }
 
   // ---- 1a: a self-sourced Pdelay_Req draws nothing -----------------------
@@ -4676,6 +4725,55 @@ class GptpEngineHarness {
            adj_seen.size() >= 100 ? 1 : 0, 1);
     expect("consumer envelope: some addends sit exactly on it",
            adj_on_the_rail >= 10 ? 1 : 0, 1);
+  }
+
+  // ---- 35: #82 -- thisClock around a peer that wins and then leaves -----
+  // A warm reset clears every port vector (802.1AS-2020 10.3.13.2.4 a), so
+  // the plane is its own grandmaster again and commits that at once, even
+  // though scratch still holds the last best record. A peer better than
+  // any retained record then wins and publishes its own three-entry path
+  // (10.3.13.2.4 f 5). Once its Announces stop, the receipt timeout ages
+  // its vector out and the mastership commit names thisClock and
+  // {thisClock} again (10.3.13.2.4 b, i)
+  void return_to_thisclock_around_a_winning_peer() {
+    const uint64_t GM82 = 0x0082A0FFFE000001ull;
+    const uint64_t HOP82 = 0x0082A0FFFE000002ull;
+    const uint64_t SRC82 = 0x0082A0FFFE000003ull;
+    pd_mode = PD_NORMAL;
+    pd_seen = txf.size();
+    const size_t warm0 = commit_snaps.size();
+    const uint64_t release = cyc + 8;       // warm_reset holds 8 cycles
+    warm_reset();
+    const PubSnap *w = first_commit_since(warm0);
+    expect("#82 warm reset: a commit follows the release at once",
+           w != nullptr && w->cyc <= release + 2, 1);
+    expect("#82 warm reset: first commit names thisClock",
+           w ? w->gm : 0, OUR_CID);
+    expect("#82 warm reset: first commit path is {thisClock}",
+           w && committed_path_is(*w, {}), 1);
+
+    // Setup waits are not checks: a missed one fails the checks after it.
+    wait_flags(FL_ASCAP, FL_ASCAP, 9000000);  // Announces need asCapable
+    const size_t win0 = commit_snaps.size();
+    send_announce(0x8201, 0, GM82, 2, SRC82, {GM82, HOP82, SRC82},
+                  phc() + 100);
+    const PubSnap *won = commit_snaps.size() > win0 ? &commit_snaps.back()
+                                                    : nullptr;
+    expect("#82 peer wins: its commit names the peer GM",
+           won ? won->gm : 0, GM82);
+    expect("#82 peer wins: its commit carries the peer path",
+           won && committed_path_is(*won, {HOP82, SRC82}), 1);
+
+    const size_t quiet0 = commit_snaps.size();
+    wait_flags(FL_AMGM, FL_AMGM, 9000000);    // 3 s receipt timeout
+    run(200);  // the PathTrace write and COMMIT follow the flags write
+    const PubSnap *gm = nullptr;
+    for (size_t i = quiet0; i < commit_snaps.size() && !gm; i++)
+      if (commit_snaps[i].flags & FL_AMGM) gm = &commit_snaps[i];
+    expect("#82 peer leaves: the mastership commit names thisClock",
+           gm ? gm->gm : 0, OUR_CID);
+    expect("#82 peer leaves: the mastership commit path is {thisClock}",
+           gm && committed_path_is(*gm, {}), 1);
   }
 
   //! A #75 policy probe uses wire frames and watches every output edge.

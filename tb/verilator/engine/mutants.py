@@ -288,6 +288,49 @@ MUTATIONS = [
      "# +-ILIM\n",
      "",
      "the integrator stays within +-200 ppm"),
+    # ---- #82: thisClock and {thisClock} until a peer is elected ----------
+    # Each control lists, after "#82 ", every named check it must fail.
+    ("boot publication restored to zero", "top/KL_gptp_engine.sv",
+     "  assign pub_gm_id_o     = pub_gm_self_w ? local_gm_id_w : pub_gm_r;\n"
+     "  assign pub_parent_id_o = pub_parent_r;\n"
+     "  assign pub_flags_o     = pub_flags_r;\n"
+     "  assign pub_pdelay_ns_o = pub_pdelay_r;\n"
+     "  assign pub_offset_o    = pub_offset_r;\n"
+     "  assign pub_annq_o      = pub_annq_r;\n"
+     "  assign pub_path_count_o = pub_gm_self_w ? {3'd0, local_clock_valid_r}\n",
+     "  assign pub_gm_id_o     = pub_gm_r;\n"
+     "  assign pub_parent_id_o = pub_parent_r;\n"
+     "  assign pub_flags_o     = pub_flags_r;\n"
+     "  assign pub_pdelay_ns_o = pub_pdelay_r;\n"
+     "  assign pub_offset_o    = pub_offset_r;\n"
+     "  assign pub_annq_o      = pub_annq_r;\n"
+     "  assign pub_path_count_o = pub_gm_self_w ? 4'd0\n",
+     "#82 cold boot: first commit names thisClock"
+     " | #82 cold boot: first commit path is {thisClock}"
+     " | #82 warm reset: first commit names thisClock"
+     " | #82 warm reset: first commit path is {thisClock}"),
+    ("no engine commit after reset", "top/KL_gptp_engine.sv",
+     "  assign pub_commit_o     = ucpu_commit_w || boot_pub_commit_r;",
+     "  assign pub_commit_o     = ucpu_commit_w;",
+     "#82 cold boot: a commit lands with the first beat"
+     " | #82 warm reset: a commit follows the release at once"),
+    ("thisClock hides an elected peer", "top/KL_gptp_engine.sv",
+     "  wire        pub_gm_self_w = (pub_gm_r == 64'd0);",
+     "  wire        pub_gm_self_w = local_clock_valid_r;",
+     "#82 peer wins: its commit names the peer GM"),
+    ("an elected peer keeps the self path", "top/KL_gptp_engine.sv",
+     "  assign pub_path_count_o = pub_gm_self_w ? {3'd0, local_clock_valid_r}",
+     "  assign pub_path_count_o = local_clock_valid_r ? 4'd1",
+     "#82 peer wins: its commit carries the peer path"),
+    ("becoming grandmaster keeps the departed GM", GENERATOR,
+     "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 0, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)\n",
+     "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)\n",
+     "#82 peer leaves: the mastership commit names thisClock"),
+    ("becoming grandmaster keeps the departed path", GENERATOR,
+     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 6, fmt=FMT_Q)",
+     "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 6, fmt=FMT_Q)",
+     "#82 peer leaves: the mastership commit path is {thisClock}"),
 ]
 
 
@@ -413,6 +456,19 @@ def main() -> int:
                     answer = "missed its named check"
                 else:
                     print(named[0])
+            # #82 controls must fail every check they name, for the same
+            # reason: each of those checks needs its own failing defect.
+            if breaks.startswith("#82 ") and answer == "caught":
+                failed = [line for line in output.splitlines()
+                          if line.startswith("FAIL ")]
+                missed = [want for want in breaks.split(" | ")
+                          if not any(want in line for line in failed)]
+                if missed:
+                    answer = ("missed its named check(s): "
+                              + "; ".join(missed))
+                else:
+                    for want in breaks.split(" | "):
+                        print(next(line for line in failed if want in line))
             if answer == "caught":
                 passes += 1
                 print(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")
