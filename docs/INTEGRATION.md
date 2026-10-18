@@ -459,6 +459,44 @@ Retained paths contain at most eight identities.
 
 Inactive path entries remain zero.
 
+### Before any peer
+
+[Issue #82](https://github.com/Mister-M-alt/FPGA-gPTP/issues/82) defines this boot publication.
+
+802.1AS-2020 clause 10.3.13.2.4 requires it.
+
+Every reset leaves no elected peer.
+
+This plane is then its own grandmaster.
+
+The grandmaster output names thisClock.
+
+The path holds one entry: thisClock.
+
+Parent identity and flags keep their reset values.
+
+The engine commits this state once by itself.
+
+That commit waits until thisClock is known.
+
+It also waits until no handler is running.
+
+A warm reset knows thisClock at once.
+
+A cold start learns it in the first timer beat.
+
+That beat runs about 1.2 s after reset.
+
+Until then, grandmaster and path count stay zero.
+
+An earlier microcode commit replaces the engine's own commit.
+
+A better peer then wins through normal selection.
+
+Its silence for 3 s returns thisClock.
+
+That return still requires asCapable.
+
 ## Microcode configuration
 
 Generate one image for each hardware configuration.

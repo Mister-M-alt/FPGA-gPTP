@@ -106,6 +106,8 @@ Prefer independent protocol formulas and frame builders.
 - Keeps every written addend inside 200 ppm.
 - Checks slew decisions, completion, and held intervals.
 - Checks reset, lost capability, missing Sync, steps, and mastership.
+- Commits thisClock and {thisClock} after cold and warm resets.
+- Hands both to a winning peer and back after silence.
 - Rejects tied-low and early-clear slew indications.
 - Keeps in-band tracking inactive after idle timeouts and GM changes.
 - Keeps in-band returns from mastership inactive.

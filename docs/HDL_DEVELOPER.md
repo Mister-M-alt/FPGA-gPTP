@@ -173,6 +173,18 @@ Consumers sample only during `pub_commit_o`.
 
 Inactive path entries must remain zero.
 
+A zero raw grandmaster means no election since reset.
+
+The outputs then name thisClock and the path {thisClock}.
+
+The S_CID mirror supplies thisClock; the ROM stays unchanged.
+
+The engine also raises one commit after each reset.
+
+It waits for thisClock and an idle microCPU.
+
+A microcode commit before it cancels it.
+
 ## Out-of-context measurement
 
 `make ooc` synthesizes both tops out of context.
