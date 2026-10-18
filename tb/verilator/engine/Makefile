@@ -27,7 +27,8 @@ all: run mutants
 # runs need 2,097,152 requests (24.3 days) or 65,536 Syncs (2 h 16 min at
 # 8 Hz) to reach those states. $$readmemh resolves its image by RELATIVE name
 # at simulation start, so seeded passes run from ignored directories and an
-# interrupt can leave no tracked artifact behind.
+# interrupt can leave no tracked artifact behind. A fourth pass (#82) runs
+# only the self-publication phases, from an image whose priority1 is 255.
 run: gptp_ucode.hex
 	$(VERILATOR) $(VFLAGS) $(SRCS) $(CPP) -o Vengine_sim
 	./obj_dir/Vengine_sim
@@ -39,6 +40,10 @@ run: gptp_ucode.hex
 	@python3 $(GEN) $(GENARGS) --sync-seq-seed 0x10000 -o syncseedrun/gptp_ucode.hex >/dev/null
 	@echo "-- again, with the Sync counter seeded above 16 bits --"
 	@cd syncseedrun && ../obj_dir/Vengine_sim
+	@mkdir -p p1run
+	@python3 $(GEN) $(GENARGS) --p1 255 -o p1run/gptp_ucode.hex >/dev/null
+	@echo "-- the self publication again, not grandmaster-capable (priority1 255) --"
+	@cd p1run && ../obj_dir/Vengine_sim +not-gm-capable
 
 # Rule 8: prove the checks above are load-bearing. Defects are injected into
 # the real engine RTL and the real micro-code generator, one at a time, and
@@ -52,4 +57,4 @@ gptp_ucode.hex: $(GEN)
 	python3 $< $(GENARGS) -o $@
 
 clean:
-	rm -rf obj_dir gptp_ucode.hex seedrun syncseedrun
+	rm -rf obj_dir gptp_ucode.hex seedrun syncseedrun p1run
