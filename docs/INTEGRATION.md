@@ -56,6 +56,8 @@ Review the [remaining acceptance gaps](MANAGER.md#open-risks) before product ado
 - Scratch memory preserves warm-reset protocol state.
 - Reset invalidates outstanding timestamp claims.
 - Reset invalidates retained Pdelay pairing state.
+- Reset invalidates the retained best-vector record.
+- Reset loads and commits the self publication.
 - Bootstrap microcode rearms required cadences.
 
 Keep every input synchronous to `clk_i`.
@@ -461,11 +463,11 @@ Inactive path entries remain zero.
 
 ### Before any peer
 
-[Issue #82](https://github.com/Mister-M-alt/FPGA-gPTP/issues/82) defines this boot publication.
+[Issue #82](https://github.com/Mister-M-alt/FPGA-gPTP/issues/82) defines this self publication.
 
 802.1AS-2020 clause 10.3.13.2.4 requires it.
 
-Every reset leaves no elected peer.
+Every reset leaves no port vector.
 
 This plane is then its own grandmaster.
 
@@ -475,27 +477,51 @@ The path holds one entry: thisClock.
 
 Parent identity and flags keep their reset values.
 
-The engine commits this state once by itself.
+Reset loads exactly this state into the publication bank.
 
-That commit waits until thisClock is known.
+The engine commits it on the first edge after release.
 
-It also waits until no handler is running.
+Cold starts and warm resets behave alike.
 
-A warm reset knows thisClock at once.
+No microcode runs before that commit.
 
-A cold start learns it in the first timer beat.
+thisClock is data in the generated microcode image.
 
-That beat runs about 1.2 s after reset.
+The engine reads it there at configuration.
 
-Until then, grandmaster and path count stay zero.
+### Selection after reset
 
-An earlier microcode commit replaces the engine's own commit.
+Scratch keeps the last best-vector record across warm resets.
 
-A better peer then wins through normal selection.
+That retained record cannot compete after a reset.
 
-Its silence for 3 s returns thisClock.
+Only a newly received Announce can be elected.
 
-That return still requires asCapable.
+A peer worse than this plane leaves thisClock selected.
+
+A better peer wins through normal selection.
+
+### Departure of the elected peer
+
+Two departures each return thisClock and {thisClock}.
+
+Announce silence for 3 s ages the peer out.
+
+An asCapable port then becomes grandmaster.
+
+Losing asCapable drops the peer's vector at once.
+
+That drop commits within about one millisecond.
+
+Its commit also clears the presence and sync flags.
+
+It leaves PHC control and the slew level untouched.
+
+Announces on an incapable port elect nothing.
+
+Restored capability lets the best live peer win.
+
+Without Announces, the receipt watch then grants mastership.
 
 ## Microcode configuration
 
@@ -510,6 +536,8 @@ python3 hdl/ucode/gen_gptp_ucode.py \
 ```
 
 Set `UCODE_HEX_P` to that generated image.
+
+The engine also reads thisClock from that image.
 
 Set `CLK_HZ_P` to the actual engine frequency.
 
