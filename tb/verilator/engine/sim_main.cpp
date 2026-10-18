@@ -242,20 +242,31 @@ class GptpEngineHarness {
   //! Runs every phase in file order and prints the one tally line the sweep
   //! parses. Returns the process exit status: 0 pass, 1 fail.
   int run_suite() {
-    if (self_present == 0) {
-      // the phases a self publication passes through, and no others: the
-      // rest of the suite scripts a grandmaster-capable plane
-      bring_the_engine_out_of_reset();
-      check_the_boot_pdelay_request();
-      publish_thisclock_before_any_peer();
-      txts_idx(our_req_idx, T1);   // the boot request's stamp, as phase 2
-      raise_ascapable_on_the_second_exchange();
-      become_master_on_announce_receipt_timeout();
-      drop_a_peer_whose_pdelay_stops();
-      hold_every_committed_path_coherent();
-      printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
-      return fails ? 1 : 0;
-    }
+    if (self_present == 0)
+      run_the_self_publication_phases();
+    else
+      run_every_phase();
+    printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
+    return fails ? 1 : 0;
+  }
+
+ private:
+
+  //! The fourth pass: the phases a self publication passes through, and no
+  //! others. The rest of the suite scripts a grandmaster-capable plane.
+  void run_the_self_publication_phases() {
+    bring_the_engine_out_of_reset();
+    check_the_boot_pdelay_request();
+    publish_thisclock_before_any_peer();
+    txts_idx(our_req_idx, T1);   // the boot request's stamp, as phase 2
+    raise_ascapable_on_the_second_exchange();
+    become_master_on_announce_receipt_timeout();
+    drop_a_peer_whose_pdelay_stops();
+    hold_every_committed_path_coherent();
+  }
+
+  //! The shipping passes: every phase named in the file header, in order.
+  void run_every_phase() {
     bring_the_engine_out_of_reset();
     check_the_boot_pdelay_request();
     publish_thisclock_before_any_peer();
@@ -339,12 +350,7 @@ class GptpEngineHarness {
     return_to_thisclock_around_a_winning_peer();
     drop_a_peer_whose_pdelay_stops();
     hold_every_committed_path_coherent();
-
-    printf("%d checks: %d PASS, %d FAIL\n", checks, checks - fails, fails);
-    return fails ? 1 : 0;
   }
-
- private:
 
   //! flags bit 0 in a self publication: gmPresent when thisClock is
   //! grandmaster-capable (802.1AS-2020 10.3.13.2.4 g)

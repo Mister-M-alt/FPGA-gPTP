@@ -546,6 +546,96 @@ def run_harness(exe: Path, rundir: Path) -> tuple[int, str]:
     return rc, f"{body}{total} checks: {total - failed} PASS, {failed} FAIL\n"
 
 
+def _named_failure(failed: list[str], want: str) -> str | None:
+    """The first of the `failed` lines that names the check `want`, from the
+    pass `want` names: one with the `P1_PREFIX` matches only fourth-pass
+    failures, any other name only shipping-pass failures. None if absent."""
+    pass_tag = "FAIL " + P1_PREFIX
+    mine = want.startswith(P1_PREFIX)
+    return next((line for line in failed
+                 if want in line
+                 and line.startswith(pass_tag) == mine),
+                None)
+
+
+def named_verdict(answer: str, breaks: str, output: str) -> str:
+    """`answer`, unless a caught control missed a check its `breaks` names.
+
+    Prints the failed line of each named check it finds. Any other answer,
+    and a control that names no check, is returned unchanged.
+    """
+    # #75 controls must fail their specific behavioral check; an
+    # unrelated existing failure cannot stand in for that evidence.
+    if breaks.startswith("slew:") and answer == "caught":
+        named = [line for line in output.splitlines()
+                 if line.startswith("FAIL ") and breaks in line
+                 and not line.startswith("FAIL " + P1_PREFIX)]
+        if not named:
+            answer = "missed its named check"
+        else:
+            print(named[0])
+    # #82 controls must fail every check they name, for the same
+    # reason: each of those checks needs its own failing defect.
+    if breaks.startswith(("#82 ", P1_PREFIX)) and answer == "caught":
+        failed = [line for line in output.splitlines()
+                  if line.startswith("FAIL ")]
+        missed = [want for want in breaks.split(" | ")
+                  if _named_failure(failed, want) is None]
+        if missed:
+            answer = ("missed its named check(s): "
+                      + "; ".join(missed))
+        else:
+            for want in breaks.split(" | "):
+                print(_named_failure(failed, want))
+    return answer
+
+
+def run_mutant(work: Path, clean_exe: Path,
+               mutation: tuple[str, str, str, str, str]) -> bool:
+    """Plant one of the `MUTATIONS` under `work` and print its verdict.
+
+    True when the harness catches it, through every check it names; False,
+    with the reason printed, when it survived, did not build, its image was
+    refused, or its pattern no longer appears exactly once.
+    """
+    name, fname, pattern, replacement, breaks = mutation
+    src = (HDL / fname).read_text(encoding="utf-8")
+    if src.count(pattern) != 1:
+        print(f"[FAIL] mutation {name!r}: its pattern appears "
+              f"{src.count(pattern)} time(s) in {fname}, expected "
+              f"exactly 1. The source moved and this mutant is no "
+              f"longer mutating anything - fix the pattern, do not "
+              f"delete the arm.")
+        return False
+    tag = "".join(c if c.isalnum() else "_" for c in name)
+    srcdir = stage(work, tag, (fname, pattern, replacement))
+    rundir = work / f"run_{tag}"
+    if not generate_image(srcdir, rundir):
+        print(f"[FAIL] mutation {name!r}: the generator refused its "
+              f"image, so this mutant proves nothing about the "
+              f"harness")
+        return False
+    if fname == GENERATOR:
+        exe = clean_exe          # only the ROM image differs
+    else:
+        exe = build(srcdir, work, tag)
+    if exe is None:
+        print(f"[FAIL] mutation {name!r} did not build; a mutant that "
+              f"cannot build proves nothing about the harness")
+        return False
+    rc, output = run_harness(exe, rundir)
+    answer = named_verdict(verdict(rc, output), breaks, output)
+    if answer == "caught":
+        print(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")
+        return True
+    if answer == "pass":
+        print(f"[FAIL] mutant SURVIVED: {name}. The harness does not "
+              f"prove \"{breaks}\".")
+    else:
+        print(f"[FAIL] mutant {name!r} {answer}")
+    return False
+
+
 def main() -> int:
     """Run the control and every mutant, and report the arm's exit status.
 
@@ -575,77 +665,11 @@ def main() -> int:
                   f"every mutant result below is meaningless")
 
         # -- each mutant must be caught --------------------------------------
-        for name, fname, pattern, replacement, breaks in MUTATIONS:
-            src = (HDL / fname).read_text(encoding="utf-8")
-            if src.count(pattern) != 1:
-                fails += 1
-                print(f"[FAIL] mutation {name!r}: its pattern appears "
-                      f"{src.count(pattern)} time(s) in {fname}, expected "
-                      f"exactly 1. The source moved and this mutant is no "
-                      f"longer mutating anything - fix the pattern, do not "
-                      f"delete the arm.")
-                continue
-            tag = "".join(c if c.isalnum() else "_" for c in name)
-            srcdir = stage(work, tag, (fname, pattern, replacement))
-            rundir = work / f"run_{tag}"
-            if not generate_image(srcdir, rundir):
-                fails += 1
-                print(f"[FAIL] mutation {name!r}: the generator refused its "
-                      f"image, so this mutant proves nothing about the "
-                      f"harness")
-                continue
-            if fname == GENERATOR:
-                exe = clean_exe          # only the ROM image differs
-            else:
-                exe = build(srcdir, work, tag)
-            if exe is None:
-                fails += 1
-                print(f"[FAIL] mutation {name!r} did not build; a mutant that "
-                      f"cannot build proves nothing about the harness")
-                continue
-            rc, output = run_harness(exe, rundir)
-            answer = verdict(rc, output)
-            # #75 controls must fail their specific behavioral check; an
-            # unrelated existing failure cannot stand in for that evidence.
-            if breaks.startswith("slew:") and answer == "caught":
-                named = [line for line in output.splitlines()
-                         if line.startswith("FAIL ") and breaks in line
-                         and not line.startswith("FAIL " + P1_PREFIX)]
-                if not named:
-                    answer = "missed its named check"
-                else:
-                    print(named[0])
-            # #82 controls must fail every check they name, for the same
-            # reason: each of those checks needs its own failing defect.
-            if breaks.startswith(("#82 ", P1_PREFIX)) and answer == "caught":
-                failed = [line for line in output.splitlines()
-                          if line.startswith("FAIL ")]
-
-                def failing(want: str) -> str | None:
-                    pass_tag = "FAIL " + P1_PREFIX
-                    mine = want.startswith(P1_PREFIX)
-                    return next((line for line in failed
-                                 if want in line
-                                 and line.startswith(pass_tag) == mine),
-                                None)
-                missed = [want for want in breaks.split(" | ")
-                          if failing(want) is None]
-                if missed:
-                    answer = ("missed its named check(s): "
-                              + "; ".join(missed))
-                else:
-                    for want in breaks.split(" | "):
-                        print(failing(want))
-            if answer == "caught":
+        for mutation in MUTATIONS:
+            if run_mutant(work, clean_exe, mutation):
                 passes += 1
-                print(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")
-            elif answer == "pass":
-                fails += 1
-                print(f"[FAIL] mutant SURVIVED: {name}. The harness does not "
-                      f"prove \"{breaks}\".")
             else:
                 fails += 1
-                print(f"[FAIL] mutant {name!r} {answer}")
 
     total = passes + fails
     print(f"\n{total} checks: {passes} PASS, {fails} FAIL")
