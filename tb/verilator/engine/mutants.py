@@ -236,8 +236,9 @@ MUTATIONS = [
      "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_slew\")\n",
      "    p.emit(\"BR\", label=\"sv_slew\")\n",
      "an offset over the threshold steps"),
-    # word-neutral, because the BTCA leg fills its gap and one more word is
-    # a packing refusal, not a mutant: the unlock takes the slot of the
+    # word-neutral, because the BTCA leg filled its gap when this arm was
+    # written and one more word was a packing refusal, not a mutant (#82
+    # has since freed words): the unlock takes the slot of the
     # Sync-cadence disarm, which disarms nothing for a plane that is
     # already a slave (18c's), and elsewhere leaves a cadence whose own
     # master gate sends nothing
@@ -288,49 +289,135 @@ MUTATIONS = [
      "# +-ILIM\n",
      "",
      "the integrator stays within +-200 ppm"),
-    # ---- #82: thisClock and {thisClock} until a peer is elected ----------
+    # ---- #82: thisClock and {thisClock} unless a live peer is elected ----
     # Each control lists, after "#82 ", every named check it must fail.
-    ("boot publication restored to zero", "top/KL_gptp_engine.sv",
-     "  assign pub_gm_id_o     = pub_gm_self_w ? local_gm_id_w : pub_gm_r;\n"
-     "  assign pub_parent_id_o = pub_parent_r;\n"
-     "  assign pub_flags_o     = pub_flags_r;\n"
-     "  assign pub_pdelay_ns_o = pub_pdelay_r;\n"
-     "  assign pub_offset_o    = pub_offset_r;\n"
-     "  assign pub_annq_o      = pub_annq_r;\n"
-     "  assign pub_path_count_o = pub_gm_self_w ? {3'd0, local_clock_valid_r}\n",
-     "  assign pub_gm_id_o     = pub_gm_r;\n"
-     "  assign pub_parent_id_o = pub_parent_r;\n"
-     "  assign pub_flags_o     = pub_flags_r;\n"
-     "  assign pub_pdelay_ns_o = pub_pdelay_r;\n"
-     "  assign pub_offset_o    = pub_offset_r;\n"
-     "  assign pub_annq_o      = pub_annq_r;\n"
-     "  assign pub_path_count_o = pub_gm_self_w ? 4'd0\n",
-     "#82 cold boot: first commit names thisClock"
-     " | #82 cold boot: first commit path is {thisClock}"
-     " | #82 warm reset: first commit names thisClock"
-     " | #82 warm reset: first commit path is {thisClock}"),
+    # -- reset publishes the self tuple, and commits it once, at once --
+    ("reset leaves the grandmaster zero", "top/KL_gptp_engine.sv",
+     "      pub_gm_r        <= rom_clock_id_w;\n",
+     "      pub_gm_r        <= '0;\n",
+     "#82 cold release: every cycle to the first beat names thisClock"
+     " | #82 cold release: every cycle to the first beat has {thisClock}"
+     " | #82 cold release: that commit carries thisClock and {thisClock}"
+     " | #82 warm reset: it names thisClock, not the elected peer"
+     " | pre-init deep Announce: GM stays thisClock"),
+    ("reset keeps the elected grandmaster", "top/KL_gptp_engine.sv",
+     "      pub_gm_r        <= rom_clock_id_w;\n",
+     "",
+     "#82 warm reset: it names thisClock, not the elected peer"),
+    ("the thisClock words are read swapped", GENERATOR,
+     "    for addr, word in ((ROM_CID_HI_C, cid >> 32),\n"
+     "                       (ROM_CID_LO_C, cid & 0xFFFFFFFF)):\n",
+     "    for addr, word in ((ROM_CID_LO_C, cid >> 32),\n"
+     "                       (ROM_CID_HI_C, cid & 0xFFFFFFFF)):\n",
+     "#82 cold release: every cycle to the first beat names thisClock"
+     " | #82 cold release: that commit carries thisClock and {thisClock}"),
+    ("reset leaves the path empty", "top/KL_gptp_engine.sv",
+     "      pub_path_count_r <= 4'd1;\n"
+     "      pub_path_r       <= '0;\n",
+     "      pub_path_count_r <= 4'd0;\n"
+     "      pub_path_r       <= '0;\n",
+     "#82 cold release: every cycle to the first beat has {thisClock}"
+     " | #82 cold release: that commit carries thisClock and {thisClock}"
+     " | #82 warm reset: its path is {thisClock} with a zero tail"),
+    ("reset keeps the elected tail", "top/KL_gptp_engine.sv",
+     "      pub_path_count_r <= 4'd1;\n"
+     "      pub_path_r       <= '0;\n",
+     "      pub_path_count_r <= 4'd1;\n",
+     "#82 warm reset: its path is {thisClock} with a zero tail"
+     " | #82 every commit naming thisClock carries {thisClock}"),
     ("no engine commit after reset", "top/KL_gptp_engine.sv",
      "  assign pub_commit_o     = ucpu_commit_w || boot_pub_commit_r;",
      "  assign pub_commit_o     = ucpu_commit_w;",
-     "#82 cold boot: a commit lands with the first beat"
-     " | #82 warm reset: a commit follows the release at once"),
-    ("thisClock hides an elected peer", "top/KL_gptp_engine.sv",
-     "  wire        pub_gm_self_w = (pub_gm_r == 64'd0);",
-     "  wire        pub_gm_self_w = local_clock_valid_r;",
-     "#82 peer wins: its commit names the peer GM"),
-    ("an elected peer keeps the self path", "top/KL_gptp_engine.sv",
-     "  assign pub_path_count_o = pub_gm_self_w ? {3'd0, local_clock_valid_r}",
-     "  assign pub_path_count_o = local_clock_valid_r ? 4'd1",
-     "#82 peer wins: its commit carries the peer path"),
-    ("becoming grandmaster keeps the departed GM", GENERATOR,
+     "#82 cold release: one commit before the first beat"
+     " | #82 warm reset: one commit in the first 2 ms"),
+    ("the boot commit fires twice", "top/KL_gptp_engine.sv",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n"
+     "      boot_pub_pend_r   <= 1'b0;\n",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n"
+     "      boot_pub_pend_r   <= boot_pub_pend_r && !boot_pub_commit_r;\n",
+     "#82 cold release: one commit before the first beat"
+     " | #82 warm reset: one commit in the first 2 ms"),
+    ("the boot commit never retires", "top/KL_gptp_engine.sv",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n"
+     "      boot_pub_pend_r   <= 1'b0;\n",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n",
+     "#82 cold release: one commit before the first beat"),
+    ("the boot commit waits for the timer bootstrap", "top/KL_gptp_engine.sv",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n"
+     "      boot_pub_pend_r   <= 1'b0;\n",
+     "      boot_pub_commit_r <= boot_pub_pend_r && boot_done_r;\n"
+     "      boot_pub_pend_r   <= boot_pub_pend_r && !boot_done_r;\n",
+     "#82 cold release: that commit is the first edge after release"
+     " | #82 warm reset: that commit is the first edge after release"
+     " | pre-init deep Announce: no commit"),
+    # -- only a newly received Announce competes after a reset --------------
+    ("a warm reset keeps the retained best record", "top/KL_gptp_engine.sv",
+     "      best_pv_valid_r    <= 1'b0;\n"
+     "      best_id_valid_r    <= 1'b0;\n"
+     "      best_src_valid_r   <= 1'b0;\n",
+     "",
+     "#82 warm reset: a worse-than-local peer leaves thisClock"
+     " | #82 warm reset: the live worse peer wins, not the absent A"
+     " | #82 warm reset: the live peer carries its own path"),
+    ("an unwritten best record reads as the best vector",
+     "top/KL_gptp_engine.sv",
+     "                 ((st_addr_w[5:0] == 6'd20) && !best_src_valid_r))\n"
+     "          st_rd_mux_w = '1;\n",
+     "                 ((st_addr_w[5:0] == 6'd20) && !best_src_valid_r))\n"
+     "          st_rd_mux_w = '0;\n",
+     "#82 warm reset: a worse-than-local peer leaves thisClock"
+     " | #82 warm reset: the live worse peer wins, not the absent A"),
+    # -- a winning peer is published with its own path ----------------------
+    ("a winning peer's grandmaster is not published", GENERATOR,
+     "    p.emit(\"WRST\", ra=RW, imm=RG_PUB | 0, fmt=FMT_Q)\n",
+     "",
+     "#82 peer wins: its commit names the peer GM"
+     " | #82 warm reset: the live worse peer wins, not the absent A"),
+    ("a winning peer's path is not staged", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 7, fmt=FMT_Q)\n",
+     "",
+     "#82 peer wins: its commit carries the peer path"
+     " | #82 warm reset: the live peer carries its own path"),
+    # -- a departed peer returns the self tuple, by either departure --------
+    ("the self publication keeps the departed grandmaster", GENERATOR,
      "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 0, fmt=FMT_Q)\n"
      "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)\n",
      "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)\n",
-     "#82 peer leaves: the mastership commit names thisClock"),
-    ("becoming grandmaster keeps the departed path", GENERATOR,
+     "#82 peer leaves: the mastership commit names thisClock"
+     " | #82 Pdelay loss: thisClock is committed within 2 ms of the fall"),
+    ("the self publication keeps the departed path", GENERATOR,
      "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 6, fmt=FMT_Q)",
      "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 6, fmt=FMT_Q)",
-     "#82 peer leaves: the mastership commit path is {thisClock}"),
+     "#82 peer leaves: the mastership commit path is {thisClock}"
+     " | #82 Pdelay loss: that commit carries {thisClock}"
+     " | #82 every commit naming thisClock carries {thisClock}"),
+    ("the self publication keeps the departed record", GENERATOR,
+     "    p.emit(\"RDST\", rd=RT, imm=RG_SCR | S_MYPV, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RC, imm=RG_SCR | S_BESTID, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)\n",
+     "",
+     "#82 Pdelay loss: once capable, a live peer worse than D wins"),
+    ("an asCapable fall leaves the receipt watch running",
+     "top/KL_gptp_engine.sv",
+     "                if (pub_flags_r[2] && !st_wdata_w[2]) begin\n"
+     "                  tmr_arm_we_w    <= 1'b1;\n"
+     "                  tmr_arm_slot_w  <= 3'd2;\n"
+     "                  tmr_arm_delta_w <= 32'd1;\n"
+     "                end\n",
+     "",
+     "#82 Pdelay loss: thisClock is committed within 2 ms of the fall"),
+    ("an incapable receipt timeout keeps the elected peer", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"BR\", label=LB[\"SELF\"])\n",
+     "",
+     "#82 Pdelay loss: thisClock is committed within 2 ms of the fall"
+     " | #82 Pdelay loss: that commit carries {thisClock}"
+     " | #82 Pdelay loss: Announces from the incapable port elect nothing"),
+    ("an incapable port's Announces still compete", GENERATOR,
+     "    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, \"ac\", \"out\")\n",
+     "",
+     "#82 Pdelay loss: Announces from the incapable port elect nothing"),
 ]
 
 
