@@ -115,9 +115,10 @@ module KL_gptp_engine
     output logic [31:0] pub_pdelay_ns_o,
     output logic [31:0] pub_offset_o,  //! last sync offset, ns (signed)
     output logic [63:0] pub_annq_o,    //! last received announce vector, raw
-    //! Raw selected PathTrace publication: its complete received length,
-    //! including the separately published GM at slot zero, or zero for an
-    //! absent TLV. pub_path_o carries slots 1..7; inactive slots are zero.
+    //! Raw pathTrace publication: the selected Announce's pathSequence with
+    //! thisClock appended (#85), so its length includes the separately
+    //! published GM at slot zero and thisClock last, or zero for an absent
+    //! TLV. pub_path_o carries slots 1..7; inactive slots are zero.
     //! After reset or a departed peer: thisClock and {thisClock} (#82).
     output logic  [3:0] pub_path_count_o,
     output logic [7*64-1:0] pub_path_o,
@@ -712,10 +713,21 @@ module KL_gptp_engine
   //! is zero.
   //! The raw public ABI is bounded to eight complete entries. Count zero is
   //! the honest publication for a selected fixed Announce without PathTrace;
-  //! its GM remains separately published and every tail word is zero. Counts
-  //! above the retained bank cap publish the first eight received entries.
+  //! its GM remains separately published and every tail word is zero. A
+  //! received path of one to seven entries publishes them and thisClock;
+  //! eight or more publish the first eight received entries.
   wire [3:0] ann_pub_count_clamped_w = (ann_pub_count_r > 8'd8)
       ? 4'd8 : ann_pub_count_r[3:0];
+  //! #85: a slave port's pathTrace is the received pathSequence with
+  //! thisClock appended, unless that sequence is empty (802.1AS-2020
+  //! 10.3.13.2.4 f) 5), 10.3.9.23). The appended entry takes the slot after
+  //! the received ones while it fits the eight-entry ABI. A received path of
+  //! eight or more entries publishes its first eight, as before: that prefix
+  //! is also the first eight entries of pathTrace.
+  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&
+                             (ann_pub_count_clamped_w != 4'd8);
+  wire [3:0] path_trace_count_w = ann_pub_count_clamped_w +
+                                  {3'd0, path_append_w};
 
   //! Policy-owned completion qualifier: remaining in-band pairs, 0..2.
   //! Separate from the exported level: a zero verdict stages completion,
@@ -958,18 +970,22 @@ module KL_gptp_engine
                 end
               end
               //! Address 7 stages the current frozen Announce payload only
-              //! after BTCA `take`. Copy all active tails and clear every
-              //! inactive word on this one edge, so a following COMMIT cannot
-              //! expose parser-stale data from a prior longer PathTrace.
+              //! after BTCA `take`. Copy all active tails, append thisClock
+              //! (#85) and clear every inactive word on this one edge, so a
+              //! following COMMIT cannot expose parser-stale data from a
+              //! prior longer PathTrace.
               4'd7: begin
 `ifndef SYNTHESIS
                 path_stage_pending_r <= 1'b1;
 `endif
-                pub_path_count_r <= ann_pub_count_clamped_w;
+                pub_path_count_r <= path_trace_count_w;
                 for (int unsigned pk = 0; pk < 7; pk++) begin
                   if (4'(pk + 2) <= ann_pub_count_clamped_w)
                     pub_path_r[64*pk +: 64] <=
                         ann_pub_tail_r[64*pk +: 64];
+                  else if (path_append_w &&
+                           (4'(pk + 1) == ann_pub_count_clamped_w))
+                    pub_path_r[64*pk +: 64] <= rom_clock_id_w;
                   else
                     pub_path_r[64*pk +: 64] <= 64'd0;
                 end

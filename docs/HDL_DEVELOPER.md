@@ -203,6 +203,14 @@ The engine commits the reset state on its first edge.
 
 No handler can run before that commit.
 
+Region 3, word 7 stages a taken Announce's path.
+
+That write appends thisClock to a nonempty received path.
+
+The appended entry uses the same image words.
+
+Eight received entries leave it no slot.
+
 ## Out-of-context measurement
 
 `make ooc` synthesizes both tops out of context.

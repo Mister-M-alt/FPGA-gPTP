@@ -463,6 +463,30 @@ Retained paths contain at most eight identities.
 
 Inactive path entries remain zero.
 
+### Path of an elected peer
+
+[Issue #85](https://github.com/Mister-M-alt/FPGA-gPTP/issues/85) records this rule.
+
+802.1AS-2020 clause 10.3.13.2.4 defines it.
+
+Its item f5 is the slave port case.
+
+The path is the received pathSequence plus thisClock.
+
+thisClock is therefore the last published entry.
+
+A directly attached grandmaster publishes two entries.
+
+An absent PathTrace still publishes count zero.
+
+Seven received entries fill all eight slots.
+
+Longer received paths publish their first eight entries.
+
+Those entries are also pathTrace's first eight.
+
+The grandmaster and its path change in one commit.
+
 ### Before any peer
 
 [Issue #82](https://github.com/Mister-M-alt/FPGA-gPTP/issues/82) defines this self publication.

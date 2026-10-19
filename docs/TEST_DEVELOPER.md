@@ -117,6 +117,9 @@ Prefer independent protocol formulas and frame builders.
 - Publishes sync-ok in every master cycle.
 - Keeps it through a receipt timeout queued behind mastership.
 - Clears it on every handover to a peer.
+- Appends thisClock to direct and multi-hop received paths.
+- Checks the seven-entry, eight-entry and absent path boundaries.
+- Ends every committed peer path with thisClock.
 - Rejects tied-low and early-clear slew indications.
 - Keeps in-band tracking inactive after idle timeouts and GM changes.
 - Keeps in-band returns from mastership inactive.

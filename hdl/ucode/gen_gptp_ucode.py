@@ -1624,8 +1624,9 @@ def prog_btca(base: int) -> Prog:
     p.emit("WRST", ra=RB, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
     p.emit("WRST", ra=RD_, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     # Stage this taken Announce's frozen PathTrace into the raw publish bank.
-    # Address 7 atomically copies the count/tail-only publication snapshot and
-    # clears inactive tail words. Handler reads independently use the compact
+    # Address 7 atomically copies the count/tail-only publication snapshot,
+    # appends thisClock to a nonempty path (#85) and clears inactive tail
+    # words. Handler reads independently use the compact
     # serial ann_ctx_r port; spending fourteen ROM words to copy the same path
     # through that port would overflow this deliberately full µcode image.
     # `they_win` is also reachable from a later worse Announce, so that later
