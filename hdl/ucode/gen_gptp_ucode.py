@@ -1733,8 +1733,11 @@ def prog_become(base: int) -> Prog:
     p.emit("WRST", ra=RT, imm=RG_PHC | 3, fmt=FMT_Q)
     # no peer is elected: gmPresent is the engine's, from the image. The
     # grandmaster's own time is the domain's time, so the master role is
-    # synchronised (#84): the parent's tu falls once the holdover that this
-    # commit's grandmaster change arms has run (Milan v1.2 Annex B.1.1)
+    # synchronised (#84). A commit that replaces a peer grandmaster with
+    # thisClock arms the parent's Milan v1.2 Annex B.1.1 holdover. When
+    # the publication already names thisClock (from reset, or after a self
+    # publication), this commit changes no grandmaster and arms none: the
+    # parent's tu falls here unless an earlier holdover is still running
     e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now

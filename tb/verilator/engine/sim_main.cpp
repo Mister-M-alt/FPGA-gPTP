@@ -165,13 +165,14 @@
 //         within one receipt interval; then a live peer worse than the
 //         dropped one is elected. Every commit of the run naming thisClock
 //         carries {thisClock}
-// 38      #85: every commit naming a peer grandmaster with a path ends it
-//         with thisClock, once, unless eight received entries fill it
 // 37      #84: a grandmaster's own time is the domain's time, so the master
 //         role is synchronised. Every cycle of the run that publishes the
-//         master bit publishes sync-ok beside it (the parent's tu is 0 there
-//         once its Milan v1.2 Annex B.1.1 holdover has run), and every
-//         commit that leaves mastership for a peer grandmaster clears it
+//         master bit publishes sync-ok beside it, and every commit that
+//         leaves mastership for a peer grandmaster clears it. The parent's
+//         tu is 0 there except during a Milan v1.2 Annex B.1.1 holdover;
+//         mastership arms one only by replacing a peer grandmaster
+// 38      #85: every commit naming a peer grandmaster with a path ends it
+//         with thisClock, once, unless eight received entries fill it
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
 // the phases a self publication passes through: boot, mastership and 36..38.
