@@ -134,6 +134,8 @@ Region 3, word 2 writes trigger this hook.
 
 Bit 2 means asCapable; bit 3 means sync-ok.
 
+Mastership sets bit 3 beside bit 1.
+
 Either cleared bit reloads two completion pairs while active.
 
 The hook preserves the active level and applied rate.

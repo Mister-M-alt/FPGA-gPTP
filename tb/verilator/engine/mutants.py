@@ -254,14 +254,19 @@ MUTATIONS = [
      "the servo stays locked across a grandmaster identity change"),
     # only an asCapable rise re-arms the link-up (the manager's ruling on
     # #68): each of these two re-adds a retired re-arm
+    # word-neutral, because the packer has no gap for a longer receipt
+    # timeout leg (#84): a slave's timeout as before, plus the unlock
     ("a receipt timeout unlocks the servo", GENERATOR,
-     "    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n",
-     "    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=SYNCOK_BY_AMGM_C)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_OR,\n"
+     "           imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n",
+     "    p.emit(\"MOVE\", rd=RU, ra=0,"
+     " imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a Sync receipt timeout"),
     ("becoming grandmaster unlocks the servo", GENERATOR,
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n"
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a return from mastership"),
     ("the locked threshold is 200 us", GENERATOR,
@@ -275,10 +280,6 @@ MUTATIONS = [
      "  # rose: link-up\n",
      "",
      "the first pair after asCapable rises, or after a reset, is a link-up"),
-    ("becoming grandmaster keeps sync-ok", GENERATOR,
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
-     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C, orm=FL_AMGM_C)\n",
-     "becoming grandmaster clears the sync-ok verdict"),
     ("the whole trim is not clamped", GENERATOR,
      "    e_sat(p, RT, RUNTIME[\"ilim\"], \"sv_a\")                    "
      "# +-200 ppm\n",
@@ -378,7 +379,8 @@ MUTATIONS = [
      "    p.emit(\"WRST\", ra=RW, imm=RG_PUB | 0, fmt=FMT_Q)\n",
      "",
      "#82 peer wins: its commit names the peer GM"
-     " | #82 warm reset: the live worse peer wins, not the absent A"),
+     " | #82 warm reset: the live worse peer wins, not the absent A"
+     " | #84 the run hands mastership to a peer"),
     ("a winning peer's path is not staged", GENERATOR,
      "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 7, fmt=FMT_Q)\n",
      "",
@@ -468,9 +470,47 @@ MUTATIONS = [
      " | p1 255 #82 Pdelay loss: the drop commit's flags are gmPresent alone"
      " | p1 255 #82 Pdelay loss: that mastership commit has gmPresent"),
     ("mastership sets the microcode's presence bit", GENERATOR,
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C,"
+     " orm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)\n",
      "p1 255 #82 Pdelay loss: that mastership commit has gmPresent"),
+    # ---- #84: the master role is synchronised ----------------------------
+    # Each control lists, after "#84 ", every named check it must fail.
+    ("becoming grandmaster clears sync-ok", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
+     "#84 first mastership: the master flags carry sync-ok"
+     " | #84 takeover: its commit names thisClock with sync-ok"
+     " | #84 every master cycle publishes sync-ok"
+     " | p1 255 #84 first mastership: the master flags carry sync-ok"
+     " | p1 255 #84 every master cycle publishes sync-ok"),
+    ("a queued receipt timeout clears a master's sync-ok", GENERATOR,
+     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL,"
+     " imm=SYNCOK_BY_AMGM_C)\n",
+     "    p.emit(\"MOVE\", rd=RU, ra=0, imm=0)\n",
+     "#84 takeover: a queued receipt timeout keeps sync-ok"
+     " | #84 every master cycle publishes sync-ok"),
+    ("the receipt timeout publishes nothing", GENERATOR,
+     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"COMMIT\")\n",
+     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n",
+     "#84 takeover: the queued receipt timeout commits after it"),
+    ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
+     "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
+     "                 disp_ready_w && !disp_valid_r;",
+     "#84 takeover: nothing commits while dispatch is held"),
+    ("mastership never publishes the master bit", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_SYNCOK_C)\n",
+     "#84 master cycles were graded"
+     " | p1 255 #84 master cycles were graded"),
+    ("a handover to a peer keeps sync-ok", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C, orm=FL_PRESENT_C)\n",
+     "#84 every handover to a peer grandmaster clears sync-ok"
+     " | p1 255 #84 every handover to a peer grandmaster clears sync-ok"),
 ]
 
 
@@ -574,9 +614,10 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
             answer = "missed its named check"
         else:
             print(named[0])
-    # #82 controls must fail every check they name, for the same
-    # reason: each of those checks needs its own failing defect.
-    if breaks.startswith(("#82 ", P1_PREFIX)) and answer == "caught":
+    # #82, #84 and #85 controls must fail every check they name, for the
+    # same reason: each of those checks needs its own failing defect.
+    if breaks.startswith(("#82 ", "#84 ", "#85 ", P1_PREFIX)) and \
+            answer == "caught":
         failed = [line for line in output.splitlines()
                   if line.startswith("FAIL ")]
         missed = [want for want in breaks.split(" | ")

@@ -299,6 +299,8 @@ These events clear the synchronization verdict and keep the lock:
 - A 375 ms Sync receipt timeout.
 - This plane returning from grandmaster duty.
 
+Becoming grandmaster sets the verdict instead.
+
 A grandmaster failover through a Sync lapse stays locked.
 
 So the next pair uses the 100 us threshold.
@@ -506,6 +508,32 @@ A capable thisClock sets gmPresent in every publication.
 That includes reset, both departures and mastership.
 
 With priority1 255, only an elected peer sets it.
+
+### Grandmaster synchronization
+
+[Issue #84](https://github.com/Mister-M-alt/FPGA-gPTP/issues/84) records this rule.
+
+A grandmaster's own time is the domain's time.
+
+So mastership counts as synchronized.
+
+Flags bit 1 and bit 3 are therefore set together.
+
+A Sync receipt timeout never clears bit 3 during mastership.
+
+The parent derives tu from bit 3.
+
+Its tu therefore clears during mastership.
+
+Taking mastership from a peer changes the published grandmaster.
+
+That change arms the parent's Annex B.1.1 holdover.
+
+Handing mastership to a peer clears bit 3.
+
+The first consumed Sync pair sets it again.
+
+A self publication without mastership leaves bit 3 clear.
 
 ### Selection after reset
 

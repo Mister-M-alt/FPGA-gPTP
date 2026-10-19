@@ -501,6 +501,9 @@ def set_servo_gains(clk_hz: int) -> None:
 # publish flags bits. The µcode's bit 0 means a peer is elected; the engine
 # also publishes it while thisClock is grandmaster-capable (#82)
 FL_PRESENT_C, FL_AMGM_C, FL_ASCAP_C, FL_SYNCOK_C = 1, 2, 4, 8
+# the left shift that carries the master bit onto sync-ok (prog_leg_srto)
+SYNCOK_BY_AMGM_C = 2
+assert FL_AMGM_C << SYNCOK_BY_AMGM_C == FL_SYNCOK_C
 
 # 802.1AS-2011 Table 11-7 controlField values for every message this plane
 # transmits. Keep the map exhaustive so adding a TX message cannot silently
@@ -1727,8 +1730,11 @@ def prog_become(base: int) -> Prog:
     p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)
     p.emit("WRST", ra=RT, imm=RG_PHC | 3, fmt=FMT_Q)
-    # no peer is elected: gmPresent is the engine's, from the image
-    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)
+    # no peer is elected: gmPresent is the engine's, from the image. The
+    # grandmaster's own time is the domain's time, so the master role is
+    # synchronised (#84): the parent's tu falls once the holdover that this
+    # commit's grandmaster change arms has run (Milan v1.2 Annex B.1.1)
+    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now
     p.emit("MOVE", rd=RT, ra=0, imm=2)
@@ -1982,9 +1988,21 @@ def prog_leg_resume(base: int) -> Prog:
 
 def prog_leg_srto(base: int) -> Prog:
     """Sync receipt timeout (375 ms): the sync-ok verdict falls. The servo
-    stays locked, so the next pair still uses the locked threshold (#68)."""
+    stays locked, so the next pair still uses the locked threshold (#68).
+
+    A master keeps its verdict (#84). BECOME disarms this watch, but a
+    disarm cannot recall an expiry already queued behind BECOME's own
+    event. So sync-ok survives here exactly where the master bit stands:
+    the flags shifted left by SYNCOK_BY_AMGM_C put bit 1 on bit 3, and the
+    other three bits pass. Branch-free, because a gated form is two words
+    longer and the packer then has no gap for it."""
     p = Prog(base)
-    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=SYNCOK_BY_AMGM_C)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_OR,
+           imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
+    p.emit("ALU", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)
+    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)
     p.emit("COMMIT")
     p.emit("END")
     return p

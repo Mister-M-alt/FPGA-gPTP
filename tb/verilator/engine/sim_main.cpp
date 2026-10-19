@@ -109,9 +109,11 @@
 //         locked: -50 us off it slews, and after a second failover 150 us
 //         off it steps once
 // 19..21  parent degradation yields mastership immediately (10.3.5) and
-//         clears sync-ok; the Sync body stays zero while its Follow_Up
-//         carries the live egress stamp; an asCapable fall stops
-//         consumption and steering. #68: the first pair after the
+//         keeps sync-ok (#84), in the commit that names thisClock, though
+//         the Sync receipt timeout expires while that Announce still waits
+//         behind a stalled Pdelay response; the Sync body stays zero while
+//         its Follow_Up carries the live egress stamp; an asCapable fall
+//         stops consumption and steering. #68: the first pair after the
 //         return from mastership is locked, and 50 us off it slews; the
 //         first after asCapable falls and returns is a link-up, and 25 us
 //         off it steps once
@@ -157,9 +159,14 @@
 //         within one receipt interval; then a live peer worse than the
 //         dropped one is elected. Every commit of the run naming thisClock
 //         carries {thisClock}
+// 37      #84: a grandmaster's own time is the domain's time, so the master
+//         role is synchronised. Every cycle of the run that publishes the
+//         master bit publishes sync-ok beside it (the parent's tu is 0 there
+//         once its Milan v1.2 Annex B.1.1 holdover has run), and every
+//         commit that leaves mastership for a peer grandmaster clears it
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
-// the phases a self publication passes through: boot, mastership and 36.
+// the phases a self publication passes through: boot, mastership, 36 and 37.
 // There thisClock is not grandmaster-capable, so gmPresent stays clear in
 // every self publication and is set only while a capable peer is elected
 // (10.3.13.2.4 g). Its checks print with a "p1 255 " prefix.
@@ -263,6 +270,7 @@ class GptpEngineHarness {
     become_master_on_announce_receipt_timeout();
     drop_a_peer_whose_pdelay_stops();
     hold_every_committed_path_coherent();
+    keep_sync_ok_in_every_master_cycle();
   }
 
   //! The shipping passes: every phase named in the file header, in order.
@@ -350,6 +358,7 @@ class GptpEngineHarness {
     return_to_thisclock_around_a_winning_peer();
     drop_a_peer_whose_pdelay_stops();
     hold_every_committed_path_coherent();
+    keep_sync_ok_in_every_master_cycle();
   }
 
   //! flags bit 0 in a self publication: gmPresent when thisClock is
@@ -461,6 +470,10 @@ class GptpEngineHarness {
   uint64_t boot_bad_gm = 0;
   uint64_t boot_bad_path = 0;
   uint64_t boot_bad_present = 0;
+  //! #84: every cycle of the run is graded: those whose published flags
+  //! carry the master bit, and those of them without sync-ok
+  uint64_t master_cycles = 0;
+  uint64_t master_unsynced_cycles = 0;
 
   // ---- TX backpressure ------------------------------------------------------
   std::vector<std::vector<uint8_t>> txf;
@@ -597,6 +610,10 @@ class GptpEngineHarness {
         self_path &= pub_path_tail(k) == 0;
       if (!self_path) boot_bad_path++;
       if ((dut->pub_flags_o & FL_PRESENT) != self_present) boot_bad_present++;
+    }
+    if (dut->pub_flags_o & FL_AMGM) {
+      master_cycles++;
+      if (!(dut->pub_flags_o & FL_SYNCOK)) master_unsynced_cycles++;
     }
     if (dut->pub_commit_o) commits_seen++;
     //! The record is bounded: a defect that commits on every cycle must
@@ -1768,6 +1785,9 @@ class GptpEngineHarness {
     run(200);  // raw words move before COMMIT; grade the complete transaction
     expect("master flags", dut->pub_flags_o & 7,
            self_present | FL_AMGM | FL_ASCAP);
+    expect("#84 first mastership: the master flags carry sync-ok",
+           dut->pub_flags_o & 0xF,
+           self_present | FL_AMGM | FL_ASCAP | FL_SYNCOK);
     expect("gm is us", dut->pub_gm_id_o, OUR_CID);
     expect("self path has one entry", dut->pub_path_count_o, 1);
     for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
@@ -3652,17 +3672,53 @@ class GptpEngineHarness {
 
   // ---- 19: the parent degrades below us -> immediate takeover -----------
   // 10.3.5: a parent update replaces the best; ours now wins the
-  // contest and become-master runs WITHOUT waiting any timeout. Becoming
-  // grandmaster clears the sync-ok verdict phase 18d left high
+  // contest and become-master runs WITHOUT waiting any timeout. #84: the
+  // grandmaster's own time is the domain's, so becoming grandmaster keeps
+  // the sync-ok verdict phase 18d left high, in the commit that changes the
+  // grandmaster to thisClock. That Announce waits behind a stalled Pdelay
+  // response until the Sync receipt watch 18d's last pair armed has
+  // expired, so the timeout's event is queued behind the takeover's, where
+  // BECOME's disarm cannot reach it: the master it then meets keeps sync-ok
   void take_mastership_when_the_parent_degrades() {
     expect("sync-ok high before the takeover",
            dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
-    announce(42, 250, 0xAABBCCFFFE010203ull, 0, 0x00F1F1FFFE000009ull);
+    const size_t c0 = commit_snaps.size();
+    dut->tx_ready_i = 0;
+    {
+      Frame q = ptp(0x2, 0x6C6C, 0, 0x0000, 20, PEER_CID);
+      q.u64(0); q.u16(0); q.ts(0); q.b.resize(68);
+      send_frame(q.b, phc() + 100);
+      run(2000);  // response serializer is now non-idle and holds dispatch
+    }
+    enqueue_announce(42, 250, 0xAABBCCFFFE010203ull, 0, 0x00F1F1FFFE000009ull,
+                     {0xAABBCCFFFE010203ull}, 5000000);
+    run(760000);  // 380 ms: past the 375 ms watch armed before this phase
+    const size_t c_held = commit_snaps.size();
+    dut->tx_ready_i = 1;
+    run_svc(30000);
     expect("degraded parent yields NOW", dut->pub_flags_o & 3,
            FL_PRESENT | FL_AMGM);
     expect("gm is us again", dut->pub_gm_id_o, OUR_CID);
-    expect("becoming grandmaster clears sync-ok",
-           dut->pub_flags_o & FL_SYNCOK, 0);
+    expect("#84 takeover: nothing commits while dispatch is held",
+           c_held, c0);
+    // the takeover commit, then the queued timeout's own commit
+    size_t named = 0;
+    size_t named_synced = 0;
+    for (size_t k = c0; k < commit_snaps.size(); k++) {
+      if (commit_snaps[k].gm != OUR_CID) continue;
+      named++;
+      if ((commit_snaps[k].flags & (FL_AMGM | FL_SYNCOK)) ==
+          (FL_AMGM | FL_SYNCOK))
+        named_synced++;
+    }
+    expect("#84 takeover: its commit names thisClock with sync-ok",
+           c0 < commit_snaps.size() && commit_snaps[c0].gm == OUR_CID &&
+               (commit_snaps[c0].flags & FL_SYNCOK),
+           1);
+    expect("#84 takeover: the queued receipt timeout commits after it",
+           named >= 2, 1);
+    expect("#84 takeover: a queued receipt timeout keeps sync-ok",
+           named_synced, named);
   }
 
   // ---- 20: every two-step Sync carries a zero reserved body --------------
@@ -5030,6 +5086,31 @@ class GptpEngineHarness {
            commit_snaps.size());
     expect("#82 every commit naming thisClock carries {thisClock}",
            self_bad, 0);
+  }
+
+  // ---- 37: #84, the master role is synchronised -------------------------
+  //! A grandmaster's own time is the domain's time: IEEE 1722-2016 4.4.4.7
+  //! raises tu for a discontinuity, not for the role. Graded over the whole
+  //! run: every cycle publishing the master bit publishes sync-ok, and every
+  //! commit that hands mastership to a peer grandmaster clears it, on the
+  //! grandmaster change that also arms the parent's Annex B.1.1 holdover.
+  void keep_sync_ok_in_every_master_cycle() {
+    size_t handed = 0;
+    size_t handed_bad = 0;
+    for (size_t k = 1; k < commit_snaps.size(); k++) {
+      if (!(commit_snaps[k - 1].flags & FL_AMGM)) continue;
+      if (commit_snaps[k].gm == OUR_CID) continue;
+      handed++;
+      if (commit_snaps[k].flags & (FL_AMGM | FL_SYNCOK)) handed_bad++;
+    }
+    printf("INFO #84 %llu master cycles graded, %zu handovers to a peer\n",
+           static_cast<unsigned long long>(master_cycles), handed);
+    expect("#84 master cycles were graded", master_cycles > 0, 1);
+    expect("#84 every master cycle publishes sync-ok",
+           master_unsynced_cycles, 0);
+    expect("#84 the run hands mastership to a peer", handed > 0, 1);
+    expect("#84 every handover to a peer grandmaster clears sync-ok",
+           handed_bad, 0);
   }
 
   //! A #75 policy probe uses wire frames and watches every output edge.

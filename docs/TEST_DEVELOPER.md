@@ -114,6 +114,9 @@ Prefer independent protocol formulas and frame builders.
 - Grades gmPresent in every self publication.
 - Reruns those phases from a priority1 255 image.
 - Regains mastership without Announces after capability returns.
+- Publishes sync-ok in every master cycle.
+- Keeps it through a receipt timeout queued behind mastership.
+- Clears it on every handover to a peer.
 - Rejects tied-low and early-clear slew indications.
 - Keeps in-band tracking inactive after idle timeouts and GM changes.
 - Keeps in-band returns from mastership inactive.
