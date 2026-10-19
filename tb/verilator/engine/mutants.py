@@ -55,7 +55,7 @@ HERE = Path(__file__).resolve().parent
 HDL = (HERE / "../../../hdl").resolve()
 sys.path.insert(0, str((HERE / "../../").resolve()))
 
-from mutation_verdict import verdict  # noqa: E402
+from mutation_verdict import TALLY, verdict  # noqa: E402
 
 #: the RTL the suite builds, in the order the Makefile lists it
 RTL_SOURCES = (
@@ -69,6 +69,11 @@ RTL_SOURCES = (
 GENERATOR = "ucode/gen_gptp_ucode.py"
 #: the shipping arguments of this suite's image, as tb/verilator/engine/Makefile
 GENARGS = ("--clk-hz", "2000000", "--cease-ms", "3000")
+#: the Makefile's fourth pass (#82): a priority1 of 255, the self-publication
+#: phases only. Its checks print with this prefix, so a control names the pass
+P1_GENARGS = ("--p1", "255")
+P1_PLUSARG = "+not-gm-capable"
+P1_PREFIX = "p1 255 "
 
 VFLAGS = [
     "--cc", "--exe", "--build", "-j", "4", "--top-module", "KL_gptp_engine",
@@ -236,8 +241,9 @@ MUTATIONS = [
      "    p.emit(\"BRS\", cnd=BRS_Z, label=\"sv_slew\")\n",
      "    p.emit(\"BR\", label=\"sv_slew\")\n",
      "an offset over the threshold steps"),
-    # word-neutral, because the BTCA leg fills its gap and one more word is
-    # a packing refusal, not a mutant: the unlock takes the slot of the
+    # word-neutral, because the BTCA leg filled its gap when this arm was
+    # written and one more word was a packing refusal, not a mutant (#82
+    # has since freed words): the unlock takes the slot of the
     # Sync-cadence disarm, which disarms nothing for a plane that is
     # already a slave (18c's), and elsewhere leaves a cadence whose own
     # master gate sends nothing
@@ -254,8 +260,8 @@ MUTATIONS = [
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a Sync receipt timeout"),
     ("becoming grandmaster unlocks the servo", GENERATOR,
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n"
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a return from mastership"),
     ("the locked threshold is 200 us", GENERATOR,
@@ -270,9 +276,8 @@ MUTATIONS = [
      "",
      "the first pair after asCapable rises, or after a reset, is a link-up"),
     ("becoming grandmaster keeps sync-ok", GENERATOR,
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
-     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C,"
-     " orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C, orm=FL_AMGM_C)\n",
      "becoming grandmaster clears the sync-ok verdict"),
     ("the whole trim is not clamped", GENERATOR,
      "    e_sat(p, RT, RUNTIME[\"ilim\"], \"sv_a\")                    "
@@ -288,6 +293,184 @@ MUTATIONS = [
      "# +-ILIM\n",
      "",
      "the integrator stays within +-200 ppm"),
+    # ---- #82: thisClock and {thisClock} unless a live peer is elected ----
+    # Each control lists, after "#82 ", every named check it must fail.
+    # -- reset publishes the self tuple, and commits it once, at once --
+    ("reset leaves the grandmaster zero", "top/KL_gptp_engine.sv",
+     "      pub_gm_r        <= rom_clock_id_w;\n",
+     "      pub_gm_r        <= '0;\n",
+     "#82 cold release: every cycle to the first beat names thisClock"
+     " | #82 cold release: every cycle to the first beat has {thisClock}"
+     " | #82 cold release: that commit carries thisClock and {thisClock}"
+     " | #82 warm reset: it names thisClock, not the elected peer"
+     " | pre-init deep Announce: GM stays thisClock"),
+    ("reset keeps the elected grandmaster", "top/KL_gptp_engine.sv",
+     "      pub_gm_r        <= rom_clock_id_w;\n",
+     "",
+     "#82 warm reset: it names thisClock, not the elected peer"),
+    ("the thisClock words are read swapped", GENERATOR,
+     "    for addr, word in ((ROM_CID_HI_C,\n"
+     "                        (cid >> 32) | (gm_capable << ROM_GMCAP_BIT_C)),\n"
+     "                       (ROM_CID_LO_C, cid & 0xFFFFFFFF)):\n",
+     "    for addr, word in ((ROM_CID_LO_C,\n"
+     "                        (cid >> 32) | (gm_capable << ROM_GMCAP_BIT_C)),\n"
+     "                       (ROM_CID_HI_C, cid & 0xFFFFFFFF)):\n",
+     "#82 cold release: every cycle to the first beat names thisClock"
+     " | #82 cold release: that commit carries thisClock and {thisClock}"),
+    ("reset leaves the path empty", "top/KL_gptp_engine.sv",
+     "      pub_path_count_r <= 4'd1;\n"
+     "      pub_path_r       <= '0;\n",
+     "      pub_path_count_r <= 4'd0;\n"
+     "      pub_path_r       <= '0;\n",
+     "#82 cold release: every cycle to the first beat has {thisClock}"
+     " | #82 cold release: that commit carries thisClock and {thisClock}"
+     " | #82 warm reset: its path is {thisClock} with a zero tail"),
+    ("reset keeps the elected tail", "top/KL_gptp_engine.sv",
+     "      pub_path_count_r <= 4'd1;\n"
+     "      pub_path_r       <= '0;\n",
+     "      pub_path_count_r <= 4'd1;\n",
+     "#82 warm reset: its path is {thisClock} with a zero tail"
+     " | #82 every commit naming thisClock carries {thisClock}"),
+    ("no engine commit after reset", "top/KL_gptp_engine.sv",
+     "  assign pub_commit_o     = ucpu_commit_w || boot_pub_commit_r;",
+     "  assign pub_commit_o     = ucpu_commit_w;",
+     "#82 cold release: one commit before the first beat"
+     " | #82 warm reset: one commit in the first 2 ms"),
+    ("the boot commit fires twice", "top/KL_gptp_engine.sv",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n"
+     "      boot_pub_pend_r   <= 1'b0;\n",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n"
+     "      boot_pub_pend_r   <= boot_pub_pend_r && !boot_pub_commit_r;\n",
+     "#82 cold release: one commit before the first beat"
+     " | #82 warm reset: one commit in the first 2 ms"),
+    ("the boot commit never retires", "top/KL_gptp_engine.sv",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n"
+     "      boot_pub_pend_r   <= 1'b0;\n",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n",
+     "#82 cold release: one commit before the first beat"),
+    ("the boot commit waits for the timer bootstrap", "top/KL_gptp_engine.sv",
+     "      boot_pub_commit_r <= boot_pub_pend_r;\n"
+     "      boot_pub_pend_r   <= 1'b0;\n",
+     "      boot_pub_commit_r <= boot_pub_pend_r && boot_done_r;\n"
+     "      boot_pub_pend_r   <= boot_pub_pend_r && !boot_done_r;\n",
+     "#82 cold release: that commit is the first edge after release"
+     " | #82 warm reset: that commit is the first edge after release"
+     " | pre-init deep Announce: no commit"),
+    # -- only a newly received Announce competes after a reset --------------
+    ("a warm reset keeps the retained best record", "top/KL_gptp_engine.sv",
+     "      best_pv_valid_r    <= 1'b0;\n"
+     "      best_id_valid_r    <= 1'b0;\n"
+     "      best_src_valid_r   <= 1'b0;\n",
+     "",
+     "#82 warm reset: a worse-than-local peer leaves thisClock"
+     " | #82 warm reset: the live worse peer wins, not the absent A"
+     " | #82 warm reset: the live peer carries its own path"),
+    ("an unwritten best record reads as the best vector",
+     "top/KL_gptp_engine.sv",
+     "                 ((st_addr_w[5:0] == 6'd20) && !best_src_valid_r))\n"
+     "          st_rd_mux_w = '1;\n",
+     "                 ((st_addr_w[5:0] == 6'd20) && !best_src_valid_r))\n"
+     "          st_rd_mux_w = '0;\n",
+     "#82 warm reset: a worse-than-local peer leaves thisClock"
+     " | #82 warm reset: the live worse peer wins, not the absent A"),
+    # -- a winning peer is published with its own path ----------------------
+    ("a winning peer's grandmaster is not published", GENERATOR,
+     "    p.emit(\"WRST\", ra=RW, imm=RG_PUB | 0, fmt=FMT_Q)\n",
+     "",
+     "#82 peer wins: its commit names the peer GM"
+     " | #82 warm reset: the live worse peer wins, not the absent A"),
+    ("a winning peer's path is not staged", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 7, fmt=FMT_Q)\n",
+     "",
+     "#82 peer wins: its commit carries the peer path"
+     " | #82 warm reset: the live peer carries its own path"),
+    # -- a departed peer returns the self tuple, by either departure --------
+    ("the self publication keeps the departed grandmaster", GENERATOR,
+     "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 0, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)\n",
+     "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)\n",
+     "#82 peer leaves: the mastership commit names thisClock"
+     " | #82 Pdelay loss: thisClock is committed within 2 ms of the fall"
+     " | #82 Pdelay loss: that mastership names thisClock, {thisClock}"),
+    ("the self publication keeps the departed path", GENERATOR,
+     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 6, fmt=FMT_Q)",
+     "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 6, fmt=FMT_Q)",
+     "#82 peer leaves: the mastership commit path is {thisClock}"
+     " | #82 Pdelay loss: that commit carries {thisClock}"
+     " | #82 Pdelay loss: that mastership names thisClock, {thisClock}"
+     " | #82 every commit naming thisClock carries {thisClock}"),
+    ("the self publication keeps the departed record", GENERATOR,
+     "    p.emit(\"RDST\", rd=RT, imm=RG_SCR | S_MYPV, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RC, imm=RG_SCR | S_BESTID, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)\n",
+     "",
+     "#82 Pdelay loss: once capable, a live peer worse than D wins"),
+    ("an asCapable fall leaves the receipt watch running",
+     "top/KL_gptp_engine.sv",
+     "                if (pub_flags_r[2] && !st_wdata_w[2]) begin\n"
+     "                  tmr_arm_we_w    <= 1'b1;\n"
+     "                  tmr_arm_slot_w  <= 3'd2;\n"
+     "                  tmr_arm_delta_w <= 32'd1;\n"
+     "                end\n",
+     "",
+     "#82 Pdelay loss: thisClock is committed within 2 ms of the fall"),
+    ("an incapable receipt timeout keeps the elected peer", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"BR\", label=LB[\"SELF\"])\n",
+     "",
+     "#82 Pdelay loss: thisClock is committed within 2 ms of the fall"
+     " | #82 Pdelay loss: that commit carries {thisClock}"
+     " | #82 Pdelay loss: Announces from the incapable port elect nothing"),
+    ("an incapable port's Announces still compete", GENERATOR,
+     "    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, \"ac\", \"out\")\n",
+     "",
+     "#82 Pdelay loss: Announces from the incapable port elect nothing"),
+    ("the asCapable drop keeps the flags word", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"BR\", label=LB[\"SELF\"])\n",
+     "    p.emit(\"BR\", label=LB[\"SELF\"])\n",
+     "#82 Pdelay loss: the drop commit's flags are gmPresent alone"
+     " | p1 255 #82 Pdelay loss: the drop commit's flags are gmPresent alone"),
+    ("an incapable port's receipt watch is not re-armed", GENERATOR,
+     "    p.emit(\"MOVE\", rd=RU, ra=0, imm=3000)\n"
+     "    p.emit(\"WRST\", ra=RU, imm=RG_TMR | 2, fmt=FMT_Q)  # keep watching\n",
+     "",
+     "#82 Pdelay loss: once capable, with no Announce, master in 3 s"
+     " | #82 Pdelay loss: that mastership names thisClock, {thisClock}"
+     " | p1 255 #82 Pdelay loss: once capable, with no Announce, master in 3 s"),
+    # -- every self publication carries gmPresent (10.3.13.2.4 g) ----------
+    ("the published flags leave gmPresent to the microcode",
+     "top/KL_gptp_engine.sv",
+     "  assign pub_flags_o     = {pub_flags_r[31:1],\n"
+     "                            pub_flags_r[0] | rom_gm_capable_w};\n",
+     "  assign pub_flags_o     = pub_flags_r;\n",
+     "#82 cold release: every cycle to the first beat has gmPresent"
+     " | #82 cold release: that commit's flags are gmPresent alone"
+     " | #82 warm reset: its flags are gmPresent alone"
+     " | #82 peer leaves: the mastership commit has gmPresent"
+     " | #82 Pdelay loss: the drop commit's flags are gmPresent alone"
+     " | #82 Pdelay loss: that mastership commit has gmPresent"),
+    ("the image does not mark thisClock grandmaster-capable", GENERATOR,
+     "    gm_capable = RUNTIME[\"p1\"] < 255\n",
+     "    gm_capable = False\n",
+     "#82 cold release: every cycle to the first beat has gmPresent"
+     " | #82 cold release: that commit's flags are gmPresent alone"
+     " | #82 warm reset: its flags are gmPresent alone"
+     " | #82 peer leaves: the mastership commit has gmPresent"
+     " | #82 Pdelay loss: the drop commit's flags are gmPresent alone"
+     " | #82 Pdelay loss: that mastership commit has gmPresent"),
+    ("the capability mark ignores priority1", GENERATOR,
+     "    gm_capable = RUNTIME[\"p1\"] < 255\n",
+     "    gm_capable = True\n",
+     "p1 255 #82 cold release: every cycle to the first beat has gmPresent"
+     " | p1 255 #82 cold release: that commit's flags are gmPresent alone"
+     " | p1 255 #82 Pdelay loss: the drop commit's flags are gmPresent alone"
+     " | p1 255 #82 Pdelay loss: that mastership commit has gmPresent"),
+    ("mastership sets the microcode's presence bit", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "p1 255 #82 Pdelay loss: that mastership commit has gmPresent"),
 ]
 
 
@@ -307,14 +490,18 @@ def stage(work: Path, tag: str,
 
 
 def generate_image(srcdir: Path, rundir: Path) -> bool:
-    """Write the suite's ROM image from `srcdir`'s generator. False when the
+    """Write the suite's ROM images from `srcdir`'s generator: the shipping
+    one in `rundir`, the fourth pass's in `rundir`/p1run. False when the
     generator refuses, which for a packing failure is a real answer."""
-    rundir.mkdir(parents=True, exist_ok=True)
-    out = subprocess.run(
-        [sys.executable, str(srcdir / GENERATOR), *GENARGS,
-         "-o", str(rundir / "gptp_ucode.hex")],
-        capture_output=True, text=True)
-    return out.returncode == 0 and (rundir / "gptp_ucode.hex").is_file()
+    for d, extra in ((rundir, ()), (rundir / "p1run", P1_GENARGS)):
+        d.mkdir(parents=True, exist_ok=True)
+        out = subprocess.run(
+            [sys.executable, str(srcdir / GENERATOR), *GENARGS, *extra,
+             "-o", str(d / "gptp_ucode.hex")],
+            capture_output=True, text=True)
+        if out.returncode != 0 or not (d / "gptp_ucode.hex").is_file():
+            return False
+    return True
 
 
 def build(srcdir: Path, work: Path, tag: str) -> Path | None:
@@ -334,15 +521,119 @@ def build(srcdir: Path, work: Path, tag: str) -> Path | None:
 
 
 def run_harness(exe: Path, rundir: Path) -> tuple[int, str]:
-    """(rc, output) of one harness run, reading its image from `rundir`.
+    """(rc, output) of one harness run, reading its image from `rundir`,
+    followed by the fourth pass from `rundir`/p1run.
+
+    The two tallies become one, so a failure in either pass is a failure of
+    the run. A pass that printed no tally keeps both runs' raw output with
+    no tally, and verdict() then names the abort rather than a catch.
 
     No host deadline: every wait in sim_main.cpp is bounded in DUT cycles and
     reports its own timeout as a failed check, so a mutant that wedges the
     plane still returns a verdict.
     """
-    out = subprocess.run([str(exe)], cwd=str(rundir),
-                         capture_output=True, text=True)
-    return out.returncode, out.stdout + out.stderr
+    runs = [subprocess.run([str(exe), *arg], cwd=str(d),
+                           capture_output=True, text=True)
+            for d, arg in ((rundir, ()), (rundir / "p1run", (P1_PLUSARG,)))]
+    rc = next((r.returncode for r in runs if r.returncode), 0)
+    outs = [r.stdout + r.stderr for r in runs]
+    tallies = [TALLY.search(o) for o in outs]
+    body = "".join(TALLY.sub("", o) for o in outs)
+    if not all(tallies):
+        return rc, body
+    total = sum(int(m.group(1)) for m in tallies)
+    failed = sum(int(m.group(3)) for m in tallies)
+    return rc, f"{body}{total} checks: {total - failed} PASS, {failed} FAIL\n"
+
+
+def _named_failure(failed: list[str], want: str) -> str | None:
+    """The first of the `failed` lines that names the check `want`, from the
+    pass `want` names: one with the `P1_PREFIX` matches only fourth-pass
+    failures, any other name only shipping-pass failures. None if absent."""
+    pass_tag = "FAIL " + P1_PREFIX
+    mine = want.startswith(P1_PREFIX)
+    return next((line for line in failed
+                 if want in line
+                 and line.startswith(pass_tag) == mine),
+                None)
+
+
+def named_verdict(answer: str, breaks: str, output: str) -> str:
+    """`answer`, unless a caught control missed a check its `breaks` names.
+
+    Prints the failed line of each named check it finds. Any other answer,
+    and a control that names no check, is returned unchanged.
+    """
+    # #75 controls must fail their specific behavioral check; an
+    # unrelated existing failure cannot stand in for that evidence.
+    if breaks.startswith("slew:") and answer == "caught":
+        named = [line for line in output.splitlines()
+                 if line.startswith("FAIL ") and breaks in line
+                 and not line.startswith("FAIL " + P1_PREFIX)]
+        if not named:
+            answer = "missed its named check"
+        else:
+            print(named[0])
+    # #82 controls must fail every check they name, for the same
+    # reason: each of those checks needs its own failing defect.
+    if breaks.startswith(("#82 ", P1_PREFIX)) and answer == "caught":
+        failed = [line for line in output.splitlines()
+                  if line.startswith("FAIL ")]
+        missed = [want for want in breaks.split(" | ")
+                  if _named_failure(failed, want) is None]
+        if missed:
+            answer = ("missed its named check(s): "
+                      + "; ".join(missed))
+        else:
+            for want in breaks.split(" | "):
+                print(_named_failure(failed, want))
+    return answer
+
+
+def run_mutant(work: Path, clean_exe: Path,
+               mutation: tuple[str, str, str, str, str]) -> bool:
+    """Plant one of the `MUTATIONS` under `work` and print its verdict.
+
+    True when the harness catches it, through every check it names; False,
+    with the reason printed, when it survived, did not build, its image was
+    refused, or its pattern no longer appears exactly once.
+    """
+    name, fname, pattern, replacement, breaks = mutation
+    src = (HDL / fname).read_text(encoding="utf-8")
+    if src.count(pattern) != 1:
+        print(f"[FAIL] mutation {name!r}: its pattern appears "
+              f"{src.count(pattern)} time(s) in {fname}, expected "
+              f"exactly 1. The source moved and this mutant is no "
+              f"longer mutating anything - fix the pattern, do not "
+              f"delete the arm.")
+        return False
+    tag = "".join(c if c.isalnum() else "_" for c in name)
+    srcdir = stage(work, tag, (fname, pattern, replacement))
+    rundir = work / f"run_{tag}"
+    if not generate_image(srcdir, rundir):
+        print(f"[FAIL] mutation {name!r}: the generator refused its "
+              f"image, so this mutant proves nothing about the "
+              f"harness")
+        return False
+    if fname == GENERATOR:
+        exe = clean_exe          # only the ROM image differs
+    else:
+        exe = build(srcdir, work, tag)
+    if exe is None:
+        print(f"[FAIL] mutation {name!r} did not build; a mutant that "
+              f"cannot build proves nothing about the harness")
+        return False
+    rc, output = run_harness(exe, rundir)
+    answer = named_verdict(verdict(rc, output), breaks, output)
+    if answer == "caught":
+        print(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")
+        return True
+    if answer == "pass":
+        print(f"[FAIL] mutant SURVIVED: {name}. The harness does not "
+              f"prove \"{breaks}\".")
+    else:
+        print(f"[FAIL] mutant {name!r} {answer}")
+    return False
 
 
 def main() -> int:
@@ -374,55 +665,11 @@ def main() -> int:
                   f"every mutant result below is meaningless")
 
         # -- each mutant must be caught --------------------------------------
-        for name, fname, pattern, replacement, breaks in MUTATIONS:
-            src = (HDL / fname).read_text(encoding="utf-8")
-            if src.count(pattern) != 1:
-                fails += 1
-                print(f"[FAIL] mutation {name!r}: its pattern appears "
-                      f"{src.count(pattern)} time(s) in {fname}, expected "
-                      f"exactly 1. The source moved and this mutant is no "
-                      f"longer mutating anything - fix the pattern, do not "
-                      f"delete the arm.")
-                continue
-            tag = "".join(c if c.isalnum() else "_" for c in name)
-            srcdir = stage(work, tag, (fname, pattern, replacement))
-            rundir = work / f"run_{tag}"
-            if not generate_image(srcdir, rundir):
-                fails += 1
-                print(f"[FAIL] mutation {name!r}: the generator refused its "
-                      f"image, so this mutant proves nothing about the "
-                      f"harness")
-                continue
-            if fname == GENERATOR:
-                exe = clean_exe          # only the ROM image differs
-            else:
-                exe = build(srcdir, work, tag)
-            if exe is None:
-                fails += 1
-                print(f"[FAIL] mutation {name!r} did not build; a mutant that "
-                      f"cannot build proves nothing about the harness")
-                continue
-            rc, output = run_harness(exe, rundir)
-            answer = verdict(rc, output)
-            # #75 controls must fail their specific behavioral check; an
-            # unrelated existing failure cannot stand in for that evidence.
-            if breaks.startswith("slew:") and answer == "caught":
-                named = [line for line in output.splitlines()
-                         if line.startswith("FAIL ") and breaks in line]
-                if not named:
-                    answer = "missed its named check"
-                else:
-                    print(named[0])
-            if answer == "caught":
+        for mutation in MUTATIONS:
+            if run_mutant(work, clean_exe, mutation):
                 passes += 1
-                print(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")
-            elif answer == "pass":
-                fails += 1
-                print(f"[FAIL] mutant SURVIVED: {name}. The harness does not "
-                      f"prove \"{breaks}\".")
             else:
                 fails += 1
-                print(f"[FAIL] mutant {name!r} {answer}")
 
     total = passes + fails
     print(f"\n{total} checks: {passes} PASS, {fails} FAIL")

@@ -4,6 +4,28 @@
 """gPTP µcode ROM image generator -- v8, the announce qualification and the
 Pdelay_Resp_Follow_Up pairing rounds.
 
+FPGA-gPTP #82: before any peer, and whenever none is elected, this plane is
+its own grandmaster with the path {thisClock} (802.1AS-2020 10.3.13.2.4 b,
+i). thisClock is now ROM data at two fixed words, so the engine publishes it
+from reset release; the init leg installs S_CID from the engine's copy. Three
+rules keep a departed or retained peer out of that publication:
+
+  * a reset leaves no port vector: until written, the engine reads the best
+    record as the worst possible vector, so only a newly received Announce
+    competes, against our own vector in BTCA's usual contest;
+  * Announce receipt timeout on an asCapable port becomes master, as before;
+  * a port that stops being asCapable stops contributing its vector
+    (10.3.12, DISABLED): the engine expires the receipt watch at once, and
+    BECGATE then drops an elected peer through SELF, with no mastership PHC
+    transition. BECOME also ends in SELF, so both publish one way.
+
+gmPresent is TRUE when gmPriority's priority1 is below 255 (10.3.13.2.4 g).
+gmPriority is never worse than our own vector, so a grandmaster-capable
+plane always has a grandmaster present: at reset, after a drop and as
+master alike. The image marks that capability beside thisClock, and the
+engine publishes it in flags bit 0. The µcode's own bit 0 now means only "a
+peer is elected", so BECOME no longer sets it.
+
 FPGA-gPTP #39, found while the parent integrated complete egress-stamp tags:
 the Sync counter remained wider than its 16-bit wire field. At Sync 65,536,
 its bit 16 occupied the claim's new messageType nibble, so the type-0 return
@@ -391,6 +413,19 @@ OUR_PORTNUM_C = 1               # thisPort. ONE definition, read by both
                                 # transmit and receive halves drift apart
                                 # in silence
 
+# ---- thisClock as ROM data (#82) -------------------------------------------
+# Two fixed words hold thisClock, high then low 32 bits. The engine reads
+# them from this image at configuration (KL_gptp_engine.sv mirrors both
+# addresses), so it publishes thisClock from reset release, and it serves the
+# value at publish word PUB_CID_C for the init leg to install as S_CID. No
+# program may occupy these words; the packer keeps them out of its gaps.
+ROM_CID_HI_C, ROM_CID_LO_C = 1022, 1023
+PUB_CID_C = 15
+# Bit 32 of the high word is set when thisClock is grandmaster-capable, its
+# priority1 below 255 (802.1AS-2020 10.3.13.2.4 g). The engine ORs it into
+# the published gmPresent, flags bit 0.
+ROM_GMCAP_BIT_C = 32
+
 # ---- our clock vector (Milan defaults) -------------------------------------
 P1_C, P2_C = 248, 248
 CQ_C = 0xF8FE436A               # class 248, accuracy 0xFE, variance 0x436A
@@ -446,6 +481,12 @@ def ppm_addend(ppm: int, clk_hz: int) -> int:
     return (ppm * (1 << 24) * 1000 + clk_hz // 2) // clk_hz
 
 
+def clock_identity(mac: int) -> int:
+    """thisClock for the station address `mac`: its EUI-48 with FFFE
+    inserted between the OUI and the extension identifier."""
+    return ((mac >> 24) << 40) | (0xFFFE << 24) | (mac & 0xFFFFFF)
+
+
 def set_servo_gains(clk_hz: int) -> None:
     """An addend unit adds 2^-24 ns per tick; one 125 ms sync interval is
     clk/8 ticks, so one unit is clk/8/2^24 ns of phase per interval. The
@@ -457,7 +498,8 @@ def set_servo_gains(clk_hz: int) -> None:
     assert 0 < RUNTIME["gain_m"] < (1 << 24), RUNTIME["gain_m"]
     assert 2 * RUNTIME["ilim"] + 1 < (1 << 24), RUNTIME["ilim"]
 
-# publish flags bits
+# publish flags bits. The µcode's bit 0 means a peer is elected; the engine
+# also publishes it while thisClock is grandmaster-capable (#82)
 FL_PRESENT_C, FL_AMGM_C, FL_ASCAP_C, FL_SYNCOK_C = 1, 2, 4, 8
 
 # 802.1AS-2011 Table 11-7 controlField values for every message this plane
@@ -1321,7 +1363,6 @@ def _tmr_slot_dispatch(p):
 def _tmr_init_once(p, mac, seq_seed, sync_seq_seed):
     """The init leg, taken exactly once: our clock vector, the frame
     constants derived from `mac`, and the scratch cells cleared at boot."""
-    cid = ((mac >> 24) << 40) | (0xFFFE << 24) | (mac & 0xFFFFFF)
     hdr8 = (0x0180C200000E << 16) | ((mac >> 32) & 0xFFFF)
     salo = mac & 0xFFFFFFFF
     mypv = (RUNTIME["p1"] << 56) | (CQ_C << 24) | (P2_C << 16)
@@ -1332,17 +1373,17 @@ def _tmr_init_once(p, mac, seq_seed, sync_seq_seed):
     p.emit("MOVE", rd=R0, ra=0, imm=0)
     e_const(p, RP, 1_000_000_000)
     p.emit("WRST", ra=RP, imm=RG_SCR | S_1E9, fmt=FMT_Q)
-    e_const(p, RC, cid)
+    # thisClock is the ROM's own data (ROM_CID_HI_C/ROM_CID_LO_C), which the
+    # engine serves at publish word 15 from configuration onwards (#82). The
+    # best record needs no seed: until written it reads as the worst vector
+    p.emit("RDST", rd=RC, imm=RG_PUB | PUB_CID_C, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
-    p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
-    p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     e_const(p, RC, hdr8)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_HDR8, fmt=FMT_Q)
     e_const(p, RC, salo)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_SALO, fmt=FMT_Q)
     e_const(p, RC, mypv)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_MYPV, fmt=FMT_Q)
-    p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)  # steps 0: us
     e_const(p, RC, annbody)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_ANNBODY, fmt=FMT_Q)
     e_const(p, RC, 0xC2000001)
@@ -1460,10 +1501,12 @@ def prog_leg_pdreq(base: int) -> Prog:
 
     It is a packed leg rather than the tail of the fixed timer entry for
     one measured reason: entry 512 is a 192-word slot, the dispatch, init,
-    cadence gate and cease rule above it already fill 139 words (140 in a
-    seeded regression image), and this leg is 59 words with its pairing
-    clears. Left in place it would run past entry 704. The packer puts it
-    in free space instead, which is what that two-pass assembler is for."""
+    cadence gate and cease rule above it filled 139 words (140 in a seeded
+    regression image), and this leg is 59 words with its pairing clears.
+    Left in place it would have run past entry 704. #82 has since taken
+    thisClock out of the init leg's constants (130 and 131 words). The
+    packer puts the leg in free space, which is what that two-pass
+    assembler is for."""
     p = Prog(base)
     _tmr_pdelay_request(p)
     return p
@@ -1629,29 +1672,54 @@ def prog_btca(base: int) -> Prog:
     p.emit("COMMIT")
     p.emit("END")
     p.label("we_win")
-    e_flag_gate(p, FL_AMGM_C, 0, "nm", "held")             # already GM?
-    p.emit("BR", label=LB["BECOME"])
-    p.label("held")
-    p.emit("END")
+    # BECGATE's first test is "already GM?", and this handler runs only on
+    # an asCapable port, so BECGATE continues to BECOME exactly when the
+    # removed local gate did
+    p.emit("BR", label=LB["BECGATE"])
     return p
 
 
 def prog_becgate(base: int) -> Prog:
-    """Announce receipt expiry: only an asCapable port may become master."""
+    """Announce receipt expiry, BTCA's own-vector win, and (through the
+    engine's asCapable hook) every asCapable fall (#82).
+
+    A master keeps no watch. A capable port becomes master (802.1AS-2020
+    10.3.12, AGED). An incapable port's vector no longer counts (10.3.12,
+    DISABLED): an elected peer is dropped and SELF publishes thisClock and
+    {thisClock} again, with no mastership PHC transition, while the watch
+    keeps running until the port is capable again."""
     p = Prog(base)
-    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "bg", "held")
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_AND, imm=FL_AMGM_C)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="not_gm")
+    p.emit("END")                                     # already GM
+    p.label("not_gm")
+    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_AND, imm=FL_ASCAP_C)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="held")
     p.emit("BR", label=LB["BECOME"])
     p.label("held")
-    p.emit("MOVE", rd=RT, ra=0, imm=3000)
-    p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)  # keep watching
+    p.emit("MOVE", rd=RU, ra=0, imm=3000)
+    p.emit("WRST", ra=RU, imm=RG_TMR | 2, fmt=FMT_Q)  # keep watching
+    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)
+    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="none")
+    # present and not master: a peer is elected. Drop it: no peer is
+    # elected and sync is not ok, as after a reset (asCapable and the
+    # master bit are already clear, so the whole word is zero; the engine
+    # still publishes gmPresent for thisClock)
+    p.emit("WRST", ra=0, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("BR", label=LB["SELF"])
+    p.label("none")
     p.emit("END")
     return p
 
 
 def prog_become(base: int) -> Prog:
-    """Take the grandmaster role: publish our own identity, reset the
-    best-vector record to ourselves, and swap the slave's receipt watches
-    for the Sync and Announce transmit cadences."""
+    """Take the grandmaster role: retire the slave's phase correction, swap
+    the slave's receipt watches for the Sync and Announce transmit
+    cadences, then publish ourselves through SELF."""
     p = Prog(base)
     # Retire the slave's phase correction before publishing mastership.
     # Word 3 replaces the trim with the retained rate estimate and clears
@@ -1659,6 +1727,24 @@ def prog_become(base: int) -> Prog:
     p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)
     p.emit("WRST", ra=RT, imm=RG_PHC | 3, fmt=FMT_Q)
+    # no peer is elected: gmPresent is the engine's, from the image
+    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now
+    p.emit("MOVE", rd=RT, ra=0, imm=2)
+    p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)  # announce now
+    p.emit("WRST", ra=0, imm=RG_TMR | 2, fmt=FMT_Q)   # stop the watch
+    p.emit("WRST", ra=0, imm=RG_TMR | 4, fmt=FMT_Q)   # a master expects
+    p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)   #   no sync
+    p.emit("BR", label=LB["SELF"])
+    return p
+
+
+def prog_self(base: int) -> Prog:
+    """Publish ourselves: thisClock as grandmaster and parent, the best
+    record back to our own vector and the path {thisClock}, in one COMMIT.
+    BECOME ends here, and so does BECGATE's drop of an elected peer (#82)."""
+    p = Prog(base)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 0, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)
@@ -1668,17 +1754,10 @@ def prog_become(base: int) -> Prog:
     p.emit("WRST", ra=RT, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
-    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     # A nonzero write is the self-master form of the same publication
     # transaction: one GM entry and an erased tail.
     p.emit("WRST", ra=RT, imm=RG_PUB | 6, fmt=FMT_Q)
-    p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now
-    p.emit("MOVE", rd=RT, ra=0, imm=2)
-    p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)  # announce now
-    p.emit("WRST", ra=0, imm=RG_TMR | 2, fmt=FMT_Q)   # stop the watch
-    p.emit("WRST", ra=0, imm=RG_TMR | 4, fmt=FMT_Q)   # a master expects
-    p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)   #   no sync
     p.emit("COMMIT")
     p.emit("END")
     return p
@@ -2040,7 +2119,7 @@ def prog_leg_anntx(base: int) -> Prog:
 
 LEG_FNS = [
     ("BTCA", prog_btca), ("BECOME", prog_become), ("BECGATE", prog_becgate),
-    ("RFU", prog_leg_rfu), ("SYNCFU", prog_leg_syncfu),
+    ("SELF", prog_self), ("RFU", prog_leg_rfu), ("SYNCFU", prog_leg_syncfu),
     ("SYNCTX", prog_leg_synctx), ("ANNTX", prog_leg_anntx),
     ("PDPOST", prog_leg_pdpost), ("PDPAIR", prog_leg_pdpair),
     ("PDEPOCH", prog_leg_pdepoch),
@@ -2054,7 +2133,8 @@ LEG_FNS = [
 
 def build(mac: int, seq_seed: int = 0,
           sync_seq_seed: int = 0) -> tuple[list[int], int]:
-    """The complete ROM image and how many of its words are real code.
+    """The complete ROM image and how many of its words are real: code,
+    plus the two thisClock data words.
 
     Two passes: measure every program with placeholder bases, first-fit the
     shared legs into the gaps the fixed entry table leaves, then emit with
@@ -2083,15 +2163,17 @@ def build(mac: int, seq_seed: int = 0,
 
     # Free gaps between fixed programs, including the unused 0..15 prefix.
     # The engine only dispatches the fixed entries above; shared legs can
-    # safely occupy this prefix. Reset never executes an instruction.
+    # safely occupy this prefix. Reset never executes an instruction. The
+    # two thisClock words close the image, so the last gap ends before them.
+    assert ROM_CID_HI_C + 1 == ROM_CID_LO_C == DEPTH - 1
     gaps = []
     prev_end = 0
     for b, sz in sorted(fixed_sz):
         if b > prev_end:
             gaps.append([prev_end, b])
         prev_end = b + sz
-    if prev_end < DEPTH:
-        gaps.append([prev_end, DEPTH])
+    if prev_end < ROM_CID_HI_C:
+        gaps.append([prev_end, ROM_CID_HI_C])
 
     # first-fit decreasing; every leg must land
     for name, sz in sorted(leg_sz, key=lambda x: -x[1]):
@@ -2113,6 +2195,14 @@ def build(mac: int, seq_seed: int = 0,
             assert rom[base + i] is None, f"overlap at {base + i}"
             rom[base + i] = word
         used += len(words)
+    cid = clock_identity(mac)
+    gm_capable = RUNTIME["p1"] < 255
+    for addr, word in ((ROM_CID_HI_C,
+                        (cid >> 32) | (gm_capable << ROM_GMCAP_BIT_C)),
+                       (ROM_CID_LO_C, cid & 0xFFFFFFFF)):
+        assert rom[addr] is None, f"overlap at {addr}"
+        rom[addr] = word
+        used += 1
     for i in range(DEPTH):
         if rom[i] is None:
             rom[i] = splitmix48(i)

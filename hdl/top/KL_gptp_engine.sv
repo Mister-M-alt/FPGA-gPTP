@@ -26,9 +26,9 @@
 //                  1  timestamp regs    RO  (0 ingress ts, 1 egress ts,
 //                                            2 transmit admission credit)
 //                  2  scratch RAM       RW  (64 x 64, protocol state)
-//                  3  publish bank      RW  (0 gm id, 1 parent id,
-//                                            2 flags, 3 pdelay ns,
-//                                            6 path count, 8..14 path tail)
+//                  3  publish bank      RW  (0 gm id, 1 parent id, 2 flags,
+//                                            3 pdelay ns, 6 path count, 8..14
+//                                            path tail, 15 thisClock RO)
 //                  4  PHC control       RW  (0 rate, 1 step, 2 slew verdict,
 //                                            3 integral-only rate)
 //                  5  timer arm         WO  (slot = addr, delta ms = data)
@@ -115,10 +115,10 @@ module KL_gptp_engine
     output logic [31:0] pub_pdelay_ns_o,
     output logic [31:0] pub_offset_o,  //! last sync offset, ns (signed)
     output logic [63:0] pub_annq_o,    //! last received announce vector, raw
-    //! Raw selected PathTrace publication. A present sequence reports its
-    //! complete received length including the separately published GM at slot
-    //! zero; an absent TLV reports count zero. pub_path_o carries slots 1..7,
-    //! and every inactive tail slot is zero.
+    //! Raw selected PathTrace publication: its complete received length,
+    //! including the separately published GM at slot zero, or zero for an
+    //! absent TLV. pub_path_o carries slots 1..7; inactive slots are zero.
+    //! After reset or a departed peer: thisClock and {thisClock} (#82).
     output logic  [3:0] pub_path_count_o,
     output logic [7*64-1:0] pub_path_o,
     output logic        pub_commit_o,
@@ -156,6 +156,23 @@ module KL_gptp_engine
   logic [63:0] local_clock_id_r = 64'd0;
   logic        local_clock_valid_r = 1'b0;
   /* verilator lint_on PROCASSINIT */
+
+  //! thisClock as configuration (#82). The generator stores it in two fixed
+  //! ROM words, high half then low half (ROM_CID_HI_C and ROM_CID_LO_C in
+  //! gen_gptp_ucode.py). Read them from the image the µCPU executes, so
+  //! reset can publish thisClock before any handler runs and the init leg
+  //! installs this same value as S_CID (publish bank word 15). Only those
+  //! two words of this copy are read; it is never written.
+  localparam int unsigned ROM_CID_HI_C = 1022;
+  localparam int unsigned ROM_CID_LO_C = 1023;
+  logic [UCODE_W_C-1:0] cid_img_r [0:(1<<UPC_W_C)-1];
+  initial $readmemh(UCODE_HEX_P, cid_img_r);
+  wire [63:0] rom_clock_id_w = {cid_img_r[ROM_CID_HI_C][31:0],
+                                cid_img_r[ROM_CID_LO_C][31:0]};
+  //! Bit 32 of the high word (ROM_GMCAP_BIT_C): thisClock's priority1 is
+  //! below 255. gmPriority is never worse than thisClock's own vector, so
+  //! then a grandmaster is always present (802.1AS-2020 10.3.13.2.4 g).
+  wire        rom_gm_capable_w = cid_img_r[ROM_CID_HI_C][32];
 
   KL_gptp_rx_parser u_parser (
       .clk_i        (clk_i),
@@ -238,6 +255,15 @@ module KL_gptp_engine
   //! validity the retained LUTRAM contents would present a pre-reset t1 or
   //! a pre-reset deferred pair as live. Validity is bit 0 of the write.
   logic t1v_valid_r, pdwait_valid_r;
+
+  //! The same idiom for the BTCA best record, scratch words 2 (S_BESTPV),
+  //! 3 (S_BESTID) and 20 (S_BESTSRC). A reset leaves no port vector
+  //! (802.1AS-2020 10.3.12, BEGIN), so a record retained in LUTRAM must not
+  //! outrank a live peer after it (#82). Until its first write since reset,
+  //! each cell reads all ones: the worst possible vector, which any received
+  //! Announce displaces before BTCA weighs this plane's own vector against
+  //! it. A constant keeps the scratch read address equal to the write's.
+  logic best_pv_valid_r, best_id_valid_r, best_src_valid_r;
 
   //! LUTRAM has no reset; the bitstream's initial state is the reset.
   //! µcode's init-once flag (scratch S_INIT) DEPENDS on this being zero.
@@ -621,6 +647,7 @@ module KL_gptp_engine
   logic        ucpu_tx_ready_w;
   logic [UPC_W_C-1:0] ucpu_dbg_upc_w;
   logic        ucpu_dbg_ovf_w;
+  logic        ucpu_commit_w;
 
   KL_gptp_ucpu #(
       .UCODE_HEX_P (UCODE_HEX_P)
@@ -657,7 +684,7 @@ module KL_gptp_engine
       .resp_len_o         (resp_len_w),
       .resp_status_o      (resp_status_w),
       .tx_ready_i         (ucpu_tx_ready_w),
-      .eff_commit_o       (pub_commit_o),
+      .eff_commit_o       (ucpu_commit_w),
       .eff_nvm_mark_o     (eff_nvm_mark_o),
       .eff_nvm_stb_o      (eff_nvm_stb_o),
       .eff_notify_class_o (eff_notify_class_o),
@@ -678,15 +705,11 @@ module KL_gptp_engine
   //! The wrapper samples that bank only on COMMIT, just as it already does for
   //! GM/parent. If the local vector wins, BECOME overwrites it with `[self]`
   //! before the handler's sole COMMIT; a worse Announce never executes `take`
-  //! and therefore cannot disturb the selected record. Preserve this raw path
-  //! across warm reset with the scratch best vector; outward wires are gated
-  //! to canonical zero while the reset-cleared GM is zero.
-  // The initial writer is configuration state, not a second runtime driver.
-  /* verilator lint_off MULTIDRIVEN */
-  initial begin : pub_path_poweron
-    pub_path_count_r = '0;
-    pub_path_r       = '0;
-  end
+  //! and therefore cannot disturb the selected record. Every reset loads the
+  //! self publication, thisClock and {thisClock}, and invalidates the best
+  //! record below, so only a newly received Announce competes with the local
+  //! vector (#82); outward wires stay gated to canonical zero while the raw GM
+  //! is zero.
   //! The raw public ABI is bounded to eight complete entries. Count zero is
   //! the honest publication for a selected fixed Announce without PathTrace;
   //! its GM remains separately published and every tail word is zero. Counts
@@ -738,6 +761,10 @@ module KL_gptp_engine
           st_rd_mux_w = 64'd0;
         else if ((st_addr_w[5:0] == 6'd38) && !pdwait_valid_r)
           st_rd_mux_w = 64'd0;
+        else if (((st_addr_w[5:0] == 6'd2) && !best_pv_valid_r) ||
+                 ((st_addr_w[5:0] == 6'd3) && !best_id_valid_r) ||
+                 ((st_addr_w[5:0] == 6'd20) && !best_src_valid_r))
+          st_rd_mux_w = '1;
         else
           st_rd_mux_w = scratch_r[st_addr_w[5:0]];
       end
@@ -752,6 +779,7 @@ module KL_gptp_engine
           4'd6: st_rd_mux_w = {60'd0, pub_path_count_r};
           4'd8, 4'd9, 4'd10, 4'd11, 4'd12, 4'd13, 4'd14:
             st_rd_mux_w = pub_path_r[64*(st_addr_w[3:0]-4'd8) +: 64];
+          4'd15: st_rd_mux_w = rom_clock_id_w;
           default: st_rd_mux_w = 64'd0;
         endcase
       end
@@ -767,6 +795,11 @@ module KL_gptp_engine
   //! an asCapable port regain mastership and its Sync cadence.
   logic       boot_done_r;
   logic [7:0] boot_cnt_r;
+  //! Boot publication (#82). The shadow consumer copies the bank only on
+  //! pub_commit_o, so the self publication reset loads needs a commit too.
+  //! It pulses once, on the first clock edge after release: no event can
+  //! have dispatched yet, so no handler sits between staging and COMMIT.
+  logic       boot_pub_pend_r, boot_pub_commit_r;
 `ifndef SYNTHESIS
   //! Address 7 may change raw path state before publication, but the BTCA
   //! contest must always resolve through address 6 before any COMMIT. This
@@ -780,14 +813,21 @@ module KL_gptp_engine
       st_rdata_r      <= '0;
       gx_valid_r      <= 1'b0;
       gx_data_r       <= '0;
-      pub_gm_r        <= '0;
+      //! 802.1AS-2020 10.3.13.2.4 b), i): no port vector, so thisClock is
+      //! the grandmaster and {thisClock} the path. Parent and flags keep
+      //! their reset values.
+      pub_gm_r        <= rom_clock_id_w;
       pub_parent_r    <= '0;
       pub_flags_r     <= '0;
       pub_pdelay_r    <= '0;
       pub_offset_r    <= '0;
       pub_annq_r      <= '0;
+      pub_path_count_r <= 4'd1;
+      pub_path_r       <= '0;
       boot_done_r     <= 1'b0;
       boot_cnt_r      <= '0;
+      boot_pub_pend_r   <= 1'b1;
+      boot_pub_commit_r <= 1'b0;
       phc_addend_we_o <= 1'b0;
       phc_addend_o    <= '0;
       phc_step_we_o   <= 1'b0;
@@ -801,6 +841,9 @@ module KL_gptp_engine
       resp_claim_valid_r <= 1'b0;
       t1v_valid_r        <= 1'b0;
       pdwait_valid_r     <= 1'b0;
+      best_pv_valid_r    <= 1'b0;
+      best_id_valid_r    <= 1'b0;
+      best_src_valid_r   <= 1'b0;
 `ifndef SYNTHESIS
       path_stage_pending_r <= 1'b0;
 `endif
@@ -808,10 +851,14 @@ module KL_gptp_engine
       phc_addend_we_o <= 1'b0;
       phc_step_we_o   <= 1'b0;
       tmr_arm_we_w    <= 1'b0;
+      boot_pub_commit_r <= boot_pub_pend_r;
+      boot_pub_pend_r   <= 1'b0;
 `ifndef SYNTHESIS
       if (local_clock_valid_r &&
           (local_clock_id_r != scratch_r[6'd25]))
         $error("PathTrace local clock mirror differs from ucode S_CID");
+      if (local_clock_valid_r && (local_clock_id_r != rom_clock_id_w))
+        $error("ucode S_CID differs from the ROM thisClock words");
       if (pub_commit_o && path_stage_pending_r)
         $error("PathTrace COMMIT before BTCA path contest resolved");
       if (pub_commit_o && (pub_path_count_r == 4'd0) &&
@@ -864,6 +911,13 @@ module KL_gptp_engine
               t1v_valid_r <= st_wdata_w[0];
             if (st_addr_w[5:0] == 6'd38)
               pdwait_valid_r <= st_wdata_w[0];
+            // Slots mirror S_BESTPV=2, S_BESTID=3 and S_BESTSRC=20.
+            if (st_addr_w[5:0] == 6'd2)
+              best_pv_valid_r <= 1'b1;
+            if (st_addr_w[5:0] == 6'd3)
+              best_id_valid_r <= 1'b1;
+            if (st_addr_w[5:0] == 6'd20)
+              best_src_valid_r <= 1'b1;
           end
           4'd3: begin
             unique case (st_addr_w[3:0])
@@ -876,6 +930,16 @@ module KL_gptp_engine
                 if (phc_slew_active_o &&
                     (!st_wdata_w[2] || !st_wdata_w[3]))
                   phc_slew_left_r <= 2'd2;
+                //! #82: a port that stops being asCapable stops contributing
+                //! its vector (802.1AS-2020 10.3.12, DISABLED). Whichever
+                //! handler clears bit 2, expire the Announce receipt watch
+                //! (slot 2) now; its leg then drops an elected peer. No µcode
+                //! timer write can share this cycle's single state write.
+                if (pub_flags_r[2] && !st_wdata_w[2]) begin
+                  tmr_arm_we_w    <= 1'b1;
+                  tmr_arm_slot_w  <= 3'd2;
+                  tmr_arm_delta_w <= 32'd1;
+                end
               end
               4'd3: pub_pdelay_r <= st_wdata_w[31:0];
               4'd4: pub_offset_r <= st_wdata_w[31:0];
@@ -958,17 +1022,20 @@ module KL_gptp_engine
       end
     end
   end
-  /* verilator lint_on MULTIDRIVEN */
 
   assign pub_gm_id_o     = pub_gm_r;
   assign pub_parent_id_o = pub_parent_r;
-  assign pub_flags_o     = pub_flags_r;
+  //! gmPresent (#82): the µcode's bit 0 marks an elected peer; a
+  //! grandmaster-capable thisClock is present whenever none is
+  assign pub_flags_o     = {pub_flags_r[31:1],
+                            pub_flags_r[0] | rom_gm_capable_w};
   assign pub_pdelay_ns_o = pub_pdelay_r;
   assign pub_offset_o    = pub_offset_r;
   assign pub_annq_o      = pub_annq_r;
   assign pub_path_count_o = (pub_gm_r == 64'd0) ? 4'd0
                                                  : pub_path_count_r;
   assign pub_path_o       = (pub_gm_r == 64'd0) ? '0 : pub_path_r;
+  assign pub_commit_o     = ucpu_commit_w || boot_pub_commit_r;
 
   // ------------------------------------------------------------ TX slot
   KL_gptp_tx_slot u_txslot (

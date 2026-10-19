@@ -104,7 +104,7 @@ The microCPU uses `st_addr_o[19:16]` for selection.
 | 0 | Read-only | Ping-pong message banks |
 | 1 | Read-only | Ingress time, egress time, credit |
 | 2 | Read-write | Sixty-four protocol scratch words |
-| 3 | Read-write | Publication staging bank |
+| 3 | Read-write | Publication staging bank; word 15 reads thisClock |
 | 4 | Read-write | PHC controls and policy completion qualifier |
 | 5 | Write-only | Timer arming interface |
 
@@ -113,6 +113,10 @@ Scratch storage survives warm resets.
 Resettable claim-valid bits do not survive.
 
 Pairing validity bits do not survive either.
+
+Nor do the three best-record validity bits.
+
+An unwritten best cell reads as the worst possible vector.
 
 The PHC slew qualifier also resets independently.
 
@@ -136,11 +140,25 @@ The hook preserves the active level and applied rate.
 
 While inactive, these writes must leave qualification unarmed.
 
+A falling bit 2 also expires timer slot 2 now.
+
+That slot runs the Announce receipt leg.
+
 Preserve this coupling when changing either region or flag.
+
+Microcode bit 0 means only that a peer is elected.
+
+The output also sets bit 0 for a grandmaster-capable thisClock.
+
+ROM word 1022 bit 32 marks that capability.
+
+Microcode reads of word 2 return the unmodified bits.
 
 ## MicroCPU shape
 
-- ROM contains 1,024 forty-eight-bit instructions.
+- ROM contains 1,024 forty-eight-bit words.
+- Its last two words hold thisClock as data.
+- Bit 32 of word 1022 marks grandmaster capability.
 - Register storage contains sixteen sixty-four-bit words.
 - Integer logic supports common sixty-four-bit operations.
 - Shifts run serially.
@@ -172,6 +190,16 @@ Microcode stages publication values first.
 Consumers sample only during `pub_commit_o`.
 
 Inactive path entries must remain zero.
+
+Reset loads thisClock and the path {thisClock}.
+
+The engine reads thisClock from the image at configuration.
+
+Publication word 15 serves that value to microcode.
+
+The engine commits the reset state on its first edge.
+
+No handler can run before that commit.
 
 ## Out-of-context measurement
 
