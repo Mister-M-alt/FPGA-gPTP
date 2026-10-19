@@ -1850,7 +1850,8 @@ def _pdpost_pairing_gates(p):
     # neighborPropDelay, the ladder and asCapable stay where they are.
     # This leg is the Follow_Up handler's only continuation; it lives
     # here rather than in the fixed slot so SERVO keeps its 48-word home
-    # behind that slot (the ROM is 88 percent full; see the packer)
+    # behind that slot (the ROM is nearly full; docs/MANAGER.md states the
+    # current budget)
     # the portNumber half of prog_rx_pdrfu's requesting-identity check,
     # which is the ENGINE'S OWN hardening and not an arm of the figure
     # (the figure names the sequenceId and the sourcePortIdentity, the

@@ -100,11 +100,11 @@ See the [historical resource record](history/v1/RESOURCE_VALIDATION.md).
 
 ## Current ROM budget
 
-Shipping usage: 1,013 of 1,024 words (98.9%).
+Shipping usage: 1,015 of 1,024 words (99.1%).
 
 That count includes thisClock's two data words at 1022..1023.
 
-Only eleven words remain free, spread across packing gaps.
+Only nine words remain free, spread across packing gaps.
 
 Shared legs may occupy the formerly reserved prefix.
 
