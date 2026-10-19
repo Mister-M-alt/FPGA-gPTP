@@ -69,9 +69,12 @@ The three rules now run ahead of every write the handler makes:
     therefore consumes one coherent qualification bit rather than walking a
     truncated storage window.
 
-(d)'s pathTrace copy for a SlavePort is moot on a single-port end station: a
-slave port transmits no Announce (the ANNTX leg is gated on the master role),
-so the global array has no reader here.
+(d)'s pathTrace copy for a SlavePort, with thisClock appended (802.1AS-2020
+10.3.13.2.4 f) 5), #85), is the published path, which the parent serves to
+GET_AS_PATH (IEEE 1722.1-2021 7.4.41).
+Only its Announce transmit side has no reader on a single-port end station:
+a slave port transmits no Announce (the ANNTX leg is gated on the master
+role).
 
 FPGA-gPTP #8, found by the parent's field campaign: the
 Pdelay_Resp_Follow_Up handler qualified requestingPortIdentity and
