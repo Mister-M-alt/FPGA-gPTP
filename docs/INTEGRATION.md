@@ -299,6 +299,8 @@ These events clear the synchronization verdict and keep the lock:
 - A 375 ms Sync receipt timeout.
 - This plane returning from grandmaster duty.
 
+Becoming grandmaster sets the verdict instead.
+
 A grandmaster failover through a Sync lapse stays locked.
 
 So the next pair uses the 100 us threshold.
@@ -461,6 +463,30 @@ Retained paths contain at most eight identities.
 
 Inactive path entries remain zero.
 
+### Path of an elected peer
+
+[Issue #85](https://github.com/Mister-M-alt/FPGA-gPTP/issues/85) records this rule.
+
+802.1AS-2020 clause 10.3.13.2.4 defines it.
+
+Its item f5 is the slave port case.
+
+The path is the received pathSequence plus thisClock.
+
+thisClock is therefore the last published entry.
+
+A directly attached grandmaster publishes two entries.
+
+An absent PathTrace still publishes count zero.
+
+Seven received entries fill all eight slots.
+
+Longer received paths publish their first eight entries.
+
+Those entries are also pathTrace's first eight.
+
+The grandmaster and its path change in one commit.
+
 ### Before any peer
 
 [Issue #82](https://github.com/Mister-M-alt/FPGA-gPTP/issues/82) defines this self publication.
@@ -506,6 +532,32 @@ A capable thisClock sets gmPresent in every publication.
 That includes reset, both departures and mastership.
 
 With priority1 255, only an elected peer sets it.
+
+### Grandmaster synchronization
+
+[Issue #84](https://github.com/Mister-M-alt/FPGA-gPTP/issues/84) records this rule.
+
+A grandmaster's own time is the domain's time.
+
+So mastership counts as synchronized.
+
+Flags bit 1 and bit 3 are therefore set together.
+
+A Sync receipt timeout never clears bit 3 during mastership.
+
+The parent derives tu from bit 3.
+
+Its tu therefore clears during mastership.
+
+Taking mastership from a peer changes the published grandmaster.
+
+That change arms the parent's Annex B.1.1 holdover.
+
+Handing mastership to a peer clears bit 3.
+
+The first consumed Sync pair sets it again.
+
+A self publication without mastership leaves bit 3 clear.
 
 ### Selection after reset
 

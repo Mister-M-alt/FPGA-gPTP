@@ -134,6 +134,8 @@ Region 3, word 2 writes trigger this hook.
 
 Bit 2 means asCapable; bit 3 means sync-ok.
 
+Mastership sets bit 3 beside bit 1.
+
 Either cleared bit reloads two completion pairs while active.
 
 The hook preserves the active level and applied rate.
@@ -200,6 +202,14 @@ Publication word 15 serves that value to microcode.
 The engine commits the reset state on its first edge.
 
 No handler can run before that commit.
+
+Region 3, word 7 stages a taken Announce's path.
+
+That write appends thisClock to a nonempty received path.
+
+The appended entry uses the same image words.
+
+Eight received entries leave it no slot.
 
 ## Out-of-context measurement
 

@@ -69,9 +69,12 @@ The three rules now run ahead of every write the handler makes:
     therefore consumes one coherent qualification bit rather than walking a
     truncated storage window.
 
-(d)'s pathTrace copy for a SlavePort is moot on a single-port end station: a
-slave port transmits no Announce (the ANNTX leg is gated on the master role),
-so the global array has no reader here.
+(d)'s pathTrace copy for a SlavePort, with thisClock appended (802.1AS-2020
+10.3.13.2.4 f) 5), #85), is the published path, which the parent serves to
+GET_AS_PATH (IEEE 1722.1-2021 7.4.41).
+Only its Announce transmit side has no reader on a single-port end station:
+a slave port transmits no Announce (the ANNTX leg is gated on the master
+role).
 
 FPGA-gPTP #8, found by the parent's field campaign: the
 Pdelay_Resp_Follow_Up handler qualified requestingPortIdentity and
@@ -501,6 +504,9 @@ def set_servo_gains(clk_hz: int) -> None:
 # publish flags bits. The µcode's bit 0 means a peer is elected; the engine
 # also publishes it while thisClock is grandmaster-capable (#82)
 FL_PRESENT_C, FL_AMGM_C, FL_ASCAP_C, FL_SYNCOK_C = 1, 2, 4, 8
+# the left shift that carries the master bit onto sync-ok (prog_leg_srto)
+SYNCOK_BY_AMGM_C = 2
+assert FL_AMGM_C << SYNCOK_BY_AMGM_C == FL_SYNCOK_C
 
 # 802.1AS-2011 Table 11-7 controlField values for every message this plane
 # transmits. Keep the map exhaustive so adding a TX message cannot silently
@@ -1621,8 +1627,9 @@ def prog_btca(base: int) -> Prog:
     p.emit("WRST", ra=RB, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
     p.emit("WRST", ra=RD_, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     # Stage this taken Announce's frozen PathTrace into the raw publish bank.
-    # Address 7 atomically copies the count/tail-only publication snapshot and
-    # clears inactive tail words. Handler reads independently use the compact
+    # Address 7 atomically copies the count/tail-only publication snapshot,
+    # appends thisClock to a nonempty path (#85) and clears inactive tail
+    # words. Handler reads independently use the compact
     # serial ann_ctx_r port; spending fourteen ROM words to copy the same path
     # through that port would overflow this deliberately full µcode image.
     # `they_win` is also reachable from a later worse Announce, so that later
@@ -1727,8 +1734,14 @@ def prog_become(base: int) -> Prog:
     p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)
     p.emit("WRST", ra=RT, imm=RG_PHC | 3, fmt=FMT_Q)
-    # no peer is elected: gmPresent is the engine's, from the image
-    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)
+    # no peer is elected: gmPresent is the engine's, from the image. The
+    # grandmaster's own time is the domain's time, so the master role is
+    # synchronised (#84). A commit that replaces a peer grandmaster with
+    # thisClock arms the parent's Milan v1.2 Annex B.1.1 holdover. When
+    # the publication already names thisClock (from reset, or after a self
+    # publication), this commit changes no grandmaster and arms none: the
+    # parent's tu falls here unless an earlier holdover is still running
+    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now
     p.emit("MOVE", rd=RT, ra=0, imm=2)
@@ -1843,7 +1856,8 @@ def _pdpost_pairing_gates(p):
     # neighborPropDelay, the ladder and asCapable stay where they are.
     # This leg is the Follow_Up handler's only continuation; it lives
     # here rather than in the fixed slot so SERVO keeps its 48-word home
-    # behind that slot (the ROM is 88 percent full; see the packer)
+    # behind that slot (the ROM is nearly full; docs/MANAGER.md states the
+    # current budget)
     # the portNumber half of prog_rx_pdrfu's requesting-identity check,
     # which is the ENGINE'S OWN hardening and not an arm of the figure
     # (the figure names the sequenceId and the sourcePortIdentity, the
@@ -1982,9 +1996,21 @@ def prog_leg_resume(base: int) -> Prog:
 
 def prog_leg_srto(base: int) -> Prog:
     """Sync receipt timeout (375 ms): the sync-ok verdict falls. The servo
-    stays locked, so the next pair still uses the locked threshold (#68)."""
+    stays locked, so the next pair still uses the locked threshold (#68).
+
+    A master keeps its verdict (#84). BECOME disarms this watch, but a
+    disarm cannot recall an expiry already queued behind BECOME's own
+    event. So sync-ok survives here exactly where the master bit stands:
+    the flags shifted left by SYNCOK_BY_AMGM_C put bit 1 on bit 3, and the
+    other three bits pass. Branch-free, because a gated form is two words
+    longer and the packer then has no gap for it."""
     p = Prog(base)
-    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=SYNCOK_BY_AMGM_C)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_OR,
+           imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
+    p.emit("ALU", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)
+    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)
     p.emit("COMMIT")
     p.emit("END")
     return p

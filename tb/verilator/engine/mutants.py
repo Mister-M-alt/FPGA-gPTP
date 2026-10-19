@@ -42,6 +42,12 @@ through two good Pdelay exchanges at 1 s cadence. Only mastership disarms
 that watch, and mastership retires the qualifier itself. This is a
 reachability argument from the current policy, not an executed proof;
 revisit it if the timer or capability recovery rules change.
+
+An absent PathTrace's tail words have no arm either (#85). The engine's
+own simulation assertion stops the run when a commit pairs count zero with
+a nonzero tail word, so such a mutant aborts before any check can grade
+it, and an abort is not a catch. The absent-path probe grades its count
+and its commit instead, and a fabricated entry there is caught.
 """
 
 from __future__ import annotations
@@ -254,14 +260,19 @@ MUTATIONS = [
      "the servo stays locked across a grandmaster identity change"),
     # only an asCapable rise re-arms the link-up (the manager's ruling on
     # #68): each of these two re-adds a retired re-arm
+    # word-neutral, because the packer has no gap for a longer receipt
+    # timeout leg (#84): a slave's timeout as before, plus the unlock
     ("a receipt timeout unlocks the servo", GENERATOR,
-     "    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n",
-     "    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=SYNCOK_BY_AMGM_C)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_OR,\n"
+     "           imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n",
+     "    p.emit(\"MOVE\", rd=RU, ra=0,"
+     " imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a Sync receipt timeout"),
     ("becoming grandmaster unlocks the servo", GENERATOR,
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n"
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a return from mastership"),
     ("the locked threshold is 200 us", GENERATOR,
@@ -275,10 +286,6 @@ MUTATIONS = [
      "  # rose: link-up\n",
      "",
      "the first pair after asCapable rises, or after a reset, is a link-up"),
-    ("becoming grandmaster keeps sync-ok", GENERATOR,
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
-     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C, orm=FL_AMGM_C)\n",
-     "becoming grandmaster clears the sync-ok verdict"),
     ("the whole trim is not clamped", GENERATOR,
      "    e_sat(p, RT, RUNTIME[\"ilim\"], \"sv_a\")                    "
      "# +-200 ppm\n",
@@ -378,7 +385,13 @@ MUTATIONS = [
      "    p.emit(\"WRST\", ra=RW, imm=RG_PUB | 0, fmt=FMT_Q)\n",
      "",
      "#82 peer wins: its commit names the peer GM"
-     " | #82 warm reset: the live worse peer wins, not the absent A"),
+     " | #82 warm reset: the live worse peer wins, not the absent A"
+     " | #84 the run hands mastership to a peer"
+     " | #85 direct grandmaster: elected"
+     " | #85 multi-hop grandmaster: elected"
+     " | #85 seven received entries: elected"
+     " | #85 eight received entries: elected"
+     " | #85 absent path: elected"),
     ("a winning peer's path is not staged", GENERATOR,
      "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 7, fmt=FMT_Q)\n",
      "",
@@ -391,7 +404,12 @@ MUTATIONS = [
      "    p.emit(\"WRST\", ra=RC, imm=RG_PUB | 1, fmt=FMT_Q)\n",
      "#82 peer leaves: the mastership commit names thisClock"
      " | #82 Pdelay loss: thisClock is committed within 2 ms of the fall"
-     " | #82 Pdelay loss: that mastership names thisClock, {thisClock}"),
+     " | #82 Pdelay loss: that mastership names thisClock, {thisClock}"
+     " | #85 direct grandmaster: the degraded grandmaster yields"
+     " | #85 multi-hop grandmaster: the degraded grandmaster yields"
+     " | #85 seven received entries: the degraded grandmaster yields"
+     " | #85 eight received entries: the degraded grandmaster yields"
+     " | #85 absent path: the degraded grandmaster yields"),
     ("the self publication keeps the departed path", GENERATOR,
      "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 6, fmt=FMT_Q)",
      "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 6, fmt=FMT_Q)",
@@ -468,9 +486,145 @@ MUTATIONS = [
      " | p1 255 #82 Pdelay loss: the drop commit's flags are gmPresent alone"
      " | p1 255 #82 Pdelay loss: that mastership commit has gmPresent"),
     ("mastership sets the microcode's presence bit", GENERATOR,
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
-     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C | FL_AMGM_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C,"
+     " orm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)\n",
      "p1 255 #82 Pdelay loss: that mastership commit has gmPresent"),
+    # ---- #84: the master role is synchronised ----------------------------
+    # Each control lists, after "#84 ", every named check it must fail.
+    ("becoming grandmaster clears sync-ok", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C)\n",
+     "#84 first mastership: the master flags carry sync-ok"
+     " | #84 takeover: its commit names thisClock with sync-ok"
+     " | #84 every master cycle publishes sync-ok"
+     " | p1 255 #84 first mastership: the master flags carry sync-ok"
+     " | p1 255 #84 every master cycle publishes sync-ok"),
+    ("a queued receipt timeout clears a master's sync-ok", GENERATOR,
+     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL,"
+     " imm=SYNCOK_BY_AMGM_C)\n",
+     "    p.emit(\"MOVE\", rd=RU, ra=0, imm=0)\n",
+     "#84 takeover: a queued receipt timeout keeps sync-ok"
+     " | #84 every master cycle publishes sync-ok"),
+    ("the receipt timeout publishes nothing", GENERATOR,
+     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"COMMIT\")\n",
+     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n",
+     "#84 takeover: the queued receipt timeout commits after it"),
+    ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
+     "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
+     "                 disp_ready_w && !disp_valid_r;",
+     "#84 takeover: nothing commits while dispatch is held"),
+    ("mastership never publishes the master bit", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_SYNCOK_C)\n",
+     "#84 master cycles were graded"
+     " | p1 255 #84 master cycles were graded"),
+    ("a handover to a peer keeps sync-ok", GENERATOR,
+     "    e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)\n",
+     "    e_flags(p, andm=FL_ASCAP_C | FL_SYNCOK_C, orm=FL_PRESENT_C)\n",
+     "#84 every handover to a peer grandmaster clears sync-ok"
+     " | p1 255 #84 every handover to a peer grandmaster clears sync-ok"),
+    # ---- #85: the received pathSequence plus thisClock --------------------
+    # Each control lists, after "#85 ", every named check it must fail.
+    ("the received path is published without thisClock",
+     "top/KL_gptp_engine.sv",
+     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
+     "                             (ann_pub_count_clamped_w != 4'd8);\n",
+     "  wire       path_append_w = 1'b0;\n",
+     "#85 direct grandmaster: count"
+     " | #85 direct grandmaster: tail 1"
+     " | #85 direct grandmaster: its commit names the grandmaster and path"
+     " | #85 multi-hop grandmaster: count"
+     " | #85 multi-hop grandmaster: tail 5"
+     " | #85 multi-hop grandmaster: its commit names the grandmaster and path"
+     " | #85 seven received entries: count"
+     " | #85 seven received entries: tail 7"
+     " | #85 seven received entries: its commit names the grandmaster and"
+     " path"
+     " | #85 every peer path ends with thisClock"
+     " | p1 255 #85 every peer path ends with thisClock"
+     " | #82 peer wins: its commit carries the peer path"
+     " | #82 warm reset: the live peer carries its own path"
+     " | #82 Pdelay loss: once capable, a live peer worse than D wins"
+     " | adopt appends thisClock as path tail 4"
+     " | worse announce retains path A tail 4"
+     " | worse TLV-less announce retains path A tail 4"
+     " | parent refresh appends thisClock"
+     " | unknown before path current parent: tail 3"
+     " | post-release C appends thisClock"),
+    ("thisClock is appended to an absent path", "top/KL_gptp_engine.sv",
+     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
+     "                             (ann_pub_count_clamped_w != 4'd8);\n",
+     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd8);\n",
+     "#85 absent path: count"
+     " | #85 absent path: its commit names the grandmaster and path"),
+    ("eight received entries take a ninth", "top/KL_gptp_engine.sv",
+     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
+     "                             (ann_pub_count_clamped_w != 4'd8);\n",
+     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0);\n",
+     "#85 eight received entries: count"
+     " | #85 eight received entries: its commit names the grandmaster and"
+     " path"),
+    ("seven received entries leave thisClock out", "top/KL_gptp_engine.sv",
+     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
+     "                             (ann_pub_count_clamped_w != 4'd8);\n",
+     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
+     "                             (ann_pub_count_clamped_w < 4'd7);\n",
+     "#85 seven received entries: count"
+     " | #85 seven received entries: tail 7"),
+    ("thisClock lands one slot early", "top/KL_gptp_engine.sv",
+     "                           (4'(pk + 1) == ann_pub_count_clamped_w))\n",
+     "                           (4'(pk + 2) == ann_pub_count_clamped_w))\n",
+     "#85 direct grandmaster: tail 1"
+     " | #85 multi-hop grandmaster: tail 5"
+     " | #85 every peer path ends with thisClock"),
+    ("thisClock fills every later slot", "top/KL_gptp_engine.sv",
+     "                           (4'(pk + 1) == ann_pub_count_clamped_w))\n",
+     "                           (4'(pk + 1) >= ann_pub_count_clamped_w))\n",
+     "#85 direct grandmaster: tail 2"
+     " | #85 direct grandmaster: tail 3"
+     " | #85 direct grandmaster: tail 4"
+     " | #85 direct grandmaster: tail 5"
+     " | #85 direct grandmaster: tail 6"
+     " | #85 direct grandmaster: tail 7"
+     " | #85 multi-hop grandmaster: tail 6"
+     " | #85 multi-hop grandmaster: tail 7"),
+    ("the appended entry is the announcing source", "top/KL_gptp_engine.sv",
+     "                    pub_path_r[64*pk +: 64] <= rom_clock_id_w;\n",
+     "                    pub_path_r[64*pk +: 64] <= frame_cid_r;\n",
+     "#85 direct grandmaster: tail 1"
+     " | #85 multi-hop grandmaster: tail 5"
+     " | #85 every peer path ends with thisClock"),
+    ("the received entries are not copied", "top/KL_gptp_engine.sv",
+     "                    pub_path_r[64*pk +: 64] <=\n"
+     "                        ann_pub_tail_r[64*pk +: 64];\n",
+     "                    pub_path_r[64*pk +: 64] <= 64'd0;\n",
+     "#85 multi-hop grandmaster: tail 1"
+     " | #85 multi-hop grandmaster: tail 2"
+     " | #85 multi-hop grandmaster: tail 3"
+     " | #85 multi-hop grandmaster: tail 4"
+     " | #85 seven received entries: tail 1"
+     " | #85 seven received entries: tail 2"
+     " | #85 seven received entries: tail 3"
+     " | #85 seven received entries: tail 4"
+     " | #85 seven received entries: tail 5"
+     " | #85 seven received entries: tail 6"
+     " | #85 eight received entries: tail 1"
+     " | #85 eight received entries: tail 2"
+     " | #85 eight received entries: tail 3"
+     " | #85 eight received entries: tail 4"
+     " | #85 eight received entries: tail 5"
+     " | #85 eight received entries: tail 6"
+     " | #85 eight received entries: tail 7"),
+    ("every received path is published empty", "top/KL_gptp_engine.sv",
+     "  wire [3:0] ann_pub_count_clamped_w = (ann_pub_count_r > 8'd8)\n"
+     "      ? 4'd8 : ann_pub_count_r[3:0];\n",
+     "  wire [3:0] ann_pub_count_clamped_w = 4'd0;\n",
+     "#85 peer commits with a path were graded"
+     " | p1 255 #85 peer commits with a path were graded"),
 ]
 
 
@@ -574,9 +728,10 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
             answer = "missed its named check"
         else:
             print(named[0])
-    # #82 controls must fail every check they name, for the same
-    # reason: each of those checks needs its own failing defect.
-    if breaks.startswith(("#82 ", P1_PREFIX)) and answer == "caught":
+    # #82, #84 and #85 controls must fail every check they name, for the
+    # same reason: each of those checks needs its own failing defect.
+    if breaks.startswith(("#82 ", "#84 ", "#85 ", P1_PREFIX)) and \
+            answer == "caught":
         failed = [line for line in output.splitlines()
                   if line.startswith("FAIL ")]
         missed = [want for want in breaks.split(" | ")
