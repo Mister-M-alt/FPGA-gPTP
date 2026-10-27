@@ -732,7 +732,7 @@ MUTATIONS = [
      PT_HDR_BAD_HEAD +
      "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r)));\n",
      "#88 empty path: elected"
-     " | #88 empty path: count"
+     " | #88 empty path: its commit names the grandmaster and path"
      " | #88 empty path from the parent: count"
      " | #88 empty path from the parent: parser accepts"),
     # The {grandmasterIdentity, tail} sequence no peer sent: entry 0 taken

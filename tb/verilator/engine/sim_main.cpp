@@ -2649,12 +2649,14 @@ class GptpEngineHarness {
     grade_the_published_path("#88 empty path from the parent", G2, G2_S,
                              {OUR_CID},
                              [&] { send_announce(56, 5, G2, 1, G2_S, {},
-                                                 8900000, true); });
+                                                 8900000, true); },
+                             true);
     const std::vector<uint64_t> x_path = {G2_X, G2_S, OUR_CID};
     grade_the_published_path("#88 parent path headed elsewhere", G2, G2_S,
                              x_path,
                              [&] { send_announce(57, 5, G2, 1, G2_S,
-                                                 {G2_X, G2_S}, 8950000); });
+                                                 {G2_X, G2_S}, 8950000); },
+                             true);
     grade_the_published_path("#87 parent refresh without a TLV", G2, G2_S,
                              x_path,
                              [&] { send_announce(58, 5, G2, 1, G2_S, {},
@@ -2668,10 +2670,12 @@ class GptpEngineHarness {
 
   //! One 8p step: `step` sends its Announce, then the plane
   //! publishes `gm`, `parent` and exactly `path` from entry 0, in a commit
-  //! that carries them together, with no parser drop.
+  //! that carries them together. `parser_canary` also grades no parser drop,
+  //! for the #88 shapes the parser once refused.
   template <typename Step>
   void grade_the_published_path(const char *tag, uint64_t gm, uint64_t parent,
-                                const std::vector<uint64_t> &path, Step step) {
+                                const std::vector<uint64_t> &path, Step step,
+                                bool parser_canary = false) {
     char n[112];
     const size_t c0 = commit_snaps.size();
     const uint16_t d0 = dut->dbg_rx_drop_o;
@@ -2691,8 +2695,10 @@ class GptpEngineHarness {
     const PubSnap *s = last_commit_since(c0);
     snprintf(n, sizeof n, "%s: its commit names the grandmaster and path", tag);
     expect(n, s && s->gm == gm && committed_path_is(*s, path), 1);
-    snprintf(n, sizeof n, "%s: parser accepts", tag);
-    expect(n, dut->dbg_rx_drop_o, d0);
+    if (parser_canary) {
+      snprintf(n, sizeof n, "%s: parser accepts", tag);
+      expect(n, dut->dbg_rx_drop_o, d0);
+    }
   }
 
   // ---- 9: better announce -> adopt, sync stops --------------------------
