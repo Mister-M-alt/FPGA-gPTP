@@ -187,9 +187,21 @@
 //         without steering, lets the next Announce re-elect the grandmaster
 //         once. Sync every 250 ms keeps it deferring, and a Follow_Up 60 ms
 //         after its Sync is used
+// 40      #89, after 39: an expiry ages the port whatever role it finds.
+//         One usable pair heard as master, then Sync lost again, leaves
+//         the next Announce aged; one 124 ms after the pair re-elects.
+//         Mastership from an Announce lapse leaves the Sync watch running,
+//         and a Sync pending at the takeover keeps its 125 ms Follow_Up
+//         watch: its Follow_Up 200 ms later pairs with nothing, 60 ms later
+//         it is heard
+// 41      #89, the fourth pass only, after 36: ageing on Sync needs
+//         gmPresent. The aged port refuses a priority1 1 Announce, elects a
+//         better priority1 255 peer and keeps it 4 s without Sync, then
+//         a priority1 1 Announce ages at once and this plane is master
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
-// the phases a self publication passes through: boot, mastership and 36..38.
+// the phases a self publication passes through: boot, mastership, 36..38
+// and 41.
 // There thisClock is not grandmaster-capable, so gmPresent stays clear in
 // every self publication and is set only while a capable peer is elected
 // (10.3.13.2.4 g). Its checks print with a "p1 255 " prefix.
@@ -292,6 +304,7 @@ class GptpEngineHarness {
     raise_ascapable_on_the_second_exchange();
     become_master_on_announce_receipt_timeout();
     drop_a_peer_whose_pdelay_stops();
+    age_only_while_a_grandmaster_is_present();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -383,6 +396,7 @@ class GptpEngineHarness {
     return_to_thisclock_around_a_winning_peer();
     drop_a_peer_whose_pdelay_stops();
     age_a_grandmaster_whose_sync_fails();
+    age_the_port_whatever_role_the_timeout_finds();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -3985,8 +3999,17 @@ class GptpEngineHarness {
   // the link-up (the manager's ruling), so the servo is still locked on
   // the return from mastership: 50 us ahead, the first pair after the
   // re-adoption slews with no step pulse. The first pair after asCapable
-  // falls and returns is a link-up: 25 us behind, it steps once
+  // falls and returns is a link-up: 25 us behind, it steps once. Phase
+  // 19's queued receipt timeout found the master role, yet the port's
+  // syncReceiptTimeoutTime had passed all the same (802.1AS-2011 10.3.11),
+  // so the grandmaster's Announce is aged at once until its Sync is heard
   void stop_consuming_sync_when_ascapable_falls() {
+    announce(0x042B, 100, GMID, 0, PEER_CID);
+    expect("#89 takeover: the queued receipt timeout leaves the port aged",
+           (dut->pub_flags_o & (FL_PRESENT | FL_AMGM)) ==
+                   (FL_PRESENT | FL_AMGM) &&
+               dut->pub_gm_id_o == OUR_CID, 1);
+    hear_a_pair_as_master(0x04FF, TRX6 + 4500000000ull);
     announce(43, 100, GMID, 0, PEER_CID);        // adopt again
     expect("re-adopted", dut->pub_flags_o & 3, FL_PRESENT);
     expect("return from mastership: asCapable held",
@@ -5328,6 +5351,10 @@ class GptpEngineHarness {
            self ? self->flags : ~0u, self_present);
 
     const size_t still0 = commit_snaps.size();
+    // the first comes inside D's Sync receipt watch: once that runs out, the
+    // aged mark refuses D's Announces as well (#89), so only this one shows
+    // that the asCapable gate refuses them by itself
+    send_announce(seq++, 1, GMD, 2, SRCD, path_d, phc() + 100);
     for (int beat = 0; beat < 3; beat++) {
       run_svc(2000000);
       send_announce(seq++, 1, GMD, 2, SRCD, path_d, phc() + 100);
@@ -5493,9 +5520,9 @@ class GptpEngineHarness {
   // to AGED on currentTime >= syncReceiptTimeoutTime && gmPresent. Figure
   // 10-4 (Cor1) refreshes that time on any Sync an asCapable port takes, so
   // an aged port stays aged until Sync returns, whatever its Announces do.
-  // Phase 36 left GME just adopted from mastership, whose BECOME disarmed
-  // the watch, and GME sends no Sync at all: only its adoption can start
-  // the watch. Then GMS's Sync fails in each shape of the issue while its
+  // Phase 36 left GME just adopted from mastership, whose watch had run
+  // out while the port was incapable, and GME sends no Sync at all: only
+  // its adoption can start the watch. Then GMS's Sync fails in each shape of the issue while its
   // Announce continues: the plane takes over within syncReceiptTimeout and
   // one BMCA pass of the last usable pair, holds mastership without
   // oscillating while the shape lasts, and returns to GMS once when Sync
@@ -5578,6 +5605,149 @@ class GptpEngineHarness {
                  adj_seen.size() == a0 + 8 &&
                  static_cast<uint32_t>(dut->pub_offset_o) == 0, 1);
     }
+  }
+
+  //! #89: a usable pair heard as master clears the aged mark, its next
+  //! Announce elects GMS, and usable Sync with an Announce keeps it elected
+  void return_to_gms() {
+    s39_interval(SyncShape::usable, 250000, false);
+    s39_announce();
+    for (int k = 0; k < 8; k++) s39_interval(SyncShape::usable, 250000, k == 5);
+  }
+
+  //! #89: from a slave of GMS, its Announces stop while usable Sync runs on
+  //! until 125 ms before the 3 s Announce watch lapses, and then Sync stops
+  //! too. BECOME takes mastership with the Sync watch still running, so its
+  //! expiry 125 ms later marks the port and the next Announce elects
+  //! nothing. Returns to GMS. True when the lapse made this plane master and
+  //! that Announce elected nothing
+  bool outlive_mastership_with_the_sync_watch() {
+    s39_announce();                                     // its watch: 3 s
+    for (int k = 0; k < 23; k++)
+      s39_interval(SyncShape::usable, 250000, false);
+    const bool slave = (dut->pub_flags_o & 3) == FL_PRESENT;
+    const bool lapsed = wait_flags(FL_AMGM, FL_AMGM, 400000ull);
+    run_svc(800000);                                    // the Sync watch ends
+    const size_t c0 = commit_snaps.size();
+    s39_announce();
+    const bool aged = !a_commit_since_names(c0, GMS) &&
+                      (dut->pub_flags_o & FL_AMGM) == FL_AMGM;
+    return_to_gms();
+    return slave && lapsed && aged;
+  }
+
+  //! #89: from a slave of GMS with usable Sync, a Sync parked 339 ms after
+  //! the last usable pair still waits for its Follow_Up when the sync
+  //! receipt timeout makes this plane master 36 ms later. That Follow_Up
+  //! comes `fu_cyc` after its Sync, then GMS announces 100 ms later. 1 when
+  //! that Announce elected GMS, 0 when it elected nothing, and -1 when the
+  //! takeover did not land between the Sync and its Follow_Up
+  int park_a_sync_across_the_takeover(uint64_t fu_cyc) {
+    const uint64_t p0 = cyc;
+    s39_interval(SyncShape::usable, 4000, false);       // the last usable pair
+    run_svc(680000 - (cyc - p0));
+    const uint64_t local = phc() + 150;
+    const uint16_t seq = s39_sync_seq++;
+    Frame f = ptp(0x0, seq, 0, 0x0208, 10, SRCS);
+    f.ts(0);
+    const uint64_t sync_cyc = cyc;
+    send_frame(f.b, local);
+    run(1000);
+    const bool slave = (dut->pub_flags_o & 3) == FL_PRESENT;
+    const bool master = wait_flags(FL_AMGM, FL_AMGM, 200000ull);
+    const bool before = master && cyc - sync_cyc < fu_cyc;
+    if (before) run_svc(fu_cyc - (cyc - sync_cyc));
+    Frame g = follow_up(seq, 0, local - static_cast<uint64_t>(pdm.d), SRCS);
+    send_frame(g.b, local + (cyc - sync_cyc) * 500);
+    run(1000);
+    run_svc(200000);
+    const size_t c0 = commit_snaps.size();
+    s39_announce();
+    if (!slave || !before) return -1;
+    return a_commit_since_names(c0, GMS) ? 1 : 0;
+  }
+
+  // ---- 40: #89, a sync receipt timeout ages the port whatever role ------
+  // 802.1AS-2011 10.3.11 (Figure 10-13 as corrected by Cor1) ages the
+  // port's information whenever currentTime >= syncReceiptTimeoutTime &&
+  // gmPresent, and only a received Sync moves that time, so the role the
+  // port held when the time passed does not matter. From phase 39's slave of
+  // GMS: Sync stops, a lone usable pair is heard as master and Sync stops
+  // again, so GMS's Announce 624 ms after that pair is aged at once, while
+  // one 124 ms after a lone pair elects GMS. Mastership won by an Announce
+  // lapse leaves the watch running. A Sync parked when the timeout makes
+  // this plane master keeps its 125 ms Follow_Up watch (11.2.13): a
+  // Follow_Up 200 ms after it pairs with nothing, and one 60 ms after it is
+  // heard as master and lets the next Announce elect GMS
+  void age_the_port_whatever_role_the_timeout_finds() {
+    pd_mode = PD_NORMAL;
+    for (int k = 0; k < 4; k++) s39_interval(SyncShape::stopped, 250000, false);
+    const size_t c0 = commit_snaps.size();
+    s39_interval(SyncShape::usable, 250000, false);
+    for (int k = 0; k < 4; k++) s39_interval(SyncShape::stopped, 250000, false);
+    s39_announce();
+    expect("#89 a lone pair heard as master: a later Announce elects nothing",
+           !a_commit_since_names(c0, GMS) &&
+               (dut->pub_flags_o & FL_AMGM) == FL_AMGM, 1);
+    s39_interval(SyncShape::usable, 250000, false);
+    s39_announce();
+    expect("#89 a lone pair heard as master: an Announce inside its watch "
+           "elects the grandmaster",
+           (dut->pub_flags_o & 3) == FL_PRESENT && dut->pub_gm_id_o == GMS, 1);
+    for (int k = 0; k < 8; k++) s39_interval(SyncShape::usable, 250000, k == 5);
+    expect("#89 Announce lapse: a sync receipt timeout after mastership ages "
+           "the next Announce", outlive_mastership_with_the_sync_watch(), 1);
+    expect("#89 parked Sync: a Follow_Up 200 ms after it pairs with nothing",
+           park_a_sync_across_the_takeover(400000), 0);
+    return_to_gms();
+    expect("#89 parked Sync: a Follow_Up 60 ms after it, after the takeover, "
+           "is heard", park_a_sync_across_the_takeover(120000), 1);
+    for (int k = 0; k < 16; k++)
+      s39_interval(SyncShape::usable, 250000, k % 8 == 5);
+  }
+
+  // ---- 41: #89, sync receipt ageing needs gmPresent (priority1 255 pass) ---
+  // gmPresent is TRUE only while the grandmaster's priority1 is below 255
+  // (802.1AS-2011 10.2.3.13, 10.3.12.1.4 g), and 10.3.11 ages on a sync
+  // receipt timeout only with it. Phase 36 adopted GME, which sends no Sync,
+  // so its port is aged and marked. A priority1 1 grandmaster's Announce
+  // there is aged at once. A better priority1 255 peer, whose election
+  // leaves gmPresent FALSE, is elected and stays elected through 4 s of
+  // Announces without Sync. A priority1 1 Announce on that still-aged port
+  // is aged at once again, and this plane becomes master
+  void age_only_while_a_grandmaster_is_present() {
+    const uint64_t G255 = 0x0000000000000101ull;
+    const uint64_t S255 = 0x0000000000000102ull;
+    const uint64_t GP = 0x0089B0FFFE000001ull;
+    const uint64_t SP = 0x0089B0FFFE000002ull;
+    uint16_t seq = 0x8B01;
+    pd_mode = PD_NORMAL;
+    wait_flags(FL_AMGM, FL_AMGM, 900000ull);
+    run(200);
+    size_t c0 = commit_snaps.size();
+    send_announce(seq++, 1, GP, 1, SP, {GP, SP}, phc() + 100);
+    expect("#89 gmPresent: a priority1 1 Announce on the aged port elects "
+           "nothing", !a_commit_since_names(c0, GP) &&
+                          (dut->pub_flags_o & FL_AMGM) == FL_AMGM, 1);
+    send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+    expect("#89 gmPresent: the aged port elects a priority1 255 grandmaster",
+           (dut->pub_flags_o & 3) == FL_PRESENT && dut->pub_gm_id_o == G255, 1);
+    c0 = commit_snaps.size();
+    for (int k = 0; k < 4; k++) {
+      run_svc(2000000);
+      send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+    }
+    expect("#89 gmPresent: a priority1 255 grandmaster without Sync stays "
+           "elected", !a_commit_since_names(c0, OUR_CID) &&
+                          (dut->pub_flags_o & 3) == FL_PRESENT &&
+                          dut->pub_gm_id_o == G255, 1);
+    c0 = commit_snaps.size();
+    send_announce(seq++, 1, GP, 1, SP, {GP, SP}, phc() + 100);
+    run(200);
+    expect("#89 gmPresent: a priority1 1 Announce on the aged port makes "
+           "this plane master", !a_commit_since_names(c0, GP) &&
+                                    (dut->pub_flags_o & FL_AMGM) == FL_AMGM &&
+                                    dut->pub_gm_id_o == OUR_CID, 1);
   }
 
   //! #82: every commit of the whole run that names thisClock, whatever

@@ -12,17 +12,23 @@ by Cor1 and Cor2, the edition Milan v1.2 profiles:
     exactly as on announce receipt timeout. The 375 ms watch (timer slot
     4, 3 x 125 ms, 10.6.3.1 and Milan v1.2 Table 4.2) is restarted by
     every usable Sync/Follow_Up pair and by the adoption of a new
-    grandmaster. On expiry a slave of an elected peer runs BMCA again
-    through BECOME. The v4 rule below, where expiry only cleared sync-ok,
-    is retired.
+    grandmaster. On expiry a slave of an elected peer whose grandmaster
+    has priority1 below 255 runs BMCA again through BECGATE. gmPresent is
+    FALSE under a priority1 255 grandmaster (10.2.3.13, 10.3.12.1.4 g), so
+    its slave is never aged by Sync. The v4 rule below, where expiry only
+    cleared sync-ok, is retired.
   * An aged port stays aged until Sync returns. Cor1 strikes the parent
     condition from Figure 10-4, so any Sync on an asCapable port refreshes
-    syncReceiptTimeoutTime, whatever the port's role. A master still pairs
-    the aged peer's Sync and Follow_Up, steering nothing. Until such a pair
-    arrives, that peer's Announces are aged at once and leave the plane
-    master. So the plane does not oscillate between master and slave at
-    the Announce rate while Sync is broken. The first usable pair re-opens
-    election, and the peer's next Announce is adopted once.
+    syncReceiptTimeoutTime, whatever the port's role, and nothing else
+    moves it. So every expiry marks the port, whatever role it finds, and
+    mastership stops neither the Sync watch nor a pending Sync's 125 ms
+    Follow_Up watch (11.2.13). A master still pairs the aged peer's Sync
+    and Follow_Up, steering nothing. Until such a pair arrives, every
+    Announce with gmPresent is aged at once and leaves the plane master.
+    So the plane does not oscillate between master and slave at the
+    Announce rate while Sync is broken, nor when one pair is heard and
+    Sync breaks again. The first usable pair re-opens election, and the
+    peer's next Announce is adopted once.
   * lostResponses (11.2.15.3, Figure 11-8 RESET): an interval that ends
     without a completed exchange increments the count while it is at most
     allowedLostResponses (3), and only otherwise clears asCapable. Four
@@ -410,13 +416,15 @@ S_SYNCSRC = 45   # the pending Sync's sourcePortIdentity. Read only behind
                  # a nonzero S_SYNCTS, and prog_rx_sync writes both in one
                  # straight-line block, so the pair carries over a warm
                  # reset together (the S_T3 idiom); no init write
-S_SRTO = 46      # the role flags (ROLE_MASK_C) the last sync receipt
-                 # timeout found. ROLE_SLAVE_C means that timeout aged this
-                 # port: until a usable Sync/Follow_Up pair (SRWATCH) or an
-                 # asCapable rise (PDPAIR) clears it, the port takes no
-                 # Announce. Every value it holds is read in an asCapable
-                 # period that started with that rise, so a warm reset
-                 # cannot carry a stale mark into a live port.
+S_SRTO = 46      # SRTO_PASSED_C from a sync receipt timeout, whatever role
+                 # it found, until a usable Sync/Follow_Up pair (SRWATCH)
+                 # or an asCapable rise (PDPAIR) writes zero: the port's
+                 # syncReceiptTimeoutTime has passed. An Announce whose
+                 # grandmaster's {priority1, clockClass, clockAccuracy}
+                 # compares below the cell would make gmPresent TRUE, so it
+                 # is aged at once. Every value it holds is read in an
+                 # asCapable period that started with that rise, so a warm
+                 # reset cannot carry a stale mark into a live port.
 # S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
 # (steps ranks BELOW the identity in 10.3.5, so it never joins the
 # packed compare -- the pv compare masks the low 16 first)
@@ -488,6 +496,12 @@ LOST_N_C = 3                    # allowedLostResponses, 802.1AS-2011 11.5.3
 LOST_CLEARS_AT_C = LOST_N_C + 2
 SYNC_RTO_MS_C = 375             # syncReceiptTimeout, Table 4.2
 FU_RTO_MS_C = 125               # followUpReceiptTimeout, Table 4.2
+# gmPresent is TRUE exactly when the grandmaster's priority1 is below 255
+# (802.1AS-2011 10.2.3.13, 10.3.12.1.4 g). A vector's {priority1,
+# clockClass, clockAccuracy}, its bits 63:40 as S_BESTPV and BTCA hold it,
+# compares below this value exactly when its priority1 is below 255. It is
+# also the aged mark S_SRTO holds, so one compare asks both questions
+SRTO_PASSED_C = 0xFF << 16
 CEASE_N_C = 3                   # successive multi-answered reqs, 4.2.6.2.5
 CEASE_MS_C = 300_000            # resume after 5 min (--cease-ms overrides)
                                 # counted down in 1 s cadence beats
@@ -851,7 +865,12 @@ def prog_rx_sync(base: int) -> Prog:
     written here are the pending Sync's own; none is a master's.
     """
     p = Prog(base)
-    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "out")
+    # asCapable or out, branching out on the clear bit: one word less
+    # than e_flag_gate, which the #89 receipt rules spend
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=FL_ASCAP_C)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="out")
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_BANK | 0, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_HDR, fmt=FMT_Q)
@@ -868,7 +887,8 @@ def prog_rx_followup(base: int) -> Prog:
     """Follow_Up receipt (entry 64): pair it with the pending Sync on
     sequenceId and sourcePortIdentity. A slave publishes the offset (local
     minus master, less correctionField and the link delay), then runs
-    SERVO. A master only restarts the sync receipt watch (SRWATCH, #89)."""
+    SERVO. A master only restarts the sync receipt watch and clears the
+    aged mark (SRWATCH, #89)."""
     p = Prog(base)
     e_guard_init(p, "out")
     # Only an asCapable slave of an elected peer or an asCapable master
@@ -1038,13 +1058,6 @@ def prog_rx_announce(base: int) -> Prog:
     e_guard_init(p, "out")
     # 802.1AS: a port that is not asCapable does not enter the contest
     e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, "ac", "out")
-    # 802.1AS-2011 10.3.11 (Figure 10-13, Cor1): a port its sync receipt
-    # timeout aged stays aged while that time stands. Any Announce would be
-    # aged again at once, so the plane stays master and takes none until a
-    # usable Sync/Follow_Up pair clears the mark (#89)
-    p.emit("RDST", rd=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)
-    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=ROLE_SLAVE_C)
-    p.emit("BRS", cnd=BRS_Z, label="out")
     # ---- 10.3.10.2.1 qualifyAnnounce, ahead of every write -----------
     # (a) sent by this time-aware system: sourcePortIdentity.clockIdentity
     #     equal to thisClock (IEEE 1588-2008 9.3.2.5 a); an Announce that
@@ -1075,6 +1088,17 @@ def prog_rx_announce(base: int) -> Prog:
     p.emit("RDST", rd=RA, imm=RG_BANK | 8, fmt=FMT_Q)   # their {utc,p1,cq,p2}
     p.emit("WRST", ra=RA, imm=RG_PUB | 5, fmt=FMT_Q)    # publish raw: bench
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_SHL, imm=16)  # {p1,cq,p2,0}
+    # 802.1AS-2011 10.3.11 (Figure 10-13, Cor1): while the port's
+    # syncReceiptTimeoutTime has passed, information received with a
+    # grandmaster of priority1 below 255 (gmPresent) is aged at once, so it
+    # elects nothing and BECGATE leaves or makes the plane master. A
+    # priority1 255 grandmaster leaves gmPresent FALSE and competes as ever.
+    # Only a usable Sync/Follow_Up pair or an asCapable rise clears the
+    # mark (#89)
+    p.emit("ALU", rd=RU, ra=RA, rb=0, cnd=ALU_SHR, imm=40)  # {p1,class,acc}
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)
+    p.emit("CMP", ra=RU, rb=RT, fmt=FMT_D)
+    p.emit("BRS", cnd=BRS_LT, label=LB["BECGATE"])
     p.emit("RDST", rd=RB, imm=RG_BANK | 9, fmt=FMT_Q)   # their gm identity
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_ADD, imm=1)  # steps+1
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_AND, imm=0xFFFF)
@@ -1858,8 +1882,10 @@ def prog_become(base: int) -> Prog:
     p.emit("MOVE", rd=RT, ra=0, imm=2)
     p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)  # announce now
     p.emit("WRST", ra=0, imm=RG_TMR | 2, fmt=FMT_Q)   # stop the watch
-    p.emit("WRST", ra=0, imm=RG_TMR | 4, fmt=FMT_Q)   # a master expects
-    p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)   #   no sync
+    # The port's Sync watches run on (#89). syncReceiptTimeoutTime is the
+    # port's, so an expiry after this still marks it (10.3.11). A parked
+    # Sync keeps its Follow_Up watch (11.2.13), so a Follow_Up later than
+    # followUpReceiptTimeout pairs with nothing in the master role either
     p.emit("BR", label=LB["SELF"])
     return p
 
@@ -2110,24 +2136,35 @@ def prog_leg_resume(base: int) -> Prog:
 
 
 def prog_leg_srto(base: int) -> Prog:
-    """Sync receipt timeout (375 ms, #89): an asCapable slave of an elected
-    peer ages that peer's information, exactly as on announce receipt
-    timeout, and BMCA runs again (802.1AS-2011 10.3.11, Figure 10-13 as
+    """Sync receipt timeout (375 ms, #89): syncReceiptTimeoutTime has
+    passed. The port is marked, whatever role the expiry found, and an
+    elected peer whose grandmaster has priority1 below 255 is aged exactly
+    as on announce receipt timeout (802.1AS-2011 10.3.11, Figure 10-13 as
     corrected by Cor1: CURRENT to AGED when currentTime >=
-    syncReceiptTimeoutTime && gmPresent). On this single port the plane's
-    own vector is then the best, so BECOME takes the grandmaster role.
+    syncReceiptTimeoutTime && gmPresent). BECGATE then runs BMCA again: on
+    this single port the plane's own vector is the best, so BECOME takes
+    the grandmaster role.
 
-    The role it found is recorded in S_SRTO, and only ROLE_SLAVE_C is an
-    aged port. Every other role ends here untouched: a master keeps its
-    sync-ok (#84; a disarm cannot recall an expiry already queued behind
-    BECOME's own event), and an incapable or unelected port has no
-    received information to age. The servo stays locked (#68)."""
+    A master is only marked: it keeps its sync-ok (#84), and its peer's
+    next Announce is aged at once. A priority1 255 grandmaster leaves
+    gmPresent FALSE (10.3.12.1.4 g), so its slave stays elected. An
+    incapable port has no information to age, and its mark ends at the
+    asCapable rise. The servo stays locked (#68).
+
+    Branch-free: the presence bit less one is zero for an elected peer and
+    all ones otherwise, so OR-ed into the elected vector's bits 63:40 it
+    compares below SRTO_PASSED_C exactly for a peer with gmPresent."""
     p = Prog(base)
-    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
-    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=ROLE_MASK_C)
+    p.emit("MOVE", rd=RT, ra=0, imm=SRTO_PASSED_C)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)
-    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=ROLE_SLAVE_C)
-    p.emit("BRS", cnd=BRS_Z, label=LB["BECOME"])
+    p.emit("RDST", rd=RU, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)
+    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)
+    p.emit("RDST", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
+    p.emit("ALU", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)
+    p.emit("ALU", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)
+    p.emit("CMP", ra=RU, rb=RT, fmt=FMT_D)
+    p.emit("BRS", cnd=BRS_LT, label=LB["BECGATE"])
     p.emit("END")
     return p
 
