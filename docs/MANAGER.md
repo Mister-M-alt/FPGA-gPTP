@@ -100,11 +100,11 @@ See the [historical resource record](history/v1/RESOURCE_VALIDATION.md).
 
 ## Current ROM budget
 
-Shipping usage: 1,018 of 1,024 words (99.4%).
+Shipping usage: 1,021 of 1,024 words (99.7%).
 
 That count includes thisClock's two data words at 1022..1023.
 
-Only six words remain free, spread across packing gaps.
+Only three words remain free, spread across packing gaps.
 
 Each seeded regression image uses one more word.
 
@@ -114,7 +114,7 @@ That prefix spans addresses 0..15.
 
 The current map places `SERVO@0` in that prefix.
 
-`FUTO@190` sits outside it.
+`FUTO@254` sits outside it.
 
 Engine dispatch entries start at address 16.
 

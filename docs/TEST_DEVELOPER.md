@@ -122,10 +122,14 @@ Prefer independent protocol formulas and frame builders.
 - Holds mastership while the aged peer keeps announcing.
 - Re-elects that peer once, after its Sync recovers.
 - Keeps 250 ms Sync and 60 ms Follow_Ups in use.
+- Ages again when Sync lapses after one master-heard pair.
+- Ages on expiries found in the master role.
+- Keeps a pending Sync's Follow_Up watch across the takeover.
+- Never ages a priority1 255 grandmaster on Sync.
 - Keeps asCapable through four lost Pdelay responses.
 - Clears asCapable at the fifth, in each loss shape.
 - Resets an exchange answered by duplicate responses.
-- Clears it on every handover to a peer.
+- Clears sync-ok on every handover to a peer.
 - Appends thisClock to direct and multi-hop received paths.
 - Checks the seven-entry, eight-entry and absent path boundaries.
 - Ends every committed peer path with thisClock.

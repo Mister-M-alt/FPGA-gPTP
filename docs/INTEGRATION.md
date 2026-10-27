@@ -600,6 +600,12 @@ Adopting a new grandmaster starts its 375 ms Sync watch.
 
 A grandmaster never sending usable Sync is aged too.
 
+The watch belongs to the port, not to its role.
+
+Mastership leaves it running (802.1AS-2011 10.3.11).
+
+So an expiry found in the master role ages too.
+
 A port aged by Sync stays aged until usable Sync.
 
 Until then its Announces are aged at once.
@@ -612,7 +618,23 @@ Such a pair steers nothing and publishes nothing.
 
 The next Announce after it elects the peer again, once.
 
+That pair restarts the watch, so lapsing Sync ages again.
+
+A Sync pending at takeover keeps its 125 ms watch.
+
+A later Follow_Up pairs with nothing in either role.
+
 An asCapable rise also clears that aged state.
+
+Ageing on Sync also requires gmPresent (10.3.11).
+
+gmPresent needs a grandmaster priority1 below 255.
+
+So a priority1 255 grandmaster is never aged by Sync.
+
+An aged port still elects such a grandmaster.
+
+Published flags bit 0 keeps its own meaning, described above.
 
 Losing asCapable drops the peer's vector at once.
 

@@ -191,13 +191,23 @@ Every usable Sync pair restarts it, in either role.
 
 Adopting a new grandmaster starts it as well.
 
-Its expiry ages an elected peer through BECOME.
+BECOME stops neither the Sync nor the Follow_Up watch.
 
-Scratch word 46 records the role that expiry found.
+Every expiry marks the port aged in scratch word 46.
 
-Only the slave value marks the port aged.
+It then ages an elected peer through BECGATE.
 
-An aged port drops every Announce.
+That needs the peer's grandmaster priority1 below 255.
+
+The mark is `SRTO_PASSED_C`, a priority threshold.
+
+An aged port ages each Announce below that threshold.
+
+That is a grandmaster priority1 below 255, so gmPresent.
+
+BECGATE then keeps or makes this plane master.
+
+Other Announces compete as usual.
 
 A usable pair or an asCapable rise clears that mark.
 
