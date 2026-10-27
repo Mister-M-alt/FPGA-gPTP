@@ -21,36 +21,30 @@ GENERATOR = "ucode/gen_gptp_ucode.py"
 #: (name, file under hdl/, pattern, replacement, the checks it must fail)
 RECEIPT_MUTATIONS = [
     # ---- #89: sync receipt timeout ages the port ---------------------------
-    # word-neutral: the presence term is dropped and the expiry goes straight
-    # to BECOME, so a timeout queued behind mastership runs it a second time
-    ("a queued receipt timeout ages a master", GENERATOR,
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"RDST\", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)\n"
-     "    p.emit(\"CMP\", ra=RU, rb=RT, fmt=FMT_D)\n"
-     "    p.emit(\"BRS\", cnd=BRS_LT, label=LB[\"BECGATE\"])\n",
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=0)\n"
-     "    p.emit(\"RDST\", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)\n"
-     "    p.emit(\"CMP\", ra=RU, rb=RT, fmt=FMT_D)\n"
-     "    p.emit(\"BRS\", cnd=BRS_LT, label=LB[\"BECOME\"])\n",
-     "#89 takeover: the queued receipt timeout ages nothing"),
+    # word-neutral: the presence term is read as set, so a master's expiry
+    # takes thisClock's own vector for an elected peer's: BECGATE leaves the
+    # master as it is, and the queued timeout commits nothing
+    ("an expiry takes a master's own vector for a peer's", GENERATOR,
+     "    p.emit(\"ALU\", rd=RV, ra=RT, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n",
+     "    p.emit(\"MOVE\", rd=RV, ra=0, imm=FL_PRESENT_C)\n",
+     "#84 takeover: the queued receipt timeout commits after it"),
     # the leg as main 55680bff shipped it, seven words, which its gap holds:
     # sync-ok falls unless mastership stands, and nothing is aged
     ("a sync receipt timeout only clears sync-ok", GENERATOR,
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SRTO_PASSED_C)\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
-     "    p.emit(\"RDST\", rd=RU, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"RDST\", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)\n"
-     "    p.emit(\"CMP\", ra=RU, rb=RT, fmt=FMT_D)\n"
+     "    p.emit(\"MOVE\", rd=RU, ra=0, imm=SRTO_PASSED_C)\n"
+     "    p.emit(\"WRST\", ra=RU, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
+     "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RV, ra=RT, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
+     "    p.emit(\"MD\", rd=RV, ra=RV, rb=RU, cnd=MD_MULS)    "
+     "# the mark, or zero\n"
+     "    p.emit(\"RDST\", rd=RW, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RW, ra=RW, rb=0, cnd=ALU_SHR, imm=53)  "
+     "# p1,class[7:5]\n"
+     "    p.emit(\"CMP\", ra=RW, rb=RV, fmt=FMT_D)\n"
      "    p.emit(\"BRS\", cnd=BRS_LT, label=LB[\"BECGATE\"])\n"
-     "    p.emit(\"END\")\n",
+     "    p.emit(\"MASK\", rd=RT, ra=R0, rb=RV)               "
+     "# RT & ~RV\n"
+     "    p.emit(\"BR\", label=LB[\"PUBFLAGS\"])\n",
      "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
      "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=2)\n"
      "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_OR, imm=7)\n"
@@ -63,30 +57,35 @@ RECEIPT_MUTATIONS = [
      " | #89 Follow_Up after the next Sync: the plane takes mastership within"
      " | #89 Follow_Up with the next sequenceId: the plane takes mastership"
      " within"),
-    # the round-1 rule, one word longer: only an expiry that ages an elected
+    # the rule at d27a1654, one word longer: only an expiry that ages an elected
     # peer leaves the mark, so one found in the master role is forgotten
     ("only an expiry that ages a slave marks the port", GENERATOR,
-     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
-     "    p.emit(\"RDST\", rd=RU, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"RDST\", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)\n"
-     "    p.emit(\"CMP\", ra=RU, rb=RT, fmt=FMT_D)\n"
+     "    p.emit(\"MOVE\", rd=RU, ra=0, imm=SRTO_PASSED_C)\n"
+     "    p.emit(\"WRST\", ra=RU, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
+     "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RV, ra=RT, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
+     "    p.emit(\"MD\", rd=RV, ra=RV, rb=RU, cnd=MD_MULS)    "
+     "# the mark, or zero\n"
+     "    p.emit(\"RDST\", rd=RW, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RW, ra=RW, rb=0, cnd=ALU_SHR, imm=53)  "
+     "# p1,class[7:5]\n"
+     "    p.emit(\"CMP\", ra=RW, rb=RV, fmt=FMT_D)\n"
      "    p.emit(\"BRS\", cnd=BRS_LT, label=LB[\"BECGATE\"])\n"
-     "    p.emit(\"END\")\n",
-     "    p.emit(\"RDST\", rd=RU, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"RDST\", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)\n"
-     "    p.emit(\"CMP\", ra=RU, rb=RT, fmt=FMT_D)\n"
+     "    p.emit(\"MASK\", rd=RT, ra=R0, rb=RV)               "
+     "# RT & ~RV\n"
+     "    p.emit(\"BR\", label=LB[\"PUBFLAGS\"])\n",
+     "    p.emit(\"MOVE\", rd=RU, ra=0, imm=SRTO_PASSED_C)\n"
+     "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RV, ra=RT, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
+     "    p.emit(\"MD\", rd=RV, ra=RV, rb=RU, cnd=MD_MULS)\n"
+     "    p.emit(\"RDST\", rd=RW, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RW, ra=RW, rb=0, cnd=ALU_SHR, imm=53)\n"
+     "    p.emit(\"CMP\", ra=RW, rb=RV, fmt=FMT_D)\n"
      "    p.emit(\"BRS\", cnd=BRS_LT, label=\"aged\")\n"
-     "    p.emit(\"END\")\n"
+     "    p.emit(\"MASK\", rd=RT, ra=R0, rb=RV)\n"
+     "    p.emit(\"BR\", label=LB[\"PUBFLAGS\"])\n"
      "    p.label(\"aged\")\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RU, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
      "    p.emit(\"BR\", label=LB[\"BECGATE\"])\n",
      "#89 takeover: the queued receipt timeout leaves the port aged"
      " | #89 a lone pair heard as master: a later Announce elects nothing"
@@ -95,12 +94,24 @@ RECEIPT_MUTATIONS = [
     # word-neutral: the elected grandmaster's priority1 is read as zero, so a
     # priority1 255 grandmaster is aged as if gmPresent were TRUE
     ("sync receipt ageing ignores gmPresent", GENERATOR,
-     "    p.emit(\"ALU\", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)\n",
-     "    p.emit(\"MOVE\", rd=RV, ra=0, imm=0)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)\n",
+     "    p.emit(\"ALU\", rd=RW, ra=RW, rb=0, cnd=ALU_SHR, imm=53)  "
+     "# p1,class[7:5]\n",
+     "    p.emit(\"MOVE\", rd=RW, ra=0, imm=0)\n",
      "p1 255 #89 gmPresent: a priority1 255 grandmaster without Sync stays"
      " elected"),
+    # word-neutral: the flags are committed as they stand, so a slave of a
+    # priority1 255 grandmaster keeps sync-ok after its Sync stops
+    ("a sync receipt timeout that ages nothing keeps sync-ok", GENERATOR,
+     "    p.emit(\"MASK\", rd=RT, ra=R0, rb=RV)               # RT & ~RV\n",
+     "    p.emit(\"NOP\")\n",
+     "p1 255 #89 gmPresent: when its Sync stops, sync-ok clears within"
+     " syncReceiptTimeout and the peer stays elected"),
+    # one word shorter: a slave's consumed pair publishes the flags unchanged
+    ("a consumed pair leaves sync-ok down", GENERATOR,
+     "    e_flags(p, orm=FL_SYNCOK_C)\n",
+     "    e_flags(p)\n",
+     "p1 255 #89 gmPresent: a priority1 255 grandmaster's usable Sync raises"
+     " sync-ok"),
     ("adoption leaves the Sync receipt watch off", GENERATOR,
      "    # A parent refresh (same_gm) restarts nothing\n"
      "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n"
@@ -110,8 +121,8 @@ RECEIPT_MUTATIONS = [
      "#89 never usable: the grandmaster is aged"
      " | #89 never usable: within syncReceiptTimeout of its adoption"),
     ("an aged port takes Announces", GENERATOR,
-     "    p.emit(\"ALU\", rd=RU, ra=RA, rb=0, cnd=ALU_SHR, imm=40)  "
-     "# {p1,class,acc}\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RA, rb=0, cnd=ALU_SHR, imm=53)  "
+     "# p1,class[7:5]\n"
      "    p.emit(\"RDST\", rd=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
      "    p.emit(\"CMP\", ra=RU, rb=RT, fmt=FMT_D)\n"
      "    p.emit(\"BRS\", cnd=BRS_LT, label=LB[\"BECGATE\"])\n",
@@ -126,8 +137,8 @@ RECEIPT_MUTATIONS = [
     # word-neutral: the Announce's priority1 is read as zero, so the aged
     # port refuses a priority1 255 grandmaster as if gmPresent were TRUE
     ("an aged port refuses a priority1 255 grandmaster", GENERATOR,
-     "    p.emit(\"ALU\", rd=RU, ra=RA, rb=0, cnd=ALU_SHR, imm=40)  "
-     "# {p1,class,acc}\n",
+     "    p.emit(\"ALU\", rd=RU, ra=RA, rb=0, cnd=ALU_SHR, imm=53)  "
+     "# p1,class[7:5]\n",
      "    p.emit(\"MOVE\", rd=RU, ra=0, imm=0)\n",
      "p1 255 #89 gmPresent: the aged port elects a priority1 255 grandmaster"),
     # word-neutral: the aged Announce is dropped, so a slave of a priority1
@@ -141,7 +152,7 @@ RECEIPT_MUTATIONS = [
      "    p.emit(\"RDST\", rd=RB, imm=RG_BANK | 9, fmt=FMT_Q)",
      "p1 255 #89 gmPresent: a priority1 1 Announce on the aged port makes"
      " this plane master"),
-    # BECOME as round 1 shipped it: one word longer each, which the ROM holds
+    # BECOME as d27a1654 had it: one word longer each, which the ROM holds
     ("mastership stops the Sync receipt watch", GENERATOR,
      "    p.emit(\"WRST\", ra=0, imm=RG_TMR | 2, fmt=FMT_Q)   # stop the watch\n",
      "    p.emit(\"WRST\", ra=0, imm=RG_TMR | 2, fmt=FMT_Q)   # stop the watch\n"

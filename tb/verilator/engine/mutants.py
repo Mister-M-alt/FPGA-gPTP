@@ -265,8 +265,8 @@ MUTATIONS = [
     # #68): each of these two re-adds a retired re-arm
     # one word longer, which the ROM still holds (#89)
     ("a receipt timeout unlocks the servo", GENERATOR,
-     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n",
-     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
+     "    p.emit(\"WRST\", ra=RU, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n",
+     "    p.emit(\"WRST\", ra=RU, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a Sync receipt timeout"),
     ("becoming grandmaster unlocks the servo", GENERATOR,
@@ -500,19 +500,11 @@ MUTATIONS = [
      " | #84 every master cycle publishes sync-ok"
      " | p1 255 #84 first mastership: the master flags carry sync-ok"
      " | p1 255 #84 every master cycle publishes sync-ok"),
-    # word-neutral: every expiry clears sync-ok, a master's included. The
-    # two words come from the elected priority1's read, so every elected
-    # grandmaster is also taken as present, which only the p1 255 pass sees
+    # word-neutral: the mask is the mark itself, so every expiry that ages
+    # nothing clears sync-ok, a master's included
     ("a queued receipt timeout clears a master's sync-ok", GENERATOR,
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"RDST\", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)\n",
-     "    p.emit(\"ALU\", rd=RV, ra=RU, rb=0, cnd=ALU_AND,"
-     " imm=~FL_SYNCOK_C & 0xFF)\n"
-     "    p.emit(\"WRST\", ra=RV, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)\n",
+     "    p.emit(\"MASK\", rd=RT, ra=R0, rb=RV)               # RT & ~RV\n",
+     "    p.emit(\"MASK\", rd=RT, ra=R0, rb=RU)               # RT & ~RV\n",
      "#84 takeover: a queued receipt timeout keeps sync-ok"
      " | #84 every master cycle publishes sync-ok"),
     # ---- #89, #90 and #91: receipt_mutants.py -----------------------------
