@@ -27,9 +27,14 @@ The eighth is the defect the ruling in #35 asks for: a refused frame's words
 may stay in the write bank, so a clean frame behind it that skips one field
 write would hand its event the refused frame's word.
 
-The last restores the PathTrace refusal #88 retired: a hop count other than
-stepsRemoved+1 refused the whole Announce, which 802.1AS-2011 10.3.10.2.1
-does not allow.
+The last six belong to #87 and #88. Two restore PathTrace refusals #88
+retired, a hop count other than stepsRemoved+1 and a first entry other than
+grandmasterIdentity: each refused the whole Announce, which 802.1AS-2011
+10.3.10.2.1 does not allow. One reports grandmasterIdentity in place of the
+received head, the sequence the head refusal existed to prevent, and one
+restores the refusal of an empty pathSequence. The other three lose or
+fabricate the TLV's presence, which 10.3.10.2.1 d) needs to tell an empty
+path from no path (#87).
 """
 
 from __future__ import annotations
@@ -83,19 +88,47 @@ PT_HDR_BAD_HEAD = (
     "       ((ann_tlv_type_w == 16'h0008) &&\n")
 PT_HDR_BAD = (
     PT_HDR_BAD_HEAD +
-    "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r)));\n")
+    "        (ann_tlv_len_w[2:0] || pt_seen_r)));\n")
 PT_HDR_BAD_WITH_COUNT = (
     "  logic [15:0] mut_steps_r;\n"
     "  always_ff @(posedge clk_i)\n"
     "    if (rx_valid_i && (cnt_r == 11'd76)) mut_steps_r <= acc_nxt_w[15:0];\n"
     + PT_HDR_BAD_HEAD +
-    "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r ||\n"
+    "        (ann_tlv_len_w[2:0] || pt_seen_r ||\n"
     "         ({1'b0, ann_tlv_len_w[15:3]} != ({1'b0, mut_steps_r} + 17'd1)))));\n")
+#: the base's nonzero rule: an empty pathSequence refused the Announce
+PT_HDR_BAD_WITH_NONZERO = (
+    PT_HDR_BAD_HEAD +
+    "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r)));\n")
+#: the base's head rule: grandmasterIdentity captured at its last octet
+#: (frame index 74), compared with the first entry both on the edge that
+#: completes it and at an EOF that same byte ends
+PT_DECLS = "  logic ann_pt_byte_w;\n"
+PT_DECLS_WITH_HEAD = (
+    PT_DECLS +
+    "  logic [63:0] mut_gm_r;\n"
+    "  always_ff @(posedge clk_i)\n"
+    "    if (rx_valid_i && (cnt_r == 11'd74)) mut_gm_r <= acc_nxt_w;\n"
+    "  wire mut_head_bad_w = ann_pt_byte_w && (pt_byte_r == 3'd7) &&\n"
+    "                        (pt_cnt_r == 8'd0) && (acc_nxt_w != mut_gm_r);\n")
+PT_SELF = ("                    if (acc_nxt_w == local_clock_id_i)"
+           " pt_self_r <= 1'b1;\n")
+PT_WRITE = ("                      bank_addr_o  <= 5'd16 + 5'(pt_cnt_r[2:0]);\n"
+            "                      bank_wdata_o <= acc_nxt_w;\n")
+PT_FIN = "                          !ann_tlv_header_bad_w &&\n"
+#: the zero-length arm's presence mark and the deferred word 12
+PT_EMPTY_SEEN = ("                    if (ann_tlv_type_w == 16'h0008)"
+                 " pt_seen_r <= 1'b1;\n")
+W12 = "            bank_wdata_o <= {pt_seen_r, 54'd0, pt_self_r, pt_cnt_r};\n"
 #: the #88 probes, each graded on its event and its drop count
 COUNT_PROBES = ("#88 one entry, stepsRemoved 3",
                 "#88 two entries, stepsRemoved 2",
                 "#88 three entries, stepsRemoved 0",
                 "#88 short loop, stepsRemoved 5")
+HEAD_PROBES = ("#88 head not the grandmaster, two entries",
+               "#88 head not the grandmaster, one entry",
+               "#88 head is thisClock")
+EMPTY_PROBES = ("#88 empty path", "#88 empty path between unknowns")
 
 #: (clean, refused) pairs of the stale-word check
 PAIRS =(("sync", "sync"), ("sync", "pdresp"), ("fu", "fu"), ("fu", "pdresp"),
@@ -166,6 +199,53 @@ MUTATIONS = [
      [(PT_HDR_BAD, PT_HDR_BAD_WITH_COUNT)],
      tuple(f"{p}: event" for p in COUNT_PROBES) +
      tuple(f"{p}: no drop" for p in COUNT_PROBES)),
+    # #88: the first entry compared with grandmasterIdentity again
+    ("the path-head refusal restored (#88)",
+     [(PT_DECLS, PT_DECLS_WITH_HEAD),
+      (PT_SELF, PT_SELF + "                    if (mut_head_bad_w)"
+                          " bad_r <= 1'b1;\n"),
+      (PT_FIN, "                          !ann_tlv_header_bad_w &&"
+               " !mut_head_bad_w &&\n")],
+     tuple(f"{p}: event" for p in HEAD_PROBES) +
+     tuple(f"{p}: no drop" for p in HEAD_PROBES)),
+    # #88: the received head replaced by grandmasterIdentity, the
+    # {grandmasterIdentity, tail} sequence no peer sent
+    ("the head is replaced by grandmasterIdentity (#88)",
+     [(PT_DECLS, PT_DECLS_WITH_HEAD),
+      (PT_WRITE, "                      bank_addr_o  <= 5'd16 +"
+                 " 5'(pt_cnt_r[2:0]);\n"
+                 "                      bank_wdata_o <= (pt_cnt_r == 8'd0)"
+                 " ? mut_gm_r : acc_nxt_w;\n")],
+     tuple(f"{p}: identity 0" for p in HEAD_PROBES)),
+    # #88: an empty pathSequence refused again, as the base did
+    ("the empty-path refusal restored (#88)",
+     [(PT_HDR_BAD, PT_HDR_BAD_WITH_NONZERO)],
+     tuple(f"{p}: event" for p in EMPTY_PROBES) +
+     tuple(f"{p}: no drop" for p in EMPTY_PROBES)),
+    # #87: an empty TLV reported as no TLV, and not counted as the one
+    # PathTrace a second must not follow
+    ("an empty path is not marked present (#87)",
+     [(PT_EMPTY_SEEN, "")],
+     ("#88 empty path: present, count zero",
+      "#88 empty path between unknowns: present, count zero",
+      "#88 path after an empty path: no event",
+      "#88 path after an empty path: no w12",
+      "#88 path after an empty path: one drop")),
+    # #87: word 12 without its presence bit, so no TLV and an empty TLV
+    # look alike
+    ("word 12 drops the presence bit (#87)",
+     [(W12, "            bank_wdata_o <= {55'd0, pt_self_r, pt_cnt_r};\n")],
+     ("ann w12 hops", "#88 empty path: present, count zero",
+      "#88 one entry, stepsRemoved 3: presence, count and loop",
+      "#88 head not the grandmaster, one entry: presence, count and loop")),
+    # #87: word 12 marks every Announce present, so no TLV looks like an
+    # empty one
+    ("word 12 marks a TLV-less Announce present (#87)",
+     [(W12, "            bank_wdata_o <= {1'b1, 54'd0, pt_self_r,"
+            " pt_cnt_r};\n")],
+     ("TLV-less ann: absent, zero count and loop",
+      "out-of-message path: absent, zero count and loop",
+      "unknown-only ann: zero count")),
 ]
 
 

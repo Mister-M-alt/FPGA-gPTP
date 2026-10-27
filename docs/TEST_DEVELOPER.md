@@ -96,7 +96,9 @@ Prefer independent protocol formulas and frame builders.
 - Proves refused frames leave no stale words.
 - Proves those error checks through planted defects.
 - Accepts PathTrace counts other than stepsRemoved plus one.
-- Proves that acceptance through a planted defect.
+- Accepts empty paths and heads other than the grandmaster.
+- Reports a present TLV apart from its count.
+- Proves each acceptance through a planted defect.
 
 ### Engine suite
 
@@ -120,8 +122,10 @@ Prefer independent protocol formulas and frame builders.
 - Keeps it through a receipt timeout queued behind mastership.
 - Clears it on every handover to a peer.
 - Appends thisClock to direct and multi-hop received paths.
-- Checks the seven-entry, eight-entry and absent path boundaries.
-- Defers to better grandmasters whatever their path count.
+- Checks the seven-entry, eight-entry, empty and absent path boundaries.
+- Defers to better grandmasters whatever their path count or head.
+- Publishes the received head at entry 0.
+- Keeps the previous path when no TLV arrives.
 - Removes each Announce disqualification in its own mutant.
 - Ends every committed peer path with thisClock.
 - Rejects tied-low and early-clear slew indications.

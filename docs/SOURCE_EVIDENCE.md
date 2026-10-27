@@ -7,30 +7,30 @@ Line numbers describe the current branch layout.
 
 | Claim | Source evidence | Executable evidence |
 |---|---|---|
-| Single clock domain | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L58) | `make lint` |
-| Four instantiated blocks | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L178) | `make lint` |
+| Single clock domain | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L60) | `make lint` |
+| Four instantiated blocks | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L181) | `make lint` |
 | Any-byte receive refusal | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv) | Parser suite and named mutation controls |
-| Deferred receive event | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L393) | Parser suite |
-| Four-entry event queue | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L432) | Engine suite |
-| Parser arbitration priority | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L459) | Engine suite |
-| Priority timestamp return | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L370) | Engine suite |
-| Accepted-beat result face | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L376) | Engine suite |
+| Deferred receive event | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L392) | Parser suite |
+| Four-entry event queue | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L439) | Engine suite |
+| Parser arbitration priority | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L466) | Engine suite |
+| Priority timestamp return | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L377) | Engine suite |
+| Accepted-beat result face | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L383) | Engine suite |
 | Explicit lost result | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
 | Retained Pdelay pairing context | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
-| Reset-backed pairing validity | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L258) | Engine suite |
-| Transmit admission credit | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L100) | Engine suite |
-| Eight timer slots | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L412) | Engine suite |
+| Reset-backed pairing validity | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L263) | Engine suite |
+| Transmit admission credit | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L102) | Engine suite |
+| Eight timer slots | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L419) | Engine suite |
 | Six state regions | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L20) | Engine suite |
 | Stable stalled transmission | [`KL_gptp_tx_slot`](../hdl/wire/KL_gptp_tx_slot.sv#L117) | Engine suite |
-| Committed publication | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L125) | Engine suite |
+| Committed publication | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L128) | Engine suite |
 | 1,024-word microcode ROM | [`KL_gptp_ucpu`](../hdl/ucpu/KL_gptp_ucpu.sv#L105) | MicroCPU suite |
 | Sixteen registers | [`KL_gptp_ucpu`](../hdl/ucpu/KL_gptp_ucpu.sv#L113) | MicroCPU suite |
 | Python image generation | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
 | Media-dependent transmit flags | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine and tsngen suites |
 | Step-versus-slew policy | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
-| Registered policy slew level | [Port](../hdl/top/KL_gptp_engine.sv#L109), [word 2](../hdl/top/KL_gptp_engine.sv#L1009), [word 3](../hdl/top/KL_gptp_engine.sv#L1014), [policy](../hdl/ucode/gen_gptp_ucode.py#L897) | Engine suite and named mutation controls |
+| Registered policy slew level | [Port](../hdl/top/KL_gptp_engine.sv#L111), [word 2](../hdl/top/KL_gptp_engine.sv#L1020), [word 3](../hdl/top/KL_gptp_engine.sv#L1025), [policy](../hdl/ucode/gen_gptp_ucode.py#L899) | Engine suite and named mutation controls |
 | PHC rate envelope | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
-| Ignored receive flag bits | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L474) | Engine suite |
+| Ignored receive flag bits | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L472) | Engine suite |
 | C++ test harnesses | [`tb/verilator`](../tb/verilator) | `make` |
 | PHC and result face contract | [`check_phc_contract.py`](../tb/check_phc_contract.py) | `make contract` |
 | Load-bearing engine checks | [`mutants.py`](../tb/verilator/engine/mutants.py) | Engine suite |

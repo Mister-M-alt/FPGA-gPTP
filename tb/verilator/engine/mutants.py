@@ -43,11 +43,17 @@ that watch, and mastership retires the qualifier itself. This is a
 reachability argument from the current policy, not an executed proof;
 revisit it if the timer or capability recovery rules change.
 
-An absent PathTrace's tail words have no arm either (#85). The engine's
-own simulation assertion stops the run when a commit pairs count zero with
-a nonzero tail word, so such a mutant aborts before any check can grade
-it, and an abort is not a catch. The absent-path probe grades its count
-and its commit instead, and a fabricated entry there is caught.
+A commit pairing count zero with a nonzero entry has no arm either. No
+legitimate path is empty since #87 (an absent TLV keeps the previous
+pathTrace), and the engine's own simulation assertion stops the run on
+that pairing, so such a mutant aborts before any check can grade it, and
+an abort is not a catch. The empty-sequence mutant below publishes count
+zero with every entry zero, which the assertion admits and the checks
+catch.
+
+A mutant is one (pattern, replacement) pair, or, with the replacement None,
+a list of pairs applied to the same file: restoring the parser's head
+refusal takes three edits, as in tb/verilator/parser/mutants.py.
 """
 
 from __future__ import annotations
@@ -88,7 +94,38 @@ VFLAGS = [
     "-GUCODE_HEX_P=\"gptp_ucode.hex\"", "-GCLK_HZ_P=2000000",
 ]
 
-#: (name, file under hdl/, pattern, replacement, the property it should break)
+#: #88: the parser's PathTrace header verdict and its retired variants
+PT_HDR_BAD_HEAD = (
+    "  assign ann_tlv_header_bad_w = ann_tlv_header_end_w &&\n"
+    "      (ann_tlv_len_w[0] ||\n"
+    "       ({6'd0, cnt_r} + {1'b0, ann_tlv_len_w} > {6'd0, msg_end_r}) ||\n"
+    "       ((ann_tlv_type_w == 16'h0008) &&\n")
+PT_HDR_BAD = PT_HDR_BAD_HEAD + "        (ann_tlv_len_w[2:0] || pt_seen_r)));\n"
+#: the base's head rule, as tb/verilator/parser/mutants.py restores it
+PT_HEAD_EDITS = [
+    ("  logic ann_pt_byte_w;\n",
+     "  logic ann_pt_byte_w;\n"
+     "  logic [63:0] mut_gm_r;\n"
+     "  always_ff @(posedge clk_i)\n"
+     "    if (rx_valid_i && (cnt_r == 11'd74)) mut_gm_r <= acc_nxt_w;\n"
+     "  wire mut_head_bad_w = ann_pt_byte_w && (pt_byte_r == 3'd7) &&\n"
+     "                        (pt_cnt_r == 8'd0) && (acc_nxt_w != mut_gm_r);\n"),
+    ("                    if (acc_nxt_w == local_clock_id_i)"
+     " pt_self_r <= 1'b1;\n",
+     "                    if (acc_nxt_w == local_clock_id_i)"
+     " pt_self_r <= 1'b1;\n"
+     "                    if (mut_head_bad_w) bad_r <= 1'b1;\n"),
+    ("                          !ann_tlv_header_bad_w &&\n",
+     "                          !ann_tlv_header_bad_w && !mut_head_bad_w &&\n"),
+]
+#: the engine's address-7 copy of one received entry, and its keep gate
+PATH_COPY = ("                      pub_path_r[64*pk +: 64] <=\n"
+             "                          ann_pub_path_r[64*pk +: 64];\n")
+PATH_KEEP = "                if (ann_pub_present_r) begin\n"
+PATH_APPEND = "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd8);\n"
+
+#: (name, file under hdl/, pattern, replacement, the property it should
+#: break); a replacement of None makes the pattern a list of pairs
 MUTATIONS = [
     # ---- #75: the policy level must cover the entire affected interval ----
     ("slew level tied low", "top/KL_gptp_engine.sv",
@@ -326,7 +363,7 @@ MUTATIONS = [
      " | #82 cold release: that commit carries thisClock and {thisClock}"),
     ("reset leaves the path empty", "top/KL_gptp_engine.sv",
      "      pub_path_count_r <= 4'd1;\n"
-     "      pub_path_r       <= '0;\n",
+     "      pub_path_r       <= self_path_w;\n",
      "      pub_path_count_r <= 4'd0;\n"
      "      pub_path_r       <= '0;\n",
      "#82 cold release: every cycle to the first beat has {thisClock}"
@@ -334,7 +371,7 @@ MUTATIONS = [
      " | #82 warm reset: its path is {thisClock} with a zero tail"),
     ("reset keeps the elected tail", "top/KL_gptp_engine.sv",
      "      pub_path_count_r <= 4'd1;\n"
-     "      pub_path_r       <= '0;\n",
+     "      pub_path_r       <= self_path_w;\n",
      "      pub_path_count_r <= 4'd1;\n",
      "#82 warm reset: its path is {thisClock} with a zero tail"
      " | #82 every commit naming thisClock carries {thisClock}"),
@@ -530,9 +567,7 @@ MUTATIONS = [
     # ---- #85: the received pathSequence plus thisClock --------------------
     # Each control lists, after "#85 ", every named check it must fail.
     ("the received path is published without thisClock",
-     "top/KL_gptp_engine.sv",
-     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
-     "                             (ann_pub_count_clamped_w != 4'd8);\n",
+     "top/KL_gptp_engine.sv", PATH_APPEND,
      "  wire       path_append_w = 1'b0;\n",
      "#85 direct grandmaster: count"
      " | #85 direct grandmaster: tail 1"
@@ -554,36 +589,43 @@ MUTATIONS = [
      " | worse TLV-less announce retains path A tail 4"
      " | parent refresh appends thisClock"
      " | unknown before path current parent: tail 3"
-     " | post-release C appends thisClock"),
-    ("thisClock is appended to an absent path", "top/KL_gptp_engine.sv",
-     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
-     "                             (ann_pub_count_clamped_w != 4'd8);\n",
-     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd8);\n",
-     "#85 absent path: count"
-     " | #85 absent path: its commit names the grandmaster and path"),
+     " | post-release C appends thisClock"
+     " | #88 empty path: count"
+     " | #88 empty path from the parent: count"),
     ("eight received entries take a ninth", "top/KL_gptp_engine.sv",
-     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
-     "                             (ann_pub_count_clamped_w != 4'd8);\n",
-     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0);\n",
+     PATH_APPEND,
+     "  wire       path_append_w = 1'b1;\n",
      "#85 eight received entries: count"
      " | #85 eight received entries: its commit names the grandmaster and"
      " path"),
     ("seven received entries leave thisClock out", "top/KL_gptp_engine.sv",
-     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
-     "                             (ann_pub_count_clamped_w != 4'd8);\n",
-     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
-     "                             (ann_pub_count_clamped_w < 4'd7);\n",
+     PATH_APPEND,
+     "  wire       path_append_w = (ann_pub_count_clamped_w < 4'd7);\n",
      "#85 seven received entries: count"
      " | #85 seven received entries: tail 7"),
+    # #88: 802.1AS-2020 10.3.13.2.4 f) 5)'s rule, which appends thisClock
+    # only to a nonempty sequence; 2011's d) appends it to an empty one too
+    ("an empty path takes no thisClock", "top/KL_gptp_engine.sv",
+     PATH_APPEND,
+     "  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&\n"
+     "                             (ann_pub_count_clamped_w != 4'd8);\n",
+     "#88 empty path: count"
+     " | #88 empty path: head"
+     " | #88 empty path: its commit names the grandmaster and path"
+     " | #88 empty path from the parent: count"
+     " | #88 empty path from the parent: head"
+     " | #88 empty path from the parent: its commit names the grandmaster"
+     " and path"),
     ("thisClock lands one slot early", "top/KL_gptp_engine.sv",
-     "                           (4'(pk + 1) == ann_pub_count_clamped_w))\n",
-     "                           (4'(pk + 2) == ann_pub_count_clamped_w))\n",
+     "                             (4'(pk) == ann_pub_count_clamped_w))\n",
+     "                             (4'(pk + 1) == ann_pub_count_clamped_w))\n",
      "#85 direct grandmaster: tail 1"
      " | #85 multi-hop grandmaster: tail 5"
-     " | #85 every peer path ends with thisClock"),
+     " | #85 every peer path ends with thisClock"
+     " | #88 empty path: head"),
     ("thisClock fills every later slot", "top/KL_gptp_engine.sv",
-     "                           (4'(pk + 1) == ann_pub_count_clamped_w))\n",
-     "                           (4'(pk + 1) >= ann_pub_count_clamped_w))\n",
+     "                             (4'(pk) == ann_pub_count_clamped_w))\n",
+     "                             (4'(pk) >= ann_pub_count_clamped_w))\n",
      "#85 direct grandmaster: tail 2"
      " | #85 direct grandmaster: tail 3"
      " | #85 direct grandmaster: tail 4"
@@ -606,18 +648,23 @@ MUTATIONS = [
      " | #88 three entries, stepsRemoved 0: tail 4"
      " | #88 three entries, stepsRemoved 0: tail 5"
      " | #88 three entries, stepsRemoved 0: tail 6"
-     " | #88 three entries, stepsRemoved 0: tail 7"),
+     " | #88 three entries, stepsRemoved 0: tail 7"
+     " | #88 head not the grandmaster: tail 3"
+     " | #88 head not the grandmaster: tail 7"
+     " | #88 empty path: tail 1"
+     " | #88 empty path: tail 7"),
     ("the appended entry is the announcing source", "top/KL_gptp_engine.sv",
-     "                    pub_path_r[64*pk +: 64] <= rom_clock_id_w;\n",
-     "                    pub_path_r[64*pk +: 64] <= frame_cid_r;\n",
+     "                      pub_path_r[64*pk +: 64] <= rom_clock_id_w;\n",
+     "                      pub_path_r[64*pk +: 64] <= frame_cid_r;\n",
      "#85 direct grandmaster: tail 1"
      " | #85 multi-hop grandmaster: tail 5"
      " | #85 every peer path ends with thisClock"),
     ("the received entries are not copied", "top/KL_gptp_engine.sv",
-     "                    pub_path_r[64*pk +: 64] <=\n"
-     "                        ann_pub_tail_r[64*pk +: 64];\n",
-     "                    pub_path_r[64*pk +: 64] <= 64'd0;\n",
-     "#85 multi-hop grandmaster: tail 1"
+     PATH_COPY,
+     "                      pub_path_r[64*pk +: 64] <= 64'd0;\n",
+     "#85 direct grandmaster: head"
+     " | #85 multi-hop grandmaster: head"
+     " | #85 multi-hop grandmaster: tail 1"
      " | #85 multi-hop grandmaster: tail 2"
      " | #85 multi-hop grandmaster: tail 3"
      " | #85 multi-hop grandmaster: tail 4"
@@ -634,29 +681,26 @@ MUTATIONS = [
      " | #85 eight received entries: tail 5"
      " | #85 eight received entries: tail 6"
      " | #85 eight received entries: tail 7"),
-    ("every received path is published empty", "top/KL_gptp_engine.sv",
+    ("every received path is published as {thisClock}",
+     "top/KL_gptp_engine.sv",
      "  wire [3:0] ann_pub_count_clamped_w = (ann_pub_count_r > 8'd8)\n"
      "      ? 4'd8 : ann_pub_count_r[3:0];\n",
      "  wire [3:0] ann_pub_count_clamped_w = 4'd0;\n",
-     "#85 peer commits with a path were graded"
-     " | p1 255 #85 peer commits with a path were graded"),
+     "#85 direct grandmaster: count"
+     " | #85 multi-hop grandmaster: count"
+     " | #85 eight received entries: count"
+     " | #88 issue shape: count"
+     " | #87 G1 elected: count"),
     # ---- #88: a)-c) are the only Announce disqualifications ---------------
     # The base's lengthField/8 == stepsRemoved+1 refusal, restored beside
     # the stepsRemoved capture (frame index 76) it needs.
     ("the path-count refusal restored", "wire/KL_gptp_rx_parser.sv",
-     "  assign ann_tlv_header_bad_w = ann_tlv_header_end_w &&\n"
-     "      (ann_tlv_len_w[0] ||\n"
-     "       ({6'd0, cnt_r} + {1'b0, ann_tlv_len_w} > {6'd0, msg_end_r}) ||\n"
-     "       ((ann_tlv_type_w == 16'h0008) &&\n"
-     "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r)));\n",
+     PT_HDR_BAD,
      "  logic [15:0] mut_steps_r;\n"
      "  always_ff @(posedge clk_i)\n"
      "    if (rx_valid_i && (cnt_r == 11'd76)) mut_steps_r <= acc_nxt_w[15:0];\n"
-     "  assign ann_tlv_header_bad_w = ann_tlv_header_end_w &&\n"
-     "      (ann_tlv_len_w[0] ||\n"
-     "       ({6'd0, cnt_r} + {1'b0, ann_tlv_len_w} > {6'd0, msg_end_r}) ||\n"
-     "       ((ann_tlv_type_w == 16'h0008) &&\n"
-     "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r ||\n"
+     + PT_HDR_BAD_HEAD +
+     "        (ann_tlv_len_w[2:0] || pt_seen_r ||\n"
      "         ({1'b0, ann_tlv_len_w[15:3]} != ({1'b0, mut_steps_r} + 17'd1)))));\n",
      "#88 issue shape: elected"
      " | #88 issue shape: no longer master"
@@ -667,6 +711,107 @@ MUTATIONS = [
      " | #88 own source, one entry, stepsRemoved 3: parser-drop policy"
      " | #88 stepsRemoved 255, one entry: parser-drop policy"
      " | #88 short loop, stepsRemoved 5: parser-drop policy"),
+    # The base's head refusal: the first entry compared with
+    # grandmasterIdentity, the whole Announce refused on a mismatch
+    ("the path-head refusal restored", "wire/KL_gptp_rx_parser.sv",
+     PT_HEAD_EDITS, None,
+     "#88 head not the grandmaster: elected"
+     " | #88 head not the grandmaster: no longer master"
+     " | #88 head not the grandmaster: entry 0 is the received head"
+     " | #88 head not the grandmaster: no Announce for one interval"
+     " | #88 head not the grandmaster: parser accepts"
+     " | #88 current parent's path headed elsewhere: one commit"
+     " | #88 current parent's path headed elsewhere: entry 0 is the received"
+     " head"
+     " | #88 current parent's path headed elsewhere: parser accepts"
+     " | #88 parent path headed elsewhere: head"
+     " | #88 parent path headed elsewhere: parser accepts"),
+    # The base's nonzero rule: an empty pathSequence refused
+    ("the empty-path refusal restored", "wire/KL_gptp_rx_parser.sv",
+     PT_HDR_BAD,
+     PT_HDR_BAD_HEAD +
+     "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r)));\n",
+     "#88 empty path: elected"
+     " | #88 empty path: count"
+     " | #88 empty path from the parent: count"
+     " | #88 empty path from the parent: parser accepts"),
+    # The {grandmasterIdentity, tail} sequence no peer sent: entry 0 taken
+    # from the frozen Announce's grandmasterIdentity, not its received head
+    ("the received head replaced by the grandmaster", "top/KL_gptp_engine.sv",
+     PATH_COPY,
+     "                      pub_path_r[64*pk +: 64] <= (pk == 0) ?\n"
+     "                          ann_ctx_r[9] : ann_pub_path_r[64*pk +: 64];\n",
+     "#88 head not the grandmaster: entry 0 is the received head"
+     " | #88 head not the grandmaster: its commit names the grandmaster and"
+     " path"
+     " | #88 current parent's path headed elsewhere: entry 0 is the received"
+     " head"
+     " | #88 parent path headed elsewhere: head"
+     " | #87 parent refresh without a TLV: head"),
+    ("the received head is not published", "top/KL_gptp_engine.sv",
+     PATH_COPY,
+     "                      pub_path_r[64*pk +: 64] <= (pk == 0) ?\n"
+     "                          64'd0 : ann_pub_path_r[64*pk +: 64];\n",
+     "#85 direct grandmaster: head"
+     " | #88 issue shape: entry 0 is the received head"
+     " | adopt publishes path head"
+     " | worse announce retains path A head"
+     " | worse TLV-less announce retains path A head"
+     " | deep path retains its head"
+     " | parent refresh publishes path C head"
+     " | unknown-only current parent: keeps the previous head"
+     " | unknown before path current parent: head"
+     " | full path before raw empty: head"
+     " | TLV-less current parent: keeps the previous head"
+     " | frozen queued A head coherent"
+     " | post-release C head coherent"
+     " | boundary-clean announce: raw path head"
+     " | #87 G1 elected: head"),
+    # ---- #87: no TLV keeps the previous pathTrace ------------------------
+    # 802.1AS-2020's empty sequence for a TLV-less Announce
+    ("the empty sequence published without a TLV", "top/KL_gptp_engine.sv",
+     PATH_KEEP,
+     "                if (!ann_pub_present_r) begin\n"
+     "                  pub_path_count_r <= 4'd0;\n"
+     "                  pub_path_r       <= '0;\n"
+     "                end else begin\n",
+     "#87 G1 to G2 without a TLV: count"
+     " | #87 G1 to G2 without a TLV: its commit names the grandmaster and"
+     " path"
+     " | #87 parent refresh without a TLV: count"
+     " | #85 absent path: count"
+     " | TLV-less competition control: raw path count"
+     " | #87 post-warm-reset TLV-less count"
+     " | #87 post-warm-reset TLV-less selection commits {thisClock}"
+     " | TLV-less current parent: keeps the previous count"
+     " | unknown-only current parent: keeps the previous count"
+     " | out-of-message fake PathTrace: keeps the previous count"
+     " | #87 raw-empty overload: frozen A keeps C's path"
+     " | #85 every peer path ends with thisClock"),
+    # an absent TLV staged as an empty one, which publishes {thisClock}
+    ("a TLV-less Announce publishes {thisClock}", "top/KL_gptp_engine.sv",
+     PATH_KEEP,
+     "                if (1'b1) begin\n",
+     "#87 G1 to G2 without a TLV: count"
+     " | #87 G1 to G2 without a TLV: head"
+     " | #87 parent refresh without a TLV: head"
+     " | TLV-less current parent: keeps the previous count"
+     " | unknown-only current parent: keeps the previous head"
+     " | out-of-message fake PathTrace: keeps tail 7"
+     " | #87 raw-empty overload: frozen A keeps C's path"),
+    # ---- #82: {thisClock} is thisClock at entry 0 -------------------------
+    ("the self path leaves entry 0 empty", "top/KL_gptp_engine.sv",
+     "  wire [8*64-1:0] self_path_w = {{7*64{1'b0}}, rom_clock_id_w};\n",
+     "  wire [8*64-1:0] self_path_w = '0;\n",
+     "#82 cold release: every cycle to the first beat has {thisClock}"
+     " | #82 cold release: that commit carries thisClock and {thisClock}"
+     " | self path entry 0 is thisClock"
+     " | own-GM transition publishes thisClock at entry 0"
+     " | #87 post-warm-reset TLV-less head"
+     " | #87 the degraded G2 yields with {thisClock}"
+     " | #82 every commit naming thisClock carries {thisClock}"
+     " | p1 255 self path entry 0 is thisClock"
+     " | p1 255 #82 every commit naming thisClock carries {thisClock}"),
     # a), b) and c) themselves, each removed from qualifyAnnounce: the #88
     # probes carry a count other than stepsRemoved+1, so only the microcode
     # refusal can hold the plane's mastership
@@ -714,17 +859,25 @@ MUTATIONS = [
 ]
 
 
+def edits_of(pattern, replacement) -> list[tuple[str, str]]:
+    """A mutant's (pattern, replacement) pairs: one pair, or, with the
+    replacement None, the list of pairs the pattern holds."""
+    return list(pattern) if replacement is None else [(pattern, replacement)]
+
+
 def stage(work: Path, tag: str,
-          mutate: tuple[str, str, str] | None = None) -> Path:
+          mutate: tuple[str, list[tuple[str, str]]] | None = None) -> Path:
     """A directory holding the RTL and the generator, with at most one
-    mutated. Nothing outside the returned directory is written."""
+    file mutated by its edits. Nothing outside the returned directory is
+    written."""
     srcdir = work / f"src_{tag}"
     for name in RTL_SOURCES + (GENERATOR,):
         target = srcdir / name
         target.parent.mkdir(parents=True, exist_ok=True)
         text = (HDL / name).read_text(encoding="utf-8")
         if mutate is not None and mutate[0] == name:
-            text = text.replace(mutate[1], mutate[2])
+            for pattern, replacement in mutate[1]:
+                text = text.replace(pattern, replacement)
         target.write_text(text, encoding="utf-8")
     return srcdir
 
@@ -832,7 +985,7 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
 
 
 def run_mutant(work: Path, clean_exe: Path,
-               mutation: tuple[str, str, str, str, str]) -> bool:
+               mutation: tuple) -> bool:
     """Plant one of the `MUTATIONS` under `work` and print its verdict.
 
     True when the harness catches it, through every check it names; False,
@@ -840,16 +993,18 @@ def run_mutant(work: Path, clean_exe: Path,
     refused, or its pattern no longer appears exactly once.
     """
     name, fname, pattern, replacement, breaks = mutation
+    edits = edits_of(pattern, replacement)
     src = (HDL / fname).read_text(encoding="utf-8")
-    if src.count(pattern) != 1:
-        print(f"[FAIL] mutation {name!r}: its pattern appears "
-              f"{src.count(pattern)} time(s) in {fname}, expected "
-              f"exactly 1. The source moved and this mutant is no "
-              f"longer mutating anything - fix the pattern, do not "
-              f"delete the arm.")
-        return False
+    for pat, _ in edits:
+        if src.count(pat) != 1:
+            print(f"[FAIL] mutation {name!r}: its pattern appears "
+                  f"{src.count(pat)} time(s) in {fname}, expected "
+                  f"exactly 1. The source moved and this mutant is no "
+                  f"longer mutating anything - fix the pattern, do not "
+                  f"delete the arm.")
+            return False
     tag = "".join(c if c.isalnum() else "_" for c in name)
-    srcdir = stage(work, tag, (fname, pattern, replacement))
+    srcdir = stage(work, tag, (fname, edits))
     rundir = work / f"run_{tag}"
     if not generate_image(srcdir, rundir):
         print(f"[FAIL] mutation {name!r}: the generator refused its "

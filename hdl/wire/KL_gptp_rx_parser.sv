@@ -36,13 +36,15 @@
 //                The declared messageLength is also the hard parsing
 //                boundary: physical Ethernet padding is ignored, a frame
 //                shorter than its declaration is refused. A fixed 64-octet
-//                Announce may omit Path Trace; the absent case distinguished
-//                by 10.3.10.2.1(d) / 10.3.13.2.1(f) is reported honestly as
-//                count zero. When the TLV is present it must be identity-
-//                aligned and wholly contained. Its hop count may differ
-//                from stepsRemoved+1: 802.1AS-2011 10.5.3.3.4 states that
-//                relation only as a NOTE, and 10.3.10.2.1 a) to c) are
-//                the only disqualifying rules (#88).
+//                Announce may omit Path Trace. 802.1AS-2011 10.3.10.2.1 d)
+//                copies a present TLV to pathTrace and leaves pathTrace
+//                untouched without one (#87), so word 12 reports presence
+//                apart from the count. A present TLV must be identity-
+//                aligned and wholly contained. 10.3.10.2.1 a) to c) are
+//                the only disqualifying rules (#88), so the TLV may be
+//                empty, its hop count may differ from stepsRemoved+1
+//                (10.5.3.3.4 states that relation only as a NOTE), and
+//                its first entry need not be grandmasterIdentity.
 //                The TLV arm can only follow the body it qualifies: a
 //                refused Follow_Up's header words land in the write
 //                bank like those of any frame cut by truncation or
@@ -86,7 +88,9 @@
 //                  w10 {stepsRemoved, timeSource, 40'd0}
 //                  w11 {cumulativeScaledRateOffset, gmTimeBaseIndicator,
 //                       16'd0}
-//                  w12 {55'd0, pathContainsThisClock, pathTraceCount}
+//                  w12 {pathTracePresent, 54'd0, pathContainsThisClock,
+//                       pathTraceCount} (presence sits above bits 39:8,
+//                       the window the µcode's loop test compares)
 //                  w16..w23  path trace clockIdentities (capped at 8;
 //                            hops beyond the cap are skipped, the count
 //                            still reports the TLV's true hop count so
@@ -218,7 +222,6 @@ module KL_gptp_rx_parser
   logic [63:0] acc_r;          //! big-endian byte accumulator
   logic [15:0] utc_r;          //! announce currentUtcOffset (straddles acc)
   logic [10:0] msg_end_r;      //! absolute final declared byte (DA = 0)
-  logic [63:0] gm_r;
   // announce TLV chain and PathTrace walk
   logic        tlv_hdr_run_r;  //! consuming the next generic 4-byte header
   logic  [1:0] tlv_hdr_pos_r;  //! byte inside that generic header
@@ -228,7 +231,7 @@ module KL_gptp_rx_parser
   logic [7:0]  pt_cnt_r;       //! hops seen
   logic [2:0]  pt_byte_r;      //! byte inside the current identity
   logic        pt_run_r;
-  logic        pt_seen_r;
+  logic        pt_seen_r;      //! a PathTrace header was taken, even an empty one
   logic        pt_self_r;
   logic [15:0] drop_cnt_r;
   //! the two refusals that can resolve on ONE edge: a deferred
@@ -293,7 +296,7 @@ module KL_gptp_rx_parser
   logic ann_tlv_header_byte_w, ann_tlv_header_end_w;
   logic ann_tlv_value_byte_w, ann_tlv_value_end_w;
   logic ann_tlv_header_bad_w, ann_tlv_chain_done_after_w;
-  logic ann_pt_byte_w, ann_pt_identity_w, ann_head_bad_w;
+  logic ann_pt_byte_w;
   logic [15:0] ann_pt_left_after_w;
   wire [15:0] ann_tlv_type_w = acc_nxt_w[31:16];
   wire [15:0] ann_tlv_len_w  = acc_nxt_w[15:0];
@@ -307,16 +310,16 @@ module KL_gptp_rx_parser
   assign ann_tlv_value_end_w = ann_tlv_value_byte_w &&
                                (tlv_left_r == 16'd1);
   //! IEEE 1588-2008 5.3.8: lengthField makes the total TLV length even.
-  //! A generic zero-length value is complete; PATH_TRACE adds its own 8N,
-  //! nonzero and head rules and is singular in an Announce. Its hop count
-  //! is not compared with stepsRemoved (#88): 802.1AS-2011 10.5.3.3.4 gives
-  //! N = stepsRemoved+1 only as a NOTE, and 10.3.10.2.1 disqualifies an
-  //! Announce only by its a) to c).
+  //! A generic zero-length value is complete; PATH_TRACE adds its own 8N
+  //! framing rule and is singular in an Announce. 802.1AS-2011 10.3.10.2.1
+  //! disqualifies an Announce only by its a) to c) (#88): an empty
+  //! pathSequence, a hop count other than stepsRemoved+1 (a NOTE to
+  //! 10.5.3.3.4) and a first entry other than grandmasterIdentity all qualify.
   assign ann_tlv_header_bad_w = ann_tlv_header_end_w &&
       (ann_tlv_len_w[0] ||
        ({6'd0, cnt_r} + {1'b0, ann_tlv_len_w} > {6'd0, msg_end_r}) ||
        ((ann_tlv_type_w == 16'h0008) &&
-        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r)));
+        (ann_tlv_len_w[2:0] || pt_seen_r)));
   //! Include the current EOF byte despite non-blocking state updates. This is
   //! true only at the exact fixed-body end or at a complete header/value end
   //! that coincides with the declared messageLength; physical padding cannot
@@ -330,9 +333,6 @@ module KL_gptp_rx_parser
   assign ann_pt_byte_w = (mtype_r == MT_ANN_C) && pt_run_r &&
                           (pt_left_r != 16'd0) &&
                          (cnt_r <= msg_end_r);
-  assign ann_pt_identity_w = ann_pt_byte_w && (pt_byte_r == 3'd7);
-  assign ann_head_bad_w = ann_pt_identity_w && (pt_cnt_r == 8'd0) &&
-                          (acc_nxt_w != gm_r);
   assign ann_pt_left_after_w = pt_left_r - (ann_pt_byte_w ? 16'd1 : 16'd0);
 
   logic [7:0] ev_map_w;
@@ -361,7 +361,6 @@ module KL_gptp_rx_parser
       acc_r       <= '0;
       utc_r       <= '0;
       msg_end_r   <= '0;
-      gm_r        <= '0;
       tlv_hdr_run_r <= 1'b0;
       tlv_hdr_pos_r <= '0;
       tlv_left_r    <= '0;
@@ -396,7 +395,7 @@ module KL_gptp_rx_parser
           if (mtype_r == MT_ANN_C) begin
             bank_we_o    <= 1'b1;
             bank_addr_o  <= 5'd12;
-            bank_wdata_o <= {55'd0, pt_self_r, pt_cnt_r};
+            bank_wdata_o <= {pt_seen_r, 54'd0, pt_self_r, pt_cnt_r};
           end
           ev_valid_o <= 1'b1;
           ev_code_o  <= ev_map_w;
@@ -411,7 +410,6 @@ module KL_gptp_rx_parser
           bad_r    <= 1'b0;
           mtype_r  <= '0;
           msg_end_r <= '0;
-          gm_r     <= '0;
           tlv_hdr_run_r <= 1'b0;
           tlv_hdr_pos_r <= '0;
           tlv_left_r <= '0;
@@ -540,7 +538,6 @@ module KL_gptp_rx_parser
                 bank_we_o    <= 1'b1;
                 bank_addr_o  <= 5'd9;
                 bank_wdata_o <= acc_nxt_w;
-                gm_r         <= acc_nxt_w;
               end
               if (cnt_r == 11'(OFF_AN_TSRC_C)) begin
                 bank_we_o    <= 1'b1;
@@ -557,7 +554,7 @@ module KL_gptp_rx_parser
               // complete header's length to skip an unknown type and attempt
               // the next TLV. A malformed/truncated chain is not allowed to
               // turn into an early accepted Announce. PATH_TRACE is singular
-              // and adds the profile's complete 8N/head/loop checks.
+              // and adds the profile's 8N framing and all-hop loop checks.
               if (ann_tlv_header_byte_w) begin
                 if (!ann_tlv_header_end_w) begin
                   tlv_hdr_pos_r <= tlv_hdr_pos_r + 2'd1;
@@ -569,6 +566,9 @@ module KL_gptp_rx_parser
                   end else if (ann_tlv_len_w == 16'd0) begin
                     tlv_left_r <= '0;
                     pt_run_r   <= 1'b0;
+                    //! An empty pathSequence is still a present TLV (#88):
+                    //! 10.3.10.2.1 d) makes pathTrace {thisClock} from it.
+                    if (ann_tlv_type_w == 16'h0008) pt_seen_r <= 1'b1;
                     if (cnt_r == msg_end_r)
                       tlv_chain_done_r <= 1'b1;
                     else
@@ -597,10 +597,6 @@ module KL_gptp_rx_parser
                       bank_wdata_o <= acc_nxt_w;
                     end
                     if (acc_nxt_w == local_clock_id_i) pt_self_r <= 1'b1;
-                    //! Never synthesize {grandmasterIdentity, tail}: the first
-                    //! received identity is part of the authenticated epoch.
-                    if ((pt_cnt_r == 8'd0) && (acc_nxt_w != gm_r))
-                      bad_r <= 1'b1;
                     pt_cnt_r <= pt_cnt_r + 8'd1;
                   end
                 end
@@ -619,10 +615,10 @@ module KL_gptp_rx_parser
 
           // ---------------- end of frame -------------------------------
           //! bad_r is sampled as registered. Fixed header/FU poison arms sit
-          //! below their type minima. Announce TLV headers and the first path
-          //! identity can legitimately end on EOF, so their current-byte bad
-          //! terms and chain completion are included explicitly below, as
-          //! is the eof byte's own rx_err_i (an earlier one is in bad_r).
+          //! below their type minima. An Announce TLV header can legitimately
+          //! end on EOF, so its current-byte bad term and chain completion
+          //! are included explicitly below, as is the eof byte's own
+          //! rx_err_i (an earlier one is in bad_r).
           if (rx_eof_i) begin
             run_r    <= 1'b0;
             fin_r    <= 1'b1;
@@ -630,7 +626,7 @@ module KL_gptp_rx_parser
                         (cnt_r >= msg_end_r) &&
                         ((mtype_r != MT_ANN_C) ||
                          (ann_tlv_chain_done_after_w &&
-                          !ann_tlv_header_bad_w && !ann_head_bad_w &&
+                          !ann_tlv_header_bad_w &&
                           (!pt_seen_r ||
                            (ann_pt_left_after_w == 16'd0))));
           end
