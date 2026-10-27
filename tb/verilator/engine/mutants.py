@@ -37,11 +37,15 @@ behaviour. Closing that would need a reachable state, not another mutant.
 
 The lapse hook's asCapable term is also defence in depth. Removing only
 that term survives: Sync pairs cannot be consumed while incapable, and
-the 375 ms Sync receipt watch clears sync-ok before capability can recover
-through two good Pdelay exchanges at 1 s cadence. Only mastership disarms
-that watch, and mastership retires the qualifier itself. This is a
-reachability argument from the current policy, not an executed proof;
-revisit it if the timer or capability recovery rules change.
+the asCapable fall expires the Announce receipt watch at once, whose leg
+drops the elected peer by writing the whole flags word zero, sync-ok
+included, before capability can recover through two good Pdelay
+exchanges at 1 s cadence. A master has no peer to drop, and mastership
+retires the qualifier itself. Since #89 the 375 ms Sync receipt watch
+ages a capable slave rather than clearing sync-ok, so it no longer
+covers this term. This is a reachability argument from the current
+policy, not an executed proof; revisit it if the timer or capability
+recovery rules change.
 
 An absent PathTrace's tail words have no arm either (#85). The engine's
 own simulation assertion stops the run when a commit pairs count zero with
@@ -180,13 +184,8 @@ MUTATIONS = [
      "else"),
     # ---- the retained pairing context -------------------------------------
     ("a later response re-arms the frozen pair", GENERATOR,
-     "    p.emit(\"RDST\", rd=RU, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)\n"
-     "    p.emit(\"CMP\", ra=RU, rb=0, fmt=FMT_D, imm=0)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"arm_go\")\n"
-     "    p.emit(\"BR\", label=\"multi\")                                   "
-     "# frozen\n"
-     "    p.label(\"arm_go\")\n",
-     "    p.label(\"arm_go\")\n",
+     "    p.emit(\"RDST\", rd=RV, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)\n",
+     "    p.emit(\"MOVE\", rd=RV, ra=0, imm=0)\n",
      "a complete pair keeps its own identity and operands until its t1"),
     ("the tail runs before its own t1", GENERATOR,
      "    p.emit(\"RDST\", rd=RT, imm=RG_SCR | S_T1V, fmt=FMT_Q)\n"
@@ -260,14 +259,10 @@ MUTATIONS = [
      "the servo stays locked across a grandmaster identity change"),
     # only an asCapable rise re-arms the link-up (the manager's ruling on
     # #68): each of these two re-adds a retired re-arm
-    # word-neutral, because the packer has no gap for a longer receipt
-    # timeout leg (#84): a slave's timeout as before, plus the unlock
+    # one word longer, which the receipt timeout leg's gap still holds (#89)
     ("a receipt timeout unlocks the servo", GENERATOR,
-     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=SYNCOK_BY_AMGM_C)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_OR,\n"
-     "           imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n",
-     "    p.emit(\"MOVE\", rd=RU, ra=0,"
-     " imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n",
+     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a Sync receipt timeout"),
     ("becoming grandmaster unlocks the servo", GENERATOR,
@@ -441,8 +436,9 @@ MUTATIONS = [
      " | #82 Pdelay loss: that commit carries {thisClock}"
      " | #82 Pdelay loss: Announces from the incapable port elect nothing"),
     ("an incapable port's Announces still compete", GENERATOR,
+     "    # 802.1AS: a port that is not asCapable does not enter the contest\n"
      "    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, \"ac\", \"out\")\n",
-     "",
+     "    # 802.1AS: a port that is not asCapable does not enter the contest\n",
      "#82 Pdelay loss: Announces from the incapable port elect nothing"),
     ("the asCapable drop keeps the flags word", GENERATOR,
      "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 2, fmt=FMT_Q)\n"
@@ -500,19 +496,112 @@ MUTATIONS = [
      " | #84 every master cycle publishes sync-ok"
      " | p1 255 #84 first mastership: the master flags carry sync-ok"
      " | p1 255 #84 every master cycle publishes sync-ok"),
+    # word-neutral: the role the timeout found replaces the flags word, so
+    # sync-ok falls in every role, the master's included
     ("a queued receipt timeout clears a master's sync-ok", GENERATOR,
-     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL,"
-     " imm=SYNCOK_BY_AMGM_C)\n",
-     "    p.emit(\"MOVE\", rd=RU, ra=0, imm=0)\n",
+     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n",
+     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n",
      "#84 takeover: a queued receipt timeout keeps sync-ok"
      " | #84 every master cycle publishes sync-ok"),
-    ("the receipt timeout publishes nothing", GENERATOR,
+    # ---- #89: sync receipt timeout ages the port ---------------------------
+    # Each control lists, after "#89 ", every named check it must fail.
+    ("a queued receipt timeout ages a master", GENERATOR,
+     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=ROLE_SLAVE_C)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=LB[\"BECOME\"])\n",
+     "    p.emit(\"BR\", label=LB[\"BECOME\"])\n",
+     "#89 takeover: the queued receipt timeout ages nothing"),
+    # the receipt timeout leg as main 55680bff shipped it, seven words, which
+    # the leg's gap holds: sync-ok falls unless mastership stands, and
+    # nothing is aged
+    ("a sync receipt timeout only clears sync-ok", GENERATOR,
+     "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=ROLE_MASK_C)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
+     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=ROLE_SLAVE_C)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=LB[\"BECOME\"])\n"
+     "    p.emit(\"END\")\n",
+     "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=2)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_OR,\n"
+     "           imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
      "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
      "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"COMMIT\")\n",
-     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n",
-     "#84 takeover: the queued receipt timeout commits after it"),
+     "    p.emit(\"COMMIT\")\n"
+     "    p.emit(\"END\")\n",
+     "#89 Sync stops: the plane takes mastership"
+     " | #89 never usable: the grandmaster is aged"
+     " | #89 no Follow_Up: the plane takes mastership within"
+     " | #89 Follow_Up after the next Sync: the plane takes mastership within"
+     " | #89 Follow_Up with the next sequenceId: the plane takes mastership"
+     " within"),
+    ("adoption leaves the Sync receipt watch off", GENERATOR,
+     "    # A parent refresh (same_gm) restarts nothing\n"
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)       "
+     "# sync watch\n",
+     "    # A parent refresh (same_gm) restarts nothing\n",
+     "#89 never usable: the grandmaster is aged"
+     " | #89 never usable: within syncReceiptTimeout of its adoption"),
+    ("an aged port takes Announces", GENERATOR,
+     "    p.emit(\"RDST\", rd=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
+     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=ROLE_SLAVE_C)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"out\")\n",
+     "",
+     "#89 never usable: the aged port stays master while Announces continue"
+     " | #89 Sync stops: the aged port stays master"
+     " | #89 no Follow_Up: the aged port stays master"
+     " | #89 Follow_Up after the next Sync: the aged port stays master"
+     " | #89 Follow_Up with the next sequenceId: the aged port stays master"),
+    ("a master steers on its aged peer's Sync", GENERATOR,
+     "    p.emit(\"CMP\", ra=RC, rb=0, fmt=FMT_D,"
+     " imm=ROLE_MASTER_C - ROLE_SLAVE_C)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=LB[\"SRWATCH\"])\n",
+     "",
+     "#89 first grandmaster: Sync recovery is heard as master and steers"
+     " nothing"
+     " | #89 Sync stops: Sync recovery is heard as master and steers nothing"
+     " | #89 no Follow_Up: Sync recovery is heard as master and steers"
+     " nothing"),
+    ("a master hears no Sync", GENERATOR,
+     "    p = Prog(base)\n"
+     "    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, \"ac\", \"out\")\n"
+     "    p.emit(\"WRST\", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)\n",
+     "    p = Prog(base)\n"
+     "    e_flag_gate(p, ROLE_MASK_C, ROLE_SLAVE_C, \"sl\", \"out\")\n"
+     "    p.emit(\"WRST\", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)\n",
+     "#89 first grandmaster: the next Announce elects the grandmaster"
+     " | #89 Sync stops: the next Announce elects the grandmaster"
+     " | #89 no Follow_Up: the next Announce elects the grandmaster"),
+    # ---- #90 and #91: Figure 11-8 RESET and lostResponses -----------------
+    ("lost responses clear asCapable at the fourth", GENERATOR,
+     "LOST_CLEARS_AT_C = LOST_N_C + 2\n",
+     "LOST_CLEARS_AT_C = LOST_N_C + 1\n",
+     "#90 no response: four losses keep asCapable"
+     " | #90 no follow-up: four losses keep asCapable"
+     " | #91 duplicated response: four losses keep asCapable"
+     " | #91 three responses: four losses keep asCapable"),
+    ("lost responses clear asCapable at the sixth", GENERATOR,
+     "LOST_CLEARS_AT_C = LOST_N_C + 2\n",
+     "LOST_CLEARS_AT_C = LOST_N_C + 3\n",
+     "#90 no response: the fifth loss clears asCapable"
+     " | #90 no follow-up: the fifth loss clears asCapable"
+     " | #91 duplicated response: the fifth loss clears asCapable"
+     " | #91 three responses: the fifth loss clears asCapable"),
+    # the arm as main 55680bff shipped it: every response overwrites it
+    ("a second response re-arms the pairing", GENERATOR,
+     "    p.emit(\"RDST\", rd=RU, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_ADD)\n",
+     "",
+     "#91 duplicated response: the fifth loss clears asCapable"
+     " | #91 duplicated response: no exchange completes"
+     " | #91 three responses: the fifth loss clears asCapable"
+     " | #91 three responses: no exchange completes"),
+    # word-neutral: the second response disarms, the third arms again
+    ("a third response re-arms the reset exchange", GENERATOR,
+     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_ADD)\n",
+     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_XOR)\n",
+     "#91 three responses: the fifth loss clears asCapable"
+     " | #91 three responses: no exchange completes"),
     ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
      "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
      "                 disp_ready_w && !disp_valid_r;",
@@ -728,9 +817,11 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
             answer = "missed its named check"
         else:
             print(named[0])
-    # #82, #84 and #85 controls must fail every check they name, for the
-    # same reason: each of those checks needs its own failing defect.
-    if breaks.startswith(("#82 ", "#84 ", "#85 ", P1_PREFIX)) and \
+    # #82, #84, #85, #89, #90 and #91 controls must fail every check they
+    # name, for the same reason: each of those checks needs its own failing
+    # defect.
+    if breaks.startswith(("#82 ", "#84 ", "#85 ", "#89 ", "#90 ", "#91 ",
+                          P1_PREFIX)) and \
             answer == "caught":
         failed = [line for line in output.splitlines()
                   if line.startswith("FAIL ")]
