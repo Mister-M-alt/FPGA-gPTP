@@ -198,10 +198,13 @@
 //         gmPresent. The aged port refuses a priority1 1 Announce, elects a
 //         better priority1 255 peer and keeps it 4 s without Sync, then
 //         a priority1 1 Announce ages at once and this plane is master
+// 42      #89, the fourth pass only, after 41: a priority1 255 peer's
+//         usable Sync raises sync-ok, and when its Sync stops, sync-ok
+//         clears within syncReceiptTimeout with the peer still elected
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
-// the phases a self publication passes through: boot, mastership, 36..38
-// and 41.
+// the phases a self publication passes through: boot, mastership, 36..38,
+// 41 and 42.
 // There thisClock is not grandmaster-capable, so gmPresent stays clear in
 // every self publication and is set only while a capable peer is elected
 // (10.3.13.2.4 g). Its checks print with a "p1 255 " prefix.
@@ -305,6 +308,7 @@ class GptpEngineHarness {
     become_master_on_announce_receipt_timeout();
     drop_a_peer_whose_pdelay_stops();
     age_only_while_a_grandmaster_is_present();
+    clear_sync_ok_when_sync_stops_without_a_grandmaster_present();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -3934,10 +3938,9 @@ class GptpEngineHarness {
   // the sync-ok verdict phase 18d left high, in the commit that changes the
   // grandmaster to thisClock. That Announce waits behind a stalled Pdelay
   // response until the Sync receipt watch 18d's last pair armed has
-  // expired, so the timeout's event is queued behind the takeover's, where
-  // BECOME's disarm cannot reach it: the master it then meets has no
-  // received information to age (#89), so it keeps sync-ok and commits
-  // nothing
+  // expired, so the timeout's event is queued behind the takeover's. The
+  // master it then meets has no received information to age (#89), so it
+  // keeps sync-ok, and its own commit names thisClock with sync-ok again
   void take_mastership_when_the_parent_degrades() {
     expect("sync-ok high before the takeover",
            dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
@@ -3974,8 +3977,8 @@ class GptpEngineHarness {
            c0 < commit_snaps.size() && commit_snaps[c0].gm == OUR_CID &&
                (commit_snaps[c0].flags & FL_SYNCOK),
            1);
-    expect("#89 takeover: the queued receipt timeout ages nothing",
-           named, 1);
+    expect("#84 takeover: the queued receipt timeout commits after it",
+           named >= 2, 1);
     expect("#84 takeover: a queued receipt timeout keeps sync-ok",
            named_synced == named &&
                (dut->pub_flags_o & (FL_AMGM | FL_SYNCOK)) ==
@@ -5422,14 +5425,15 @@ class GptpEngineHarness {
   //! One Sync interval, `period` cycles from its Sync to the next. A usable
   //! pair is measured exactly on time (offset zero); every other Follow_Up
   //! is skewed 777 ns, so one wrongly paired would publish that offset.
-  //! An Announce of GMS closes the interval when `announce` is set
+  //! An Announce of GMS closes the interval when `announce` is set. `src`
+  //! sends both messages, SRCS unless another grandmaster's port is named
   void s39_interval(SyncShape shape, uint64_t period, bool announce,
-                    uint64_t fu_after = 1000) {
+                    uint64_t fu_after = 1000, uint64_t src = SRCS) {
     uint64_t spent = 0;
     if (shape != SyncShape::stopped) {
       const uint64_t local = phc() + 150;
       const uint16_t seq = s39_sync_seq++;
-      Frame f = ptp(0x0, seq, 0, 0x0208, 10, SRCS);
+      Frame f = ptp(0x0, seq, 0, 0x0208, 10, src);
       f.ts(0);
       send_frame(f.b, local);
       run(1000);
@@ -5438,7 +5442,7 @@ class GptpEngineHarness {
       if (shape == SyncShape::late_follow_up && s39_late_owed) {
         // the previous Sync's Follow_Up, after this Sync
         Frame g = follow_up(s39_late_seq, 0, s39_late_local -
-                            static_cast<uint64_t>(pdm.d) - 777, SRCS);
+                            static_cast<uint64_t>(pdm.d) - 777, src);
         send_frame(g.b, local + 500);
         run(1000);
         spent += 1000 + g.b.size();
@@ -5448,7 +5452,7 @@ class GptpEngineHarness {
         spent += fu_after;
         const bool usable = shape == SyncShape::usable;
         Frame g = follow_up(usable ? seq : static_cast<uint16_t>(seq + 1), 0,
-                            usable ? on_time : on_time - 777, SRCS);
+                            usable ? on_time : on_time - 777, src);
         send_frame(g.b, local + fu_after * 500);
         run(1000);
         spent += 1000 + g.b.size();
@@ -5748,6 +5752,50 @@ class GptpEngineHarness {
            "this plane master", !a_commit_since_names(c0, GP) &&
                                     (dut->pub_flags_o & FL_AMGM) == FL_AMGM &&
                                     dut->pub_gm_id_o == OUR_CID, 1);
+  }
+
+  // ---- 42: #89, sync-ok needs Sync under any grandmaster (p1 255 pass) ---
+  // Under a priority1 255 grandmaster gmPresent is FALSE (802.1AS-2011
+  // 10.2.3.13), so 10.3.11 ages nothing on a sync receipt timeout and the
+  // peer stays elected. Its Sync has stopped all the same, so the expiry
+  // clears sync-ok. From phase 41's mastership a better priority1 255 peer
+  // is elected and sends a usable pair every 125 ms for 2 s, with an
+  // Announce each second. Then its Sync stops while its Announces go on:
+  // sync-ok stands 350 ms after the last pair, is clear 380 ms after it
+  // with the peer still elected, and stays clear for 1 s more
+  void clear_sync_ok_when_sync_stops_without_a_grandmaster_present() {
+    const uint64_t G255 = 0x0000000000000103ull;
+    const uint64_t S255 = 0x0000000000000104ull;
+    uint16_t seq = 0x8C01;
+    pd_mode = PD_NORMAL;
+    wait_flags(FL_AMGM, FL_AMGM, 900000ull);
+    run(200);
+    send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+    const bool elected =
+        (dut->pub_flags_o & 3) == FL_PRESENT && dut->pub_gm_id_o == G255;
+    for (int k = 0; k < 16; k++) {
+      if (k % 8 == 3)
+        send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+      s39_interval(SyncShape::usable, 250000, false, 1000, S255);
+    }
+    expect("#89 gmPresent: a priority1 255 grandmaster's usable Sync raises "
+           "sync-ok", elected && dut->pub_gm_id_o == G255 &&
+                          (dut->pub_flags_o & (3 | FL_SYNCOK)) ==
+                              (FL_PRESENT | FL_SYNCOK), 1);
+    const size_t c0 = commit_snaps.size();
+    s39_interval(SyncShape::usable, 4000, false, 1000, S255);  // the last pair
+    const bool held = !wait_flags(FL_SYNCOK, 0, 700000ull);    // 350 ms
+    const bool fell = wait_flags(FL_SYNCOK, 0, 60000ull);      // by 380 ms
+    for (int k = 0; k < 8; k++) {
+      if (k == 3)
+        send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+      s39_interval(SyncShape::stopped, 250000, false);
+    }
+    expect("#89 gmPresent: when its Sync stops, sync-ok clears within "
+           "syncReceiptTimeout and the peer stays elected",
+           held && fell && !a_commit_since_names(c0, OUR_CID) &&
+               dut->pub_gm_id_o == G255 &&
+               (dut->pub_flags_o & (3 | FL_SYNCOK)) == FL_PRESENT, 1);
   }
 
   //! #82: every commit of the whole run that names thisClock, whatever

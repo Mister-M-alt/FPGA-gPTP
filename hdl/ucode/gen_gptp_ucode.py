@@ -15,8 +15,9 @@ by Cor1 and Cor2, the edition Milan v1.2 profiles:
     grandmaster. On expiry a slave of an elected peer whose grandmaster
     has priority1 below 255 runs BMCA again through BECGATE. gmPresent is
     FALSE under a priority1 255 grandmaster (10.2.3.13, 10.3.12.1.4 g), so
-    its slave is never aged by Sync. The v4 rule below, where expiry only
-    cleared sync-ok, is retired.
+    its slave is never aged by Sync, and its expiry clears sync-ok
+    instead. That is the v4 rule below, where expiry only cleared sync-ok,
+    kept for the case that ages nothing; a master keeps sync-ok (#84).
   * An aged port stays aged until Sync returns. Cor1 strikes the parent
     condition from Figure 10-4, so any Sync on an asCapable port refreshes
     syncReceiptTimeoutTime, whatever the port's role, and nothing else
@@ -420,8 +421,8 @@ S_SRTO = 46      # SRTO_PASSED_C from a sync receipt timeout, whatever role
                  # it found, until a usable Sync/Follow_Up pair (SRWATCH)
                  # or an asCapable rise (PDPAIR) writes zero: the port's
                  # syncReceiptTimeoutTime has passed. An Announce whose
-                 # grandmaster's {priority1, clockClass, clockAccuracy}
-                 # compares below the cell would make gmPresent TRUE, so it
+                 # grandmaster's priority1 and top clockClass bits compare
+                 # below the cell would make gmPresent TRUE, so it
                  # is aged at once. Every value it holds is read in an
                  # asCapable period that started with that rise, so a warm
                  # reset cannot carry a stale mark into a live port.
@@ -497,11 +498,13 @@ LOST_CLEARS_AT_C = LOST_N_C + 2
 SYNC_RTO_MS_C = 375             # syncReceiptTimeout, Table 4.2
 FU_RTO_MS_C = 125               # followUpReceiptTimeout, Table 4.2
 # gmPresent is TRUE exactly when the grandmaster's priority1 is below 255
-# (802.1AS-2011 10.2.3.13, 10.3.12.1.4 g). A vector's {priority1,
-# clockClass, clockAccuracy}, its bits 63:40 as S_BESTPV and BTCA hold it,
-# compares below this value exactly when its priority1 is below 255. It is
-# also the aged mark S_SRTO holds, so one compare asks both questions
-SRTO_PASSED_C = 0xFF << 16
+# (802.1AS-2011 10.2.3.13, 10.3.12.1.4 g). A vector's priority1 and the top
+# three bits of its clockClass, its bits 63:53 as S_BESTPV and BTCA hold
+# it, compare below this value exactly when its priority1 is below 255. It
+# is also the aged mark S_SRTO holds, so one compare asks both questions.
+# Its lowest bit is sync-ok's, so a sync receipt timeout that ages nothing
+# masks with it to clear sync-ok alone (prog_leg_srto)
+SRTO_PASSED_C = 0xFF << 3
 CEASE_N_C = 3                   # successive multi-answered reqs, 4.2.6.2.5
 CEASE_MS_C = 300_000            # resume after 5 min (--cease-ms overrides)
                                 # counted down in 1 s cadence beats
@@ -673,6 +676,17 @@ class Prog:
     def label(self, name: str) -> None:
         """Name the address the next emitted instruction will occupy."""
         self.items.append(("label", name))
+
+    def address(self, name: str) -> int:
+        """The absolute µPC of a local label, for another program's branch
+        into this one's tail."""
+        addr = self.base
+        for it in self.items:
+            if it[0] == "label" and it[1] == name:
+                return addr
+            if it[0] != "label":
+                addr += 1
+        raise KeyError(name)
 
     def words(self) -> list[int]:
         """Resolve every label against this program's real base and pack
@@ -1095,7 +1109,7 @@ def prog_rx_announce(base: int) -> Prog:
     # priority1 255 grandmaster leaves gmPresent FALSE and competes as ever.
     # Only a usable Sync/Follow_Up pair or an asCapable rise clears the
     # mark (#89)
-    p.emit("ALU", rd=RU, ra=RA, rb=0, cnd=ALU_SHR, imm=40)  # {p1,class,acc}
+    p.emit("ALU", rd=RU, ra=RA, rb=0, cnd=ALU_SHR, imm=53)  # p1,class[7:5]
     p.emit("RDST", rd=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)
     p.emit("CMP", ra=RU, rb=RT, fmt=FMT_D)
     p.emit("BRS", cnd=BRS_LT, label=LB["BECGATE"])
@@ -2116,7 +2130,13 @@ def _pdpost_verdict(p):
     p.emit("BR", label="done")
     p.label("bad")
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
-    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND,
+           imm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
+    # PUBFLAGS: RT becomes the flags word, then prog_leg_pdpair's COMMIT and
+    # END. A sync receipt timeout that ages nothing ends here too (#89)
+    p.label("pubflags")
+    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)
     p.label("done")
 
 
@@ -2145,27 +2165,33 @@ def prog_leg_srto(base: int) -> Prog:
     this single port the plane's own vector is the best, so BECOME takes
     the grandmaster role.
 
-    A master is only marked: it keeps its sync-ok (#84), and its peer's
-    next Announce is aged at once. A priority1 255 grandmaster leaves
-    gmPresent FALSE (10.3.12.1.4 g), so its slave stays elected. An
-    incapable port has no information to age, and its mark ends at the
-    asCapable rise. The servo stays locked (#68).
+    A priority1 255 grandmaster leaves gmPresent FALSE (10.3.12.1.4 g), so
+    its slave stays elected, but its Sync has stopped: sync-ok falls, as
+    the v4 rule had it on every expiry outside mastership. A master is
+    only marked: it keeps its sync-ok (#84), and its peer's next Announce
+    is aged at once. An incapable port has no information to age, and its
+    mark ends at the asCapable rise. The servo stays locked (#68).
 
-    Branch-free: the presence bit less one is zero for an elected peer and
-    all ones otherwise, so OR-ed into the elected vector's bits 63:40 it
-    compares below SRTO_PASSED_C exactly for a peer with gmPresent."""
+    Branch-free: the presence bit times SRTO_PASSED_C is the mark for an
+    elected peer and zero otherwise. The elected vector's bits 63:53
+    compare below it exactly for a peer with gmPresent, and nothing
+    compares below zero. Otherwise MASK clears that product's bits from
+    the flags, and sync-ok is the only flag among them, so a peer that is
+    not aged loses sync-ok and a master loses nothing. PDPAIR's tail then
+    publishes the flags and commits."""
+    assert SRTO_PASSED_C & (2 * FL_SYNCOK_C - 1) == FL_SYNCOK_C
     p = Prog(base)
-    p.emit("MOVE", rd=RT, ra=0, imm=SRTO_PASSED_C)
-    p.emit("WRST", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)
-    p.emit("RDST", rd=RU, imm=RG_PUB | 2, fmt=FMT_Q)
-    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)
-    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)
-    p.emit("RDST", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
-    p.emit("ALU", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)
-    p.emit("ALU", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)
-    p.emit("CMP", ra=RU, rb=RT, fmt=FMT_D)
+    p.emit("MOVE", rd=RU, ra=0, imm=SRTO_PASSED_C)
+    p.emit("WRST", ra=RU, imm=RG_SCR | S_SRTO, fmt=FMT_Q)
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RV, ra=RT, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)
+    p.emit("MD", rd=RV, ra=RV, rb=RU, cnd=MD_MULS)    # the mark, or zero
+    p.emit("RDST", rd=RW, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
+    p.emit("ALU", rd=RW, ra=RW, rb=0, cnd=ALU_SHR, imm=53)  # p1,class[7:5]
+    p.emit("CMP", ra=RW, rb=RV, fmt=FMT_D)
     p.emit("BRS", cnd=BRS_LT, label=LB["BECGATE"])
-    p.emit("END")
+    p.emit("MASK", rd=RT, ra=R0, rb=RV)               # RT & ~RV
+    p.emit("BR", label=LB["PUBFLAGS"])
     return p
 
 
@@ -2331,6 +2357,7 @@ def build(mac: int, seq_seed: int = 0,
     # pass 1: measure (word counts are independent of branch targets)
     for name, _ in LEG_FNS:
         LB[name] = 0
+    LB["PUBFLAGS"] = 0
     fixed_sz = [(b, len(fn(b).words())) for b, fn in fixed]
     leg_sz = [(name, len(fn(0).words())) for name, fn in LEG_FNS]
 
@@ -2363,6 +2390,8 @@ def build(mac: int, seq_seed: int = 0,
                 break
         else:
             raise AssertionError(f"leg {name} ({sz} words) does not fit")
+    # PDPAIR's flags-publishing tail, which SRTO shares (#89)
+    LB["PUBFLAGS"] = prog_leg_pdpair(LB["PDPAIR"]).address("pubflags")
 
     # pass 2: emit with real bases
     rom = [None] * DEPTH
