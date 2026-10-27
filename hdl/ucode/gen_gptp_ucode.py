@@ -1610,9 +1610,10 @@ def prog_leg_pdreq(base: int) -> Prog:
     cadence gate and cease rule above it filled 139 words (140 in a seeded
     regression image), and this leg is 59 words with its pairing clears.
     Left in place it would have run past entry 704. #82 has since taken
-    thisClock out of the init leg's constants (130 and 131 words). The
-    packer puts the leg in free space, which is what that two-pass
-    assembler is for."""
+    thisClock out of the init leg's constants (130 and 131 words), and
+    #90's branch-free loss count made this leg 56 words. The packer puts
+    the leg in free space, which is what that two-pass assembler is
+    for."""
     p = Prog(base)
     _tmr_pdelay_request(p)
     return p
