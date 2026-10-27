@@ -32,7 +32,7 @@ No handwritten C harness exists.
 | `make -C tb/verilator/parser` | Frame parsing and refusal paths |
 | `make -C tb/verilator/engine` | Whole-plane protocol behavior |
 | `make -C tb/verilator/engine mutants` | Engine mutation controls |
-| `make -C tb/verilator/parser mutants` | Parser receive-error mutation controls |
+| `make -C tb/verilator/parser mutants` | Parser receive-error and PathTrace mutation controls |
 | `make -C bench/arty test` | MII timestamp-tag transport |
 | `make lint` | Engine and bench lint |
 | `make` | Every required local gate |
@@ -95,6 +95,8 @@ Prefer independent protocol formulas and frame builders.
 - Counts bank writes before, on, and after errors.
 - Proves refused frames leave no stale words.
 - Proves those error checks through planted defects.
+- Accepts PathTrace counts other than stepsRemoved plus one.
+- Proves that acceptance through a planted defect.
 
 ### Engine suite
 
@@ -119,6 +121,8 @@ Prefer independent protocol formulas and frame builders.
 - Clears it on every handover to a peer.
 - Appends thisClock to direct and multi-hop received paths.
 - Checks the seven-entry, eight-entry and absent path boundaries.
+- Defers to better grandmasters whatever their path count.
+- Removes each Announce disqualification in its own mutant.
 - Ends every committed peer path with thisClock.
 - Rejects tied-low and early-clear slew indications.
 - Keeps in-band tracking inactive after idle timeouts and GM changes.

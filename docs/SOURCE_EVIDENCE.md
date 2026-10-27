@@ -28,9 +28,9 @@ Line numbers describe the current branch layout.
 | Python image generation | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
 | Media-dependent transmit flags | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine and tsngen suites |
 | Step-versus-slew policy | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
-| Registered policy slew level | [Port](../hdl/top/KL_gptp_engine.sv#L109), [word 2](../hdl/top/KL_gptp_engine.sv#L1009), [word 3](../hdl/top/KL_gptp_engine.sv#L1014), [policy](../hdl/ucode/gen_gptp_ucode.py#L896) | Engine suite and named mutation controls |
+| Registered policy slew level | [Port](../hdl/top/KL_gptp_engine.sv#L109), [word 2](../hdl/top/KL_gptp_engine.sv#L1009), [word 3](../hdl/top/KL_gptp_engine.sv#L1014), [policy](../hdl/ucode/gen_gptp_ucode.py#L897) | Engine suite and named mutation controls |
 | PHC rate envelope | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
-| Ignored receive flag bits | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L475) | Engine suite |
+| Ignored receive flag bits | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L474) | Engine suite |
 | C++ test harnesses | [`tb/verilator`](../tb/verilator) | `make` |
 | PHC and result face contract | [`check_phc_contract.py`](../tb/check_phc_contract.py) | `make contract` |
 | Load-bearing engine checks | [`mutants.py`](../tb/verilator/engine/mutants.py) | Engine suite |

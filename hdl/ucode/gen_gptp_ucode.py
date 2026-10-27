@@ -65,7 +65,8 @@ The three rules now run ahead of every write the handler makes:
     including those beyond the eight retained public slots, and reports the
     result beside the true count in bank word 12. A fixed Announce without
     PathTrace reports count and loop as zero; a present TLV must have the
-    announced grandmaster at its head and N == stepsRemoved+1. The µcode
+    announced grandmaster at its head, and its N may differ from
+    stepsRemoved+1 (10.5.3.3.4 states that only as a NOTE, #88). The µcode
     therefore consumes one coherent qualification bit rather than walking a
     truncated storage window.
 
@@ -971,8 +972,8 @@ def prog_rx_announce(base: int) -> Prog:
     p.emit("BRS", cnd=BRS_LT, label="steps_ok")
     p.emit("BR", label="out")
     p.label("steps_ok")
-    # (c) for a present TLV, the parser has already checked its framing, head
-    #     and count, and compared EVERY hop (not merely stored w16..w23) with
+    # (c) for a present TLV, the parser has already checked its framing and
+    #     head, and compared EVERY hop (not merely stored w16..w23) with
     #     thisClock. For an absent TLV both count and loop are zero. Word 12
     #     bit 8 is the complete loop verdict in either case.
     p.emit("RDST", rd=RV, imm=RG_BANK | 12, fmt=FMT_Q)

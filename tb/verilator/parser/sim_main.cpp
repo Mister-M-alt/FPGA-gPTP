@@ -153,6 +153,7 @@ class RxParserHarness {
   void check_an_incomplete_declared_chain_is_refused();
   void check_a_duplicate_path_tlv_is_refused();
   void check_declared_path_boundaries_and_padding();
+  void check_a_path_count_need_not_match_steps_removed();
   void check_sync();
   void check_follow_up_with_information_tlv();
   void check_pdelay_resp();
@@ -365,11 +366,10 @@ void RxParserHarness::check_announce_with_a_two_hop_path_trace() {
 // ---- Announce declared-length and complete-PathTrace boundary --------
 // A fixed 64-octet Announce without PathTrace is qualified and reported
 // honestly as count zero. If a declared suffix is present, 10.5.3.3 makes
-// PathTrace lengthField 8N and N=stepsRemoved+1. These probes bind parsing
-// to the PTP message rather than physical Ethernet padding and bite
-// independently on an invalid declared suffix, overrun, truncation,
-// misalignment, and count mismatch. A valid message may still have
-// arbitrary physical padding after its declared end.
+// PathTrace lengthField 8N. These probes bind parsing to the PTP message
+// rather than physical Ethernet padding and bite independently on an
+// invalid declared suffix, overrun, truncation and misalignment. A valid
+// message may still have arbitrary physical padding after its declared end.
 void RxParserHarness::check_a_declared_suffix_binds_parsing_to_the_message() {
   {
     uint16_t d0 = dut->drop_cnt_o;
@@ -630,14 +630,6 @@ void RxParserHarness::check_declared_path_boundaries_and_padding() {
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
-    Frame f = announce_frame(0xA005, AGM, 2, ASRC, {AGM, ASRC});
-    feed(f.b, false);                               // N=2, steps+1=3
-    expect_eq("path-count mismatch: no event", ev_seen, 0);
-    expect_eq("path-count mismatch: one drop", dut->drop_cnt_o,
-              static_cast<uint16_t>(d0 + 1));
-  }
-  {
-    uint16_t d0 = dut->drop_cnt_o;
     Frame f = announce_frame(0xA006, AGM, 0, ASRC, {AGM});
     f.u16(0x0008); f.u16(8); f.u64(LOCAL_CID);      // physical padding
     feed(f.b, false);
@@ -658,6 +650,46 @@ void RxParserHarness::check_declared_path_boundaries_and_padding() {
     expect_eq("deep self path: first retained", bank[16], AGM);
     expect_eq("deep self path: eighth retained", bank[23], 0x7007);
     expect_eq("deep self path: no drop", dut->drop_cnt_o, d0);
+  }
+}
+
+// ---- #88: the hop count is not a qualification rule -------------------
+// 802.1AS-2011 10.5.3.3.4 gives N = stepsRemoved+1 only as a NOTE, and
+// 10.3.10.2.1 disqualifies an Announce only by its a) to c). A complete
+// PathTrace shorter or longer than stepsRemoved+1 is therefore accepted,
+// its true count and every retained identity reported. The first probe is
+// the issue's shape: stepsRemoved 3 and a one-entry path. A short path
+// holding thisClock still reports the loop, for (c) to refuse.
+void RxParserHarness::check_a_path_count_need_not_match_steps_removed() {
+  constexpr uint64_t AHOP = 0x001122FFFE778899ull;
+  struct Probe {
+    const char *tag;
+    uint16_t seq;
+    uint16_t steps;
+    std::vector<uint64_t> path;
+    uint64_t w12;
+  };
+  const Probe probes[] = {
+      {"#88 one entry, stepsRemoved 3", 0xA020, 3, {AGM}, 1},
+      {"#88 two entries, stepsRemoved 2", 0xA021, 2, {AGM, ASRC}, 2},
+      {"#88 three entries, stepsRemoved 0", 0xA022, 0, {AGM, AHOP, ASRC}, 3},
+      {"#88 short loop, stepsRemoved 5", 0xA023, 5, {AGM, LOCAL_CID}, 0x102},
+  };
+  for (const Probe &p : probes) {
+    const uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(p.seq, AGM, p.steps, ASRC, p.path);
+    feed(f.b, false);
+    char n[96];
+    snprintf(n, sizeof n, "%s: event", p.tag);
+    expect_eq(n, ev_seen ? ev_code : 0, 3);
+    snprintf(n, sizeof n, "%s: count and loop", p.tag);
+    expect_eq(n, bank[12], p.w12);
+    for (size_t k = 0; k < p.path.size(); k++) {
+      snprintf(n, sizeof n, "%s: identity %zu", p.tag, k);
+      expect_eq(n, bank[16 + static_cast<uint32_t>(k)], p.path[k]);
+    }
+    snprintf(n, sizeof n, "%s: no drop", p.tag);
+    expect_eq(n, dut->drop_cnt_o, d0);
   }
 }
 
@@ -1520,6 +1552,7 @@ int RxParserHarness::run() {
   check_an_incomplete_declared_chain_is_refused();
   check_a_duplicate_path_tlv_is_refused();
   check_declared_path_boundaries_and_padding();
+  check_a_path_count_need_not_match_steps_removed();
   check_sync();
   check_follow_up_with_information_tlv();
   check_pdelay_resp();

@@ -326,9 +326,9 @@ for i, (seed, kind) in enumerate(ANN_SEEDS):
     # value is >= 255 for ~99.6% of seeds and 10.3.10.2.1 refuses those,
     # so pin it small to exercise the compare arms. A PATH_TRACE variant
     # must also be structurally conformant or the parser refuses it
-    # before the compare: pathSequence length is stepsRemoved+1 (one
-    # element here, so steps 0) and pathSequence[0] is the
-    # grandmasterIdentity (PDU bytes 68..75 := bytes 53..60). Re-decode
+    # before the compare: pathSequence[0] is the grandmasterIdentity
+    # (PDU bytes 68..75 := bytes 53..60). Its one element keeps steps 0,
+    # the canonical stepsRemoved+1, which #88 no longer requires. Re-decode
     # through packet_gen so the model reads what is really on the wire.
     steps = 0 if kind == "ann_pt1" else i % 4
     ahex = patch(patch(ahex, 61, 0), 62, steps)

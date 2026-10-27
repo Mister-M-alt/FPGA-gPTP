@@ -71,13 +71,19 @@
 //         without us, in a bank whose upper hop words still hold our
 //         identity) and two half-identity controls (source and first
 //         hop differing from ours in one 32-bit half) adopt, and a
-//         degrade hands mastership back each time (#7)
+//         degrade hands mastership back each time (#7). It opens with
+//         a), b) and c) on paths whose count is not stepsRemoved+1 (#88)
 // 8n      #85: a slave port publishes the received pathSequence with
 //         thisClock appended (802.1AS-2020 10.3.13.2.4 f 5, 10.3.9.23): a
 //         directly attached grandmaster [GM] publishes [GM, thisClock], a
 //         four-bridge path publishes its five entries and thisClock, seven
 //         entries put thisClock in the last of the eight slots, eight or
 //         more publish their first eight, and an absent TLV stays empty
+// 8o      #88: a better grandmaster whose path count is not stepsRemoved+1
+//         (a NOTE to 802.1AS-2011 10.5.3.3.4) is elected, and its path is
+//         published with thisClock appended. The issue's shape (priority1
+//         247, stepsRemoved 3, one entry) also stops our Announce for a
+//         whole interval, and every degraded grandmaster yields
 // 10..12  slave sync path: offset, sync-ok verdict, the 125 ms
 //         Follow_Up and 375 ms sync receipt timeouts (Table 4.2); the
 //         first pair after asCapable, a link-up about 1 ms off, steps (#68)
@@ -310,6 +316,7 @@ class GptpEngineHarness {
     refuse_a_better_announce_in_a_foreign_domain();
     refuse_unqualified_announces_and_admit_the_controls();
     append_thisclock_to_each_received_path();
+    defer_whatever_the_path_count();
     adopt_a_better_announce_and_hold_its_path();
     clamp_a_deep_path_and_take_a_parent_refresh();
     walk_past_an_unknown_tlv_to_a_later_path_trace();
@@ -2278,9 +2285,13 @@ class GptpEngineHarness {
            dut->dbg_rx_drop_o, static_cast<uint16_t>(drops + 1));
   }
 
+  //! `parent_canary` false drops the parent check alone: an own-source probe
+  //! names thisClock as its source, so even an admitted frame would leave
+  //! thisClock the published parent, and no defect could fail that check.
   void refuse_probe(const char *tag, uint16_t seq, uint64_t gm,
                     uint16_t steps, uint64_t src,
-                    const std::vector<uint64_t> &path, uint64_t rx) {
+                    const std::vector<uint64_t> &path, uint64_t rx,
+                    bool parent_canary = true) {
     uint32_t flags0 = dut->pub_flags_o;
     uint64_t annq0 = dut->pub_annq_o;
     uint16_t drops0 = dut->dbg_rx_drop_o;
@@ -2290,8 +2301,10 @@ class GptpEngineHarness {
     expect(n, dut->pub_flags_o & FL_AMGM, FL_AMGM);
     snprintf(n, 96, "%s: gm still us", tag);
     expect(n, dut->pub_gm_id_o, OUR_CID);
-    snprintf(n, 96, "%s: parent still us", tag);
-    expect(n, dut->pub_parent_id_o, OUR_CID);
+    if (parent_canary) {
+      snprintf(n, 96, "%s: parent still us", tag);
+      expect(n, dut->pub_parent_id_o, OUR_CID);
+    }
     snprintf(n, 96, "%s: flags untouched", tag);
     expect(n, dut->pub_flags_o, flags0);
     snprintf(n, 96, "%s: raw vector never published", tag);
@@ -2348,6 +2361,16 @@ class GptpEngineHarness {
   // the hop count can see it (FPGA-gPTP #7)
   void refuse_unqualified_announces_and_admit_the_controls() {
     const uint64_t PEER2 = 0x0080E1FFFE445566ull;
+    // #88: a), b) and c) on paths whose count differs from stepsRemoved+1,
+    // which the parser now admits, so the microcode alone must refuse them.
+    // Each leads its own kind, so removing that rule moves this plane first.
+    const uint64_t GM_R = 0x00F4F4FFFE000001ull;
+    refuse_probe("#88 own source, one entry, stepsRemoved 3", 46, GM_R, 3,
+                 OUR_CID, {GM_R}, 5520000, false);
+    refuse_probe("#88 stepsRemoved 255, one entry", 47, GM_R, 255, PEER2,
+                 {GM_R}, 5540000);
+    refuse_probe("#88 short loop, stepsRemoved 5", 48, GM_R, 5, PEER2,
+                 {GM_R, OUR_CID}, 5560000);
     // 8c: (a) sent by this time-aware system: our own clockIdentity as
     // the source, a foreign MAC (a reflected or forged frame)
     refuse_probe("own-source announce", 12, 0x0000000000002222ull, 0,
@@ -2495,6 +2518,56 @@ class GptpEngineHarness {
                   received, rx + 100000);
     snprintf(n, sizeof n, "%s: the degraded grandmaster yields", tag);
     expect(n, dut->pub_gm_id_o == OUR_CID && (dut->pub_flags_o & FL_AMGM), 1);
+  }
+
+  // ---- 8o: #88, the path count is not a qualification rule -------------
+  //! 802.1AS-2011 10.3.10.2.1 disqualifies an Announce only by its a) to c);
+  //! N = stepsRemoved+1 is a NOTE to 10.5.3.3.4. Every path below is headed
+  //! by its grandmaster but has a count other than stepsRemoved+1. A better
+  //! grandmaster is elected and its path published plus thisClock. a), b)
+  //! and c) on such paths open phase 8c..8m.
+  void defer_whatever_the_path_count() {
+    // The issue's shape: priority1 247 against our 248, stepsRemoved 3 and
+    // a one-entry path. Deferring also stops our Announce cadence.
+    const uint64_t GM_I = 0x00F1F1FFFE000001ull;
+    const uint64_t SRC_I = 0x00F1F1FFFE0000C3ull;
+    const size_t c0 = commit_snaps.size();
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    send_announce(40, 247, GM_I, 3, SRC_I, {GM_I}, 8300000);
+    expect("#88 issue shape: elected", dut->pub_gm_id_o, GM_I);
+    expect("#88 issue shape: parent", dut->pub_parent_id_o, SRC_I);
+    expect("#88 issue shape: no longer master",
+           dut->pub_flags_o & FL_AMGM, 0);
+    expect("#88 issue shape: count", dut->pub_path_count_o, 2);
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+      char n[64]; snprintf(n, sizeof n, "#88 issue shape: tail %u", k + 1);
+      expect(n, pub_path_tail(k), k == 0 ? OUR_CID : 0);
+    }
+    const PubSnap *s = first_commit_since(c0);
+    expect("#88 issue shape: its commit names the grandmaster and path",
+           s && s->gm == GM_I && committed_path_is(*s, {OUR_CID}), 1);
+    expect("#88 issue shape: parser accepts", dut->dbg_rx_drop_o, d0);
+    run_svc(20000);                              // drain anything in flight
+    const size_t before = txf.size();
+    run_svc(2100000);                            // 1.05 s: a whole interval
+    int anns = 0;
+    for (size_t i = before; i < txf.size(); i++)
+      if (type_of(txf[i]) == 0xB) anns++;
+    expect("#88 issue shape: no Announce for one interval", anns, 0);
+    send_announce(41, 250, GM_I, 3, SRC_I, {GM_I}, 8400000);
+    expect("#88 issue shape: the degraded grandmaster yields",
+           dut->pub_gm_id_o == OUR_CID && (dut->pub_flags_o & FL_AMGM), 1);
+    // shorter, then longer, than stepsRemoved+1
+    const uint64_t GM_T = 0x00F2F2FFFE000001ull;
+    const uint64_t T1 = 0x00F2F2FFFE0000B1ull;
+    take_and_grade_a_path("#88 two entries, stepsRemoved 5", 42, GM_T, 5, T1,
+                          {GM_T, T1}, {GM_T, T1, OUR_CID}, 8500000);
+    const uint64_t GM_L = 0x00F3F3FFFE000001ull;
+    const uint64_t L1 = 0x00F3F3FFFE0000B1ull;
+    const uint64_t L2 = 0x00F3F3FFFE0000C2ull;
+    take_and_grade_a_path("#88 three entries, stepsRemoved 0", 44, GM_L, 0,
+                          L2, {GM_L, L1, L2}, {GM_L, L1, L2, OUR_CID},
+                          8700000);
   }
 
   // ---- 9: better announce -> adopt, sync stops --------------------------
@@ -2669,9 +2742,10 @@ class GptpEngineHarness {
   // bytes happen to follow physically. A fixed Announce without PathTrace is
   // valid and replaces the current parent's selected raw path with count zero
   // and zero tails. A declared suffix must instead contain one complete,
-  // identity-aligned PathTrace with N=stepsRemoved+1. Every malformed shape
-  // below targets the current parent, so accepting it would unconditionally
-  // run BTCA `take`; no-commit plus a counted parser refusal are the oracles.
+  // identity-aligned PathTrace, whose N need not be stepsRemoved+1 (#88,
+  // phase 8o). Every malformed shape below targets the current parent, so
+  // accepting it would unconditionally run BTCA `take`; no-commit plus a
+  // counted parser refusal are the oracles.
   void walk_past_an_unknown_tlv_to_a_later_path_trace() {
     // A complete unknown TLV is ignored, but the walker must continue to a
     // later PathTrace. Both shapes target the current parent and therefore bind
@@ -2809,8 +2883,6 @@ class GptpEngineHarness {
       a.u8(0xEE);
       malformed_ann("non-identity-aligned PathTrace", a, 6390000);
     }
-    malformed_ann("PathTrace count differs from stepsRemoved",
-                  ann_wire(0xA105, 2, {GMID, PEER_CID}), 6395000);
   }
 
   void refuse_a_path_trace_whose_head_is_not_the_announced_gm() {

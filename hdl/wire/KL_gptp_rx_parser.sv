@@ -39,8 +39,10 @@
 //                Announce may omit Path Trace; the absent case distinguished
 //                by 10.3.10.2.1(d) / 10.3.13.2.1(f) is reported honestly as
 //                count zero. When the TLV is present it must be identity-
-//                aligned, wholly contained, and carry stepsRemoved+1
-//                identities as required by 802.1AS-2011 10.5.3.3.4.
+//                aligned and wholly contained. Its hop count may differ
+//                from stepsRemoved+1: 802.1AS-2011 10.5.3.3.4 states that
+//                relation only as a NOTE, and 10.3.10.2.1 a) to c) are
+//                the only disqualifying rules (#88).
 //                The TLV arm can only follow the body it qualifies: a
 //                refused Follow_Up's header words land in the write
 //                bank like those of any frame cut by truncation or
@@ -197,7 +199,6 @@ module KL_gptp_rx_parser
   localparam int unsigned OFF_AN_CQ_END_C = 65;
   localparam int unsigned OFF_AN_P2_C     = 66;
   localparam int unsigned OFF_AN_GM_END_C = 74;
-  localparam int unsigned OFF_AN_SR_END_C = 76;
   localparam int unsigned OFF_AN_TSRC_C   = 77;
   localparam int unsigned OFF_AN_TLV_C    = 78;
   // follow-up information TLV (Table 11-10 offsets + 58)
@@ -217,7 +218,6 @@ module KL_gptp_rx_parser
   logic [63:0] acc_r;          //! big-endian byte accumulator
   logic [15:0] utc_r;          //! announce currentUtcOffset (straddles acc)
   logic [10:0] msg_end_r;      //! absolute final declared byte (DA = 0)
-  logic [15:0] steps_r;
   logic [63:0] gm_r;
   // announce TLV chain and PathTrace walk
   logic        tlv_hdr_run_r;  //! consuming the next generic 4-byte header
@@ -308,14 +308,15 @@ module KL_gptp_rx_parser
                                (tlv_left_r == 16'd1);
   //! IEEE 1588-2008 5.3.8: lengthField makes the total TLV length even.
   //! A generic zero-length value is complete; PATH_TRACE adds its own 8N,
-  //! nonzero/count/head rules and is singular in an Announce.
+  //! nonzero and head rules and is singular in an Announce. Its hop count
+  //! is not compared with stepsRemoved (#88): 802.1AS-2011 10.5.3.3.4 gives
+  //! N = stepsRemoved+1 only as a NOTE, and 10.3.10.2.1 disqualifies an
+  //! Announce only by its a) to c).
   assign ann_tlv_header_bad_w = ann_tlv_header_end_w &&
       (ann_tlv_len_w[0] ||
        ({6'd0, cnt_r} + {1'b0, ann_tlv_len_w} > {6'd0, msg_end_r}) ||
        ((ann_tlv_type_w == 16'h0008) &&
-        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r ||
-         ({1'b0, ann_tlv_len_w[15:3]} !=
-          ({1'b0, steps_r} + 17'd1)))));
+        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r)));
   //! Include the current EOF byte despite non-blocking state updates. This is
   //! true only at the exact fixed-body end or at a complete header/value end
   //! that coincides with the declared messageLength; physical padding cannot
@@ -360,7 +361,6 @@ module KL_gptp_rx_parser
       acc_r       <= '0;
       utc_r       <= '0;
       msg_end_r   <= '0;
-      steps_r     <= '0;
       gm_r        <= '0;
       tlv_hdr_run_r <= 1'b0;
       tlv_hdr_pos_r <= '0;
@@ -411,7 +411,6 @@ module KL_gptp_rx_parser
           bad_r    <= 1'b0;
           mtype_r  <= '0;
           msg_end_r <= '0;
-          steps_r  <= '0;
           gm_r     <= '0;
           tlv_hdr_run_r <= 1'b0;
           tlv_hdr_pos_r <= '0;
@@ -543,8 +542,6 @@ module KL_gptp_rx_parser
                 bank_wdata_o <= acc_nxt_w;
                 gm_r         <= acc_nxt_w;
               end
-              if (cnt_r == 11'(OFF_AN_SR_END_C))
-                steps_r <= acc_nxt_w[15:0];
               if (cnt_r == 11'(OFF_AN_TSRC_C)) begin
                 bank_we_o    <= 1'b1;
                 bank_addr_o  <= 5'd10;
@@ -560,7 +557,7 @@ module KL_gptp_rx_parser
               // complete header's length to skip an unknown type and attempt
               // the next TLV. A malformed/truncated chain is not allowed to
               // turn into an early accepted Announce. PATH_TRACE is singular
-              // and adds the profile's complete 8N/count/head/loop checks.
+              // and adds the profile's complete 8N/head/loop checks.
               if (ann_tlv_header_byte_w) begin
                 if (!ann_tlv_header_end_w) begin
                   tlv_hdr_pos_r <= tlv_hdr_pos_r + 2'd1;

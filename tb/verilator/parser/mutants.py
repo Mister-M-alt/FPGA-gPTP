@@ -23,9 +23,13 @@ written into the tree.
 
 The first mutant is the planted control the issue asks for: it deletes the
 latch and so restores exactly the end-of-frame-only read the base shipped.
-The last is the defect the ruling in #35 asks for: a refused frame's words
+The eighth is the defect the ruling in #35 asks for: a refused frame's words
 may stay in the write bank, so a clean frame behind it that skips one field
 write would hand its event the refused frame's word.
+
+The last restores the PathTrace refusal #88 retired: a hop count other than
+stepsRemoved+1 refused the whole Announce, which 802.1AS-2011 10.3.10.2.1
+does not allow.
 """
 
 from __future__ import annotations
@@ -69,8 +73,32 @@ def oracle(check: str) -> tuple[str, ...]:
     return each(f"rx_err at first, middle, eof: {check}", ORACLE_TYPES)
 
 
+#: #88: the PathTrace TLV header verdict, and the same verdict with the
+#: retired lengthField/8 == stepsRemoved+1 rule restored beside the
+#: stepsRemoved capture it needs (octets 75..76, frame index 76)
+PT_HDR_BAD_HEAD = (
+    "  assign ann_tlv_header_bad_w = ann_tlv_header_end_w &&\n"
+    "      (ann_tlv_len_w[0] ||\n"
+    "       ({6'd0, cnt_r} + {1'b0, ann_tlv_len_w} > {6'd0, msg_end_r}) ||\n"
+    "       ((ann_tlv_type_w == 16'h0008) &&\n")
+PT_HDR_BAD = (
+    PT_HDR_BAD_HEAD +
+    "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r)));\n")
+PT_HDR_BAD_WITH_COUNT = (
+    "  logic [15:0] mut_steps_r;\n"
+    "  always_ff @(posedge clk_i)\n"
+    "    if (rx_valid_i && (cnt_r == 11'd76)) mut_steps_r <= acc_nxt_w[15:0];\n"
+    + PT_HDR_BAD_HEAD +
+    "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r ||\n"
+    "         ({1'b0, ann_tlv_len_w[15:3]} != ({1'b0, mut_steps_r} + 17'd1)))));\n")
+#: the #88 probes, each graded on its event and its drop count
+COUNT_PROBES = ("#88 one entry, stepsRemoved 3",
+                "#88 two entries, stepsRemoved 2",
+                "#88 three entries, stepsRemoved 0",
+                "#88 short loop, stepsRemoved 5")
+
 #: (clean, refused) pairs of the stale-word check
-PAIRS = (("sync", "sync"), ("sync", "pdresp"), ("fu", "fu"), ("fu", "pdresp"),
+PAIRS =(("sync", "sync"), ("sync", "pdresp"), ("fu", "fu"), ("fu", "pdresp"),
          ("pdreq", "pdreq"), ("pdreq", "sync"), ("pdresp", "pdresp"),
          ("pdresp", "fu"))
 
@@ -133,6 +161,11 @@ MUTATIONS = [
        "              bank_we_o    <= !bad_r && !was_bad_r;\n"
        "              bank_addr_o  <= 5'd2;\n")],
      pairs("every word is this frame's")),
+    # #88: the hop count compared with stepsRemoved again, as the base did
+    ("the path-count refusal restored (#88)",
+     [(PT_HDR_BAD, PT_HDR_BAD_WITH_COUNT)],
+     tuple(f"{p}: event" for p in COUNT_PROBES) +
+     tuple(f"{p}: no drop" for p in COUNT_PROBES)),
 ]
 
 

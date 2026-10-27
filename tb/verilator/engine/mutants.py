@@ -591,7 +591,22 @@ MUTATIONS = [
      " | #85 direct grandmaster: tail 6"
      " | #85 direct grandmaster: tail 7"
      " | #85 multi-hop grandmaster: tail 6"
-     " | #85 multi-hop grandmaster: tail 7"),
+     " | #85 multi-hop grandmaster: tail 7"
+     " | #88 issue shape: tail 2"
+     " | #88 issue shape: tail 3"
+     " | #88 issue shape: tail 4"
+     " | #88 issue shape: tail 5"
+     " | #88 issue shape: tail 6"
+     " | #88 issue shape: tail 7"
+     " | #88 two entries, stepsRemoved 5: tail 3"
+     " | #88 two entries, stepsRemoved 5: tail 4"
+     " | #88 two entries, stepsRemoved 5: tail 5"
+     " | #88 two entries, stepsRemoved 5: tail 6"
+     " | #88 two entries, stepsRemoved 5: tail 7"
+     " | #88 three entries, stepsRemoved 0: tail 4"
+     " | #88 three entries, stepsRemoved 0: tail 5"
+     " | #88 three entries, stepsRemoved 0: tail 6"
+     " | #88 three entries, stepsRemoved 0: tail 7"),
     ("the appended entry is the announcing source", "top/KL_gptp_engine.sv",
      "                    pub_path_r[64*pk +: 64] <= rom_clock_id_w;\n",
      "                    pub_path_r[64*pk +: 64] <= frame_cid_r;\n",
@@ -625,6 +640,77 @@ MUTATIONS = [
      "  wire [3:0] ann_pub_count_clamped_w = 4'd0;\n",
      "#85 peer commits with a path were graded"
      " | p1 255 #85 peer commits with a path were graded"),
+    # ---- #88: a)-c) are the only Announce disqualifications ---------------
+    # The base's lengthField/8 == stepsRemoved+1 refusal, restored beside
+    # the stepsRemoved capture (frame index 76) it needs.
+    ("the path-count refusal restored", "wire/KL_gptp_rx_parser.sv",
+     "  assign ann_tlv_header_bad_w = ann_tlv_header_end_w &&\n"
+     "      (ann_tlv_len_w[0] ||\n"
+     "       ({6'd0, cnt_r} + {1'b0, ann_tlv_len_w} > {6'd0, msg_end_r}) ||\n"
+     "       ((ann_tlv_type_w == 16'h0008) &&\n"
+     "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r)));\n",
+     "  logic [15:0] mut_steps_r;\n"
+     "  always_ff @(posedge clk_i)\n"
+     "    if (rx_valid_i && (cnt_r == 11'd76)) mut_steps_r <= acc_nxt_w[15:0];\n"
+     "  assign ann_tlv_header_bad_w = ann_tlv_header_end_w &&\n"
+     "      (ann_tlv_len_w[0] ||\n"
+     "       ({6'd0, cnt_r} + {1'b0, ann_tlv_len_w} > {6'd0, msg_end_r}) ||\n"
+     "       ((ann_tlv_type_w == 16'h0008) &&\n"
+     "        ((ann_tlv_len_w == 16'd0) || ann_tlv_len_w[2:0] || pt_seen_r ||\n"
+     "         ({1'b0, ann_tlv_len_w[15:3]} != ({1'b0, mut_steps_r} + 17'd1)))));\n",
+     "#88 issue shape: elected"
+     " | #88 issue shape: no longer master"
+     " | #88 issue shape: count"
+     " | #88 issue shape: no Announce for one interval"
+     " | #88 two entries, stepsRemoved 5: elected"
+     " | #88 three entries, stepsRemoved 0: elected"
+     " | #88 own source, one entry, stepsRemoved 3: parser-drop policy"
+     " | #88 stepsRemoved 255, one entry: parser-drop policy"
+     " | #88 short loop, stepsRemoved 5: parser-drop policy"),
+    # a), b) and c) themselves, each removed from qualifyAnnounce: the #88
+    # probes carry a count other than stepsRemoved+1, so only the microcode
+    # refusal can hold the plane's mastership
+    ("(a) the own-source refusal removed", GENERATOR,
+     "    p.emit(\"CMP\", ra=RD_, rb=RT, fmt=FMT_Q)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"out\")\n"
+     "    # (b) stepsRemoved >= 255",
+     "    p.emit(\"CMP\", ra=RD_, rb=RT, fmt=FMT_Q)\n"
+     "    # (b) stepsRemoved >= 255",
+     "#88 own source, one entry, stepsRemoved 3: still master"
+     " | #88 own source, one entry, stepsRemoved 3: gm still us"
+     " | #88 own source, one entry, stepsRemoved 3: flags untouched"
+     " | #88 own source, one entry, stepsRemoved 3: raw vector never published"),
+    ("(b) the stepsRemoved refusal removed", GENERATOR,
+     "    p.emit(\"BRS\", cnd=BRS_LT, label=\"steps_ok\")\n"
+     "    p.emit(\"BR\", label=\"out\")\n"
+     "    p.label(\"steps_ok\")\n",
+     "    p.emit(\"BRS\", cnd=BRS_LT, label=\"steps_ok\")\n"
+     "    p.label(\"steps_ok\")\n",
+     "#88 stepsRemoved 255, one entry: still master"
+     " | #88 stepsRemoved 255, one entry: gm still us"
+     " | #88 stepsRemoved 255, one entry: parent still us"
+     " | #88 stepsRemoved 255, one entry: flags untouched"
+     " | #88 stepsRemoved 255, one entry: raw vector never published"),
+    ("(c) the PathTrace loop refusal removed", GENERATOR,
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"qualified\")\n"
+     "    p.emit(\"BR\", label=\"out\")\n"
+     "    p.label(\"qualified\")\n",
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"qualified\")\n"
+     "    p.label(\"qualified\")\n",
+     "#88 short loop, stepsRemoved 5: still master"
+     " | #88 short loop, stepsRemoved 5: gm still us"
+     " | #88 short loop, stepsRemoved 5: parent still us"
+     " | #88 short loop, stepsRemoved 5: flags untouched"
+     " | #88 short loop, stepsRemoved 5: raw vector never published"),
+    # 10.3.5: the current parent's own Announce replaces the best record
+    # unconditionally; made to compete instead, a degraded parent keeps it
+    ("a parent update must beat the best", GENERATOR,
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"take\")"
+     "                 # parent update\n",
+     "",
+     "#88 issue shape: the degraded grandmaster yields"
+     " | #88 two entries, stepsRemoved 5: the degraded grandmaster yields"
+     " | #88 three entries, stepsRemoved 0: the degraded grandmaster yields"),
 ]
 
 
@@ -728,9 +814,9 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
             answer = "missed its named check"
         else:
             print(named[0])
-    # #82, #84 and #85 controls must fail every check they name, for the
-    # same reason: each of those checks needs its own failing defect.
-    if breaks.startswith(("#82 ", "#84 ", "#85 ", P1_PREFIX)) and \
+    # #82, #84, #85 and #88 controls must fail every check they name, for
+    # the same reason: each of those checks needs its own failing defect.
+    if breaks.startswith(("#82 ", "#84 ", "#85 ", "#88 ", P1_PREFIX)) and \
             answer == "caught":
         failed = [line for line in output.splitlines()
                   if line.startswith("FAIL ")]
