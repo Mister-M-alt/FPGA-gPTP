@@ -64,6 +64,9 @@ sys.path.insert(0, str((HERE / "../../").resolve()))
 
 from mutation_verdict import TALLY, verdict  # noqa: E402
 
+sys.path.insert(0, str(HERE))
+from receipt_mutants import GENERATOR, RECEIPT_MUTATIONS  # noqa: E402
+
 #: the RTL the suite builds, in the order the Makefile lists it
 RTL_SOURCES = (
     "ucpu/gptp_ucpu_pkg.sv",
@@ -73,7 +76,6 @@ RTL_SOURCES = (
     "common/KL_gptp_timer.sv",
     "top/KL_gptp_engine.sv",
 )
-GENERATOR = "ucode/gen_gptp_ucode.py"
 #: the shipping arguments of this suite's image, as tb/verilator/engine/Makefile
 GENARGS = ("--clk-hz", "2000000", "--cease-ms", "3000")
 #: the Makefile's fourth pass (#82): a priority1 of 255, the self-publication
@@ -261,7 +263,7 @@ MUTATIONS = [
      "the servo stays locked across a grandmaster identity change"),
     # only an asCapable rise re-arms the link-up (the manager's ruling on
     # #68): each of these two re-adds a retired re-arm
-    # one word longer, which the receipt timeout leg's gap still holds (#89)
+    # one word longer, which the ROM still holds (#89)
     ("a receipt timeout unlocks the servo", GENERATOR,
      "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n",
      "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
@@ -498,179 +500,23 @@ MUTATIONS = [
      " | #84 every master cycle publishes sync-ok"
      " | p1 255 #84 first mastership: the master flags carry sync-ok"
      " | p1 255 #84 every master cycle publishes sync-ok"),
-    # word-neutral: the timeout's role replaces the flags, sync-ok included
+    # word-neutral: every expiry clears sync-ok, a master's included. The
+    # two words come from the elected priority1's read, so every elected
+    # grandmaster is also taken as present, which only the p1 255 pass sees
     ("a queued receipt timeout clears a master's sync-ok", GENERATOR,
-     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n",
-     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n",
+     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)\n"
+     "    p.emit(\"RDST\", rd=RV, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=40)\n",
+     "    p.emit(\"ALU\", rd=RV, ra=RU, rb=0, cnd=ALU_AND,"
+     " imm=~FL_SYNCOK_C & 0xFF)\n"
+     "    p.emit(\"WRST\", ra=RV, imm=RG_PUB | 2, fmt=FMT_Q)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_SUB, imm=FL_PRESENT_C)\n",
      "#84 takeover: a queued receipt timeout keeps sync-ok"
      " | #84 every master cycle publishes sync-ok"),
-    # ---- #89: sync receipt timeout ages the port ---------------------------
-    ("a queued receipt timeout ages a master", GENERATOR,
-     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=ROLE_SLAVE_C)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=LB[\"BECOME\"])\n",
-     "    p.emit(\"BR\", label=LB[\"BECOME\"])\n",
-     "#89 takeover: the queued receipt timeout ages nothing"),
-    # the leg as main 55680bff shipped it, seven words, which its gap holds:
-    # sync-ok falls unless mastership stands, and nothing is aged
-    ("a sync receipt timeout only clears sync-ok", GENERATOR,
-     "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=ROLE_MASK_C)\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
-     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=ROLE_SLAVE_C)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=LB[\"BECOME\"])\n"
-     "    p.emit(\"END\")\n",
-     "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=2)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_OR, imm=7)\n"
-     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"COMMIT\")\n    p.emit(\"END\")\n",
-     "#89 Sync stops: the plane takes mastership"
-     " | #89 never usable: the grandmaster is aged"
-     " | #89 no Follow_Up: the plane takes mastership within"
-     " | #89 Follow_Up after the next Sync: the plane takes mastership within"
-     " | #89 Follow_Up with the next sequenceId: the plane takes mastership"
-     " within"),
-    ("adoption leaves the Sync receipt watch off", GENERATOR,
-     "    # A parent refresh (same_gm) restarts nothing\n"
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)       "
-     "# sync watch\n",
-     "    # A parent refresh (same_gm) restarts nothing\n",
-     "#89 never usable: the grandmaster is aged"
-     " | #89 never usable: within syncReceiptTimeout of its adoption"),
-    ("an aged port takes Announces", GENERATOR,
-     "    p.emit(\"RDST\", rd=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
-     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=ROLE_SLAVE_C)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"out\")\n",
-     "",
-     "#89 never usable: the aged port stays master while Announces continue"
-     " | #89 Sync stops: the aged port stays master"
-     " | #89 no Follow_Up: the aged port stays master"
-     " | #89 Follow_Up after the next Sync: the aged port stays master"
-     " | #89 Follow_Up with the next sequenceId: the aged port stays master"),
-    ("a master steers on its aged peer's Sync", GENERATOR,
-     "    p.emit(\"CMP\", ra=RC, rb=0, fmt=FMT_D,"
-     " imm=ROLE_MASTER_C - ROLE_SLAVE_C)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=LB[\"SRWATCH\"])\n",
-     "",
-     "#89 first grandmaster: Sync recovery is heard as master and steers"
-     " nothing"
-     " | #89 Sync stops: Sync recovery is heard as master and steers nothing"
-     " | #89 no Follow_Up: Sync recovery is heard as master and steers"
-     " nothing"),
-    ("a master hears no Sync", GENERATOR,
-     "    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, \"ac\", \"out\")\n"
-     "    p.emit(\"WRST\", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)\n",
-     "    e_flag_gate(p, ROLE_MASK_C, ROLE_SLAVE_C, \"sl\", \"out\")\n"
-     "    p.emit(\"WRST\", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)\n",
-     "#89 first grandmaster: the next Announce elects the grandmaster"
-     " | #89 Sync stops: the next Announce elects the grandmaster"
-     " | #89 no Follow_Up: the next Announce elects the grandmaster"),
-    # the watch a usable pair restarts, too short and too long
-    ("the Sync receipt watch is 100 ms", GENERATOR,
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   "
-     "# consumed\n"
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n",
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   "
-     "# consumed\n"
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=100)\n",
-     "#89 Sync stops: within syncReceiptTimeout and one BMCA pass"
-     " | #89 first grandmaster: usable Sync keeps it elected"
-     " | #89 Sync every 250 ms keeps the plane deferring"),
-    ("the Sync receipt watch is 500 ms", GENERATOR,
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   "
-     "# consumed\n"
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n",
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   "
-     "# consumed\n"
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=500)\n",
-     "#89 Sync stops: within syncReceiptTimeout and one BMCA pass"
-     " | #89 no Follow_Up: the plane takes mastership within"
-     " | #89 Follow_Up with the next sequenceId: the plane takes mastership"
-     " within"),
-    # word-neutral: a refresh expires the Sync watch, not the Announce one
-    ("a parent refresh expires the Sync watch", GENERATOR,
-     "    p.label(\"same_gm\")\n"
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=3000)\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)       "
-     "# receipt watch\n",
-     "    p.label(\"same_gm\")\n"
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=1)\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)\n",
-     "#89 Sync stops: the Announce leaves the grandmaster elected"),
-    ("the adoption watch is 100 ms", GENERATOR,
-     "    # A parent refresh (same_gm) restarts nothing\n"
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n",
-     "    # A parent refresh (same_gm) restarts nothing\n"
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=100)\n",
-     "#89 never usable: within syncReceiptTimeout of its adoption"
-     " | still slave inside the Sync receipt watch"),
-    # word-saving: the Follow_Up pairs on its source alone
-    ("a Follow_Up pairs whatever its sequenceId", GENERATOR,
-     "    p.emit(\"CMP\", ra=RT, rb=RU, fmt=FMT_W)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"srcck\")\n"
-     "    p.emit(\"BR\", label=\"out\")\n",
-     "    p.emit(\"BR\", label=\"srcck\")\n",
-     "#89 Follow_Up after the next Sync: no unusable pair is consumed"
-     " | #89 Follow_Up with the next sequenceId: no unusable pair is"
-     " consumed"),
-    ("the Follow_Up watch is 50 ms", GENERATOR,
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=FU_RTO_MS_C)\n",
-     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=50)\n",
-     "#89 a Follow_Up 60 ms after its Sync is used"),
-    # ---- #90 and #91: Figure 11-8 RESET and lostResponses -----------------
-    ("lost responses clear asCapable at the first", GENERATOR,
-     "LOST_CLEARS_AT_C = LOST_N_C + 2\n",
-     "LOST_CLEARS_AT_C = 1\n",
-     "#90 no response: one loss keeps asCapable"
-     " | #90 no follow-up: one loss keeps asCapable"
-     " | #91 duplicated response: one loss keeps asCapable"
-     " | #91 three responses: one loss keeps asCapable"),
-    # one word more, which its gap holds: the clearing beat sends nothing
-    ("the fifth loss stops the requests", GENERATOR,
-     "    p.emit(\"COMMIT\")\n"
-     "    p.label(\"pd_go\")\n",
-     "    p.emit(\"COMMIT\")\n"
-     "    p.emit(\"END\")\n"
-     "    p.label(\"pd_go\")\n",
-     "#90 no response: request 6 goes out"
-     " | #90 no follow-up: runs from a capable plane"
-     " | #90 no follow-up: runs from a completed exchange"),
-    ("same-identity duplicates are a storm", GENERATOR,
-     "    p.emit(\"CMP\", ra=RB, rb=RC, fmt=FMT_Q)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"out\")\n",
-     "",
-     "#91 duplicates are not a storm: requests keep going out"),
-    ("lost responses clear asCapable at the fourth", GENERATOR,
-     "LOST_CLEARS_AT_C = LOST_N_C + 2\n",
-     "LOST_CLEARS_AT_C = LOST_N_C + 1\n",
-     "#90 no response: four losses keep asCapable"
-     " | #90 no follow-up: four losses keep asCapable"
-     " | #91 duplicated response: four losses keep asCapable"
-     " | #91 three responses: four losses keep asCapable"),
-    ("lost responses clear asCapable at the sixth", GENERATOR,
-     "LOST_CLEARS_AT_C = LOST_N_C + 2\n",
-     "LOST_CLEARS_AT_C = LOST_N_C + 3\n",
-     "#90 no response: the fifth loss clears asCapable"
-     " | #90 no follow-up: the fifth loss clears asCapable"
-     " | #91 duplicated response: the fifth loss clears asCapable"
-     " | #91 three responses: the fifth loss clears asCapable"),
-    # the arm as main 55680bff shipped it: every response overwrites it
-    ("a second response re-arms the pairing", GENERATOR,
-     "    p.emit(\"RDST\", rd=RU, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)\n"
-     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_ADD)\n",
-     "",
-     "#91 duplicated response: the fifth loss clears asCapable"
-     " | #91 duplicated response: no exchange completes"
-     " | #91 three responses: the fifth loss clears asCapable"
-     " | #91 three responses: no exchange completes"),
-    # word-neutral: the second response disarms, the third arms again
-    ("a third response re-arms the reset exchange", GENERATOR,
-     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_ADD)\n",
-     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_XOR)\n",
-     "#91 three responses: the fifth loss clears asCapable"
-     " | #91 three responses: no exchange completes"),
+    # ---- #89, #90 and #91: receipt_mutants.py -----------------------------
+    *RECEIPT_MUTATIONS,
     ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
      "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
      "                 disp_ready_w && !disp_valid_r;",
