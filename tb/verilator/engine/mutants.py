@@ -37,15 +37,12 @@ behaviour. Closing that would need a reachable state, not another mutant.
 
 The lapse hook's asCapable term is also defence in depth. Removing only
 that term survives: Sync pairs cannot be consumed while incapable, and
-the asCapable fall expires the Announce receipt watch at once, whose leg
-drops the elected peer by writing the whole flags word zero, sync-ok
-included, before capability can recover through two good Pdelay
-exchanges at 1 s cadence. A master has no peer to drop, and mastership
-retires the qualifier itself. Since #89 the 375 ms Sync receipt watch
-ages a capable slave rather than clearing sync-ok, so it no longer
-covers this term. This is a reachability argument from the current
-policy, not an executed proof; revisit it if the timer or capability
-recovery rules change.
+the fall's leg drops the elected peer by writing the whole flags word
+zero, sync-ok included, before capability can recover through two good
+Pdelay exchanges at 1 s cadence (since #89 the Sync receipt watch ages a
+slave instead). Mastership retires the qualifier itself. This is a
+reachability argument from the current policy, not an executed proof;
+revisit it if the timer or capability recovery rules change.
 
 An absent PathTrace's tail words have no arm either (#85). The engine's
 own simulation assertion stops the run when a commit pairs count zero with
@@ -166,9 +163,8 @@ MUTATIONS = [
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)\n"
      "    p.emit(\"BR\", label=LB[\"TXT1OK\"])\n",
      "a lost result writes no time and completes no exchange"),
-    # word-neutral since #89 filled the lost arm's gap: each of these two
-    # arms falls into the request arm, which cancels the requester exchange
-    # (and, from the response arm, the timer-driven claim as well)
+    # word-neutral since #89 filled TXLOST's gap: each arm falls into the
+    # request arm, cancelling the requester exchange (and the timer claim)
     ("lost Sync cancels the requester exchange", GENERATOR,
      "    p.label(\"sync\")\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)\n"
@@ -502,23 +498,20 @@ MUTATIONS = [
      " | #84 every master cycle publishes sync-ok"
      " | p1 255 #84 first mastership: the master flags carry sync-ok"
      " | p1 255 #84 every master cycle publishes sync-ok"),
-    # word-neutral: the role the timeout found replaces the flags word, so
-    # sync-ok falls in every role, the master's included
+    # word-neutral: the timeout's role replaces the flags, sync-ok included
     ("a queued receipt timeout clears a master's sync-ok", GENERATOR,
      "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n",
      "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n",
      "#84 takeover: a queued receipt timeout keeps sync-ok"
      " | #84 every master cycle publishes sync-ok"),
     # ---- #89: sync receipt timeout ages the port ---------------------------
-    # Each control lists, after "#89 ", every named check it must fail.
     ("a queued receipt timeout ages a master", GENERATOR,
      "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=ROLE_SLAVE_C)\n"
      "    p.emit(\"BRS\", cnd=BRS_Z, label=LB[\"BECOME\"])\n",
      "    p.emit(\"BR\", label=LB[\"BECOME\"])\n",
      "#89 takeover: the queued receipt timeout ages nothing"),
-    # the receipt timeout leg as main 55680bff shipped it, seven words, which
-    # the leg's gap holds: sync-ok falls unless mastership stands, and
-    # nothing is aged
+    # the leg as main 55680bff shipped it, seven words, which its gap holds:
+    # sync-ok falls unless mastership stands, and nothing is aged
     ("a sync receipt timeout only clears sync-ok", GENERATOR,
      "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
      "    p.emit(\"ALU\", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=ROLE_MASK_C)\n"
@@ -528,12 +521,10 @@ MUTATIONS = [
      "    p.emit(\"END\")\n",
      "    p.emit(\"RDST\", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
      "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=2)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_OR,\n"
-     "           imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
+     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_OR, imm=7)\n"
      "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
      "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"COMMIT\")\n"
-     "    p.emit(\"END\")\n",
+     "    p.emit(\"COMMIT\")\n    p.emit(\"END\")\n",
      "#89 Sync stops: the plane takes mastership"
      " | #89 never usable: the grandmaster is aged"
      " | #89 no Follow_Up: the plane takes mastership within"
@@ -569,10 +560,8 @@ MUTATIONS = [
      " | #89 no Follow_Up: Sync recovery is heard as master and steers"
      " nothing"),
     ("a master hears no Sync", GENERATOR,
-     "    p = Prog(base)\n"
      "    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, \"ac\", \"out\")\n"
      "    p.emit(\"WRST\", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)\n",
-     "    p = Prog(base)\n"
      "    e_flag_gate(p, ROLE_MASK_C, ROLE_SLAVE_C, \"sl\", \"out\")\n"
      "    p.emit(\"WRST\", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)\n",
      "#89 first grandmaster: the next Announce elects the grandmaster"
@@ -600,8 +589,7 @@ MUTATIONS = [
      " | #89 no Follow_Up: the plane takes mastership within"
      " | #89 Follow_Up with the next sequenceId: the plane takes mastership"
      " within"),
-    # word-neutral: a parent refresh expires the Sync watch at once, in
-    # place of restarting the Announce watch
+    # word-neutral: a refresh expires the Sync watch, not the Announce one
     ("a parent refresh expires the Sync watch", GENERATOR,
      "    p.label(\"same_gm\")\n"
      "    p.emit(\"MOVE\", rd=RT, ra=0, imm=3000)\n"
@@ -611,7 +599,6 @@ MUTATIONS = [
      "    p.emit(\"MOVE\", rd=RT, ra=0, imm=1)\n"
      "    p.emit(\"WRST\", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)\n",
      "#89 Sync stops: the Announce leaves the grandmaster elected"),
-    # the watch adoption starts, too short
     ("the adoption watch is 100 ms", GENERATOR,
      "    # A parent refresh (same_gm) restarts nothing\n"
      "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n",
@@ -640,8 +627,7 @@ MUTATIONS = [
      " | #90 no follow-up: one loss keeps asCapable"
      " | #91 duplicated response: one loss keeps asCapable"
      " | #91 three responses: one loss keeps asCapable"),
-    # one word longer, which the request leg's gap holds: the beat that
-    # clears asCapable sends no request, so neither does any later one
+    # one word more, which its gap holds: the clearing beat sends nothing
     ("the fifth loss stops the requests", GENERATOR,
      "    p.emit(\"COMMIT\")\n"
      "    p.label(\"pd_go\")\n",
