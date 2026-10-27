@@ -104,6 +104,11 @@ MUTATIONS = [
      "    p.emit(\"MOVE\", rd=RB, ra=0, imm=3)                       # reload, then -1",
      "    p.emit(\"MOVE\", rd=RB, ra=0, imm=2)                       # early completion",
      "slew: first in-band pair cannot clear"),
+    # #89: nothing is in band, so no pair after a Sync lapse completes
+    ("the tracking band is empty", GENERATOR,
+     "    p.emit(\"CMP\", ra=RW, rb=0, fmt=FMT_D, imm=2 * SLEW_SETTLED_NS_C + 1)\n",
+     "    p.emit(\"CMP\", ra=RW, rb=0, fmt=FMT_D, imm=0)\n",
+     "slew: second return pair stays inactive"),
     ("slew clears before the replacement rate", "top/KL_gptp_engine.sv",
      "                if (st_wdata_w[1:0] != 2'd0)\n"
      "                  phc_slew_active_o <= 1'b1;",
@@ -161,6 +166,9 @@ MUTATIONS = [
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)\n"
      "    p.emit(\"BR\", label=LB[\"TXT1OK\"])\n",
      "a lost result writes no time and completes no exchange"),
+    # word-neutral since #89 filled the lost arm's gap: each of these two
+    # arms falls into the request arm, which cancels the requester exchange
+    # (and, from the response arm, the timer-driven claim as well)
     ("lost Sync cancels the requester exchange", GENERATOR,
      "    p.label(\"sync\")\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)\n"
@@ -168,8 +176,7 @@ MUTATIONS = [
      "origin time\n",
      "    p.label(\"sync\")\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)\n"
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_T1V, fmt=FMT_Q)\n"
-     "    p.emit(\"END\")\n",
+     "    p.emit(\"BR\", label=\"t1\")\n",
      "a lost Sync result retires the Sync claim and nothing else"),
     ("lost response cancels the requester exchange", GENERATOR,
      "    p.label(\"resp\")\n"
@@ -178,8 +185,7 @@ MUTATIONS = [
      "carry\n",
      "    p.label(\"resp\")\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)\n"
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)\n"
-     "    p.emit(\"END\")\n",
+     "    p.emit(\"BR\", label=\"t1\")\n",
      "a lost Pdelay_Resp result retires the response claim and nothing "
      "else"),
     # ---- the retained pairing context -------------------------------------
@@ -572,7 +578,84 @@ MUTATIONS = [
      "#89 first grandmaster: the next Announce elects the grandmaster"
      " | #89 Sync stops: the next Announce elects the grandmaster"
      " | #89 no Follow_Up: the next Announce elects the grandmaster"),
+    # the watch a usable pair restarts, too short and too long
+    ("the Sync receipt watch is 100 ms", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   "
+     "# consumed\n"
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n",
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   "
+     "# consumed\n"
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=100)\n",
+     "#89 Sync stops: within syncReceiptTimeout and one BMCA pass"
+     " | #89 first grandmaster: usable Sync keeps it elected"
+     " | #89 Sync every 250 ms keeps the plane deferring"),
+    ("the Sync receipt watch is 500 ms", GENERATOR,
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   "
+     "# consumed\n"
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n",
+     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   "
+     "# consumed\n"
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=500)\n",
+     "#89 Sync stops: within syncReceiptTimeout and one BMCA pass"
+     " | #89 no Follow_Up: the plane takes mastership within"
+     " | #89 Follow_Up with the next sequenceId: the plane takes mastership"
+     " within"),
+    # word-neutral: a parent refresh expires the Sync watch at once, in
+    # place of restarting the Announce watch
+    ("a parent refresh expires the Sync watch", GENERATOR,
+     "    p.label(\"same_gm\")\n"
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=3000)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)       "
+     "# receipt watch\n",
+     "    p.label(\"same_gm\")\n"
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=1)\n"
+     "    p.emit(\"WRST\", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)\n",
+     "#89 Sync stops: the Announce leaves the grandmaster elected"),
+    # the watch adoption starts, too short
+    ("the adoption watch is 100 ms", GENERATOR,
+     "    # A parent refresh (same_gm) restarts nothing\n"
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=SYNC_RTO_MS_C)\n",
+     "    # A parent refresh (same_gm) restarts nothing\n"
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=100)\n",
+     "#89 never usable: within syncReceiptTimeout of its adoption"
+     " | still slave inside the Sync receipt watch"),
+    # word-saving: the Follow_Up pairs on its source alone
+    ("a Follow_Up pairs whatever its sequenceId", GENERATOR,
+     "    p.emit(\"CMP\", ra=RT, rb=RU, fmt=FMT_W)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"srcck\")\n"
+     "    p.emit(\"BR\", label=\"out\")\n",
+     "    p.emit(\"BR\", label=\"srcck\")\n",
+     "#89 Follow_Up after the next Sync: no unusable pair is consumed"
+     " | #89 Follow_Up with the next sequenceId: no unusable pair is"
+     " consumed"),
+    ("the Follow_Up watch is 50 ms", GENERATOR,
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=FU_RTO_MS_C)\n",
+     "    p.emit(\"MOVE\", rd=RT, ra=0, imm=50)\n",
+     "#89 a Follow_Up 60 ms after its Sync is used"),
     # ---- #90 and #91: Figure 11-8 RESET and lostResponses -----------------
+    ("lost responses clear asCapable at the first", GENERATOR,
+     "LOST_CLEARS_AT_C = LOST_N_C + 2\n",
+     "LOST_CLEARS_AT_C = 1\n",
+     "#90 no response: one loss keeps asCapable"
+     " | #90 no follow-up: one loss keeps asCapable"
+     " | #91 duplicated response: one loss keeps asCapable"
+     " | #91 three responses: one loss keeps asCapable"),
+    # one word longer, which the request leg's gap holds: the beat that
+    # clears asCapable sends no request, so neither does any later one
+    ("the fifth loss stops the requests", GENERATOR,
+     "    p.emit(\"COMMIT\")\n"
+     "    p.label(\"pd_go\")\n",
+     "    p.emit(\"COMMIT\")\n"
+     "    p.emit(\"END\")\n"
+     "    p.label(\"pd_go\")\n",
+     "#90 no response: request 6 goes out"
+     " | #90 no follow-up: runs from a capable plane"
+     " | #90 no follow-up: runs from a completed exchange"),
+    ("same-identity duplicates are a storm", GENERATOR,
+     "    p.emit(\"CMP\", ra=RB, rb=RC, fmt=FMT_Q)\n"
+     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"out\")\n",
+     "",
+     "#91 duplicates are not a storm: requests keep going out"),
     ("lost responses clear asCapable at the fourth", GENERATOR,
      "LOST_CLEARS_AT_C = LOST_N_C + 2\n",
      "LOST_CLEARS_AT_C = LOST_N_C + 1\n",

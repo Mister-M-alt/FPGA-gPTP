@@ -4173,8 +4173,12 @@ class GptpEngineHarness {
           expect(n, dut->pub_flags_o & FL_ASCAP, 0);
         }
       }
-      snprintf(n, sizeof n, "%s: no exchange completes", sh.tag);
-      expect(n, dut->pub_pdelay_ns_o, pd);
+      // a duplicated exchange carries a Follow_Up a re-armed pairing
+      // would complete, 60 ns longer
+      if (sh.mode == PD_DUP || sh.mode == PD_DUP3) {
+        snprintf(n, sizeof n, "%s: no exchange completes", sh.tag);
+        expect(n, dut->pub_pdelay_ns_o, pd);
+      }
     }
   }
 
@@ -4309,7 +4313,8 @@ class GptpEngineHarness {
     pd_mode = PD_DUP;
     {
       const uint64_t mark = pd_reqs_sent;
-      expect("dup intervals ran", wait_requests(mark + 5, 12000000ull), 1);
+      expect("#91 duplicates are not a storm: requests keep going out",
+             wait_requests(mark + 5, 12000000ull), 1);
       run(4000);
     }
     expect("duplicates are not a storm",
@@ -5539,8 +5544,13 @@ class GptpEngineHarness {
       snprintf(n, sizeof n, "#89 %s: the plane takes mastership within "
                "syncReceiptTimeout and one BMCA pass", f.tag);
       expect(n, took_over_on_time(c0, pair), 1);
-      snprintf(n, sizeof n, "#89 %s: no unusable pair is consumed", f.tag);
-      expect(n, static_cast<uint32_t>(dut->pub_offset_o), off);
+      // a Follow_Up that could be paired wrongly publishes its skew
+      if (f.shape == SyncShape::late_follow_up ||
+          f.shape == SyncShape::next_sequence) {
+        snprintf(n, sizeof n, "#89 %s: no unusable pair is consumed",
+                 f.tag);
+        expect(n, static_cast<uint32_t>(dut->pub_offset_o), off);
+      }
       snprintf(n, sizeof n, "#89 %s: the aged port stays master while "
                "Announces continue", f.tag);
       expect(n, hold_mastership_while(f.shape, 3), 1);
