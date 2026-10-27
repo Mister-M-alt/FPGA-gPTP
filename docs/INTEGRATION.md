@@ -296,10 +296,13 @@ Only an asCapable fall and rise unlocks it.
 These events clear the synchronization verdict and keep the lock:
 
 - A grandmaster identity change.
-- A 375 ms Sync receipt timeout.
 - This plane returning from grandmaster duty.
 
-Becoming grandmaster sets the verdict instead.
+A 375 ms Sync receipt timeout ages the grandmaster instead.
+
+This plane then becomes grandmaster, which sets the verdict.
+
+Becoming grandmaster keeps the lock.
 
 A grandmaster failover through a Sync lapse stays locked.
 
@@ -392,7 +395,7 @@ Neither the synchronization flag nor addend magnitude determines it.
 | Synchronous reset | Clear level and qualification immediately |
 | Warm reset | Retained scratch cannot revive the level |
 | asCapable loss | Hold level and applied rate; restart completion qualification |
-| Missing Sync; 375 ms receipt timeout | Hold level and rate; restart qualification at timeout |
+| Missing Sync; 375 ms receipt timeout | Ages the grandmaster; becoming grandmaster applies |
 | Missing Follow_Up; 125 ms timeout | Discard pending pair; retain level and rate |
 | Grandmaster identity change | Hold level and rate; restart qualification |
 | Replacement step | Hold through step; clear with its integral-only addend |
@@ -573,11 +576,43 @@ A better peer wins through normal selection.
 
 ### Departure of the elected peer
 
-Two departures each return thisClock and {thisClock}.
+Three departures each return thisClock and {thisClock}.
 
 Announce silence for 3 s ages the peer out.
 
+So do 375 ms without a usable Sync pair.
+
+A usable pair is a Sync with its own Follow_Up.
+
+802.1AS-2011 10.3.11 states that rule.
+
+Cor1 corrects its Figure 10-13.
+
+It holds while the peer keeps announcing.
+
+A missing or late Follow_Up is not usable.
+
+Nor is one naming another sequenceId.
+
 An asCapable port then becomes grandmaster.
+
+Adopting a new grandmaster starts its 375 ms Sync watch.
+
+A grandmaster never sending usable Sync is aged too.
+
+A port aged by Sync stays aged until usable Sync.
+
+Until then its Announces are aged at once.
+
+So this plane stays grandmaster while that Sync stays broken.
+
+As grandmaster it still pairs that peer's Sync and Follow_Up.
+
+Such a pair steers nothing and publishes nothing.
+
+The next Announce after it elects the peer again, once.
+
+An asCapable rise also clears that aged state.
 
 Losing asCapable drops the peer's vector at once.
 
@@ -594,6 +629,26 @@ Announces on an incapable port elect nothing.
 Restored capability lets the best live peer win.
 
 Without Announces, mastership follows within one receipt interval.
+
+### Lost Pdelay responses
+
+802.1AS-2011 Figure 11-8 counts lost responses.
+
+Cor1 and Cor2 correct that figure.
+
+Each 1 s interval without a completed exchange counts one.
+
+That includes a Pdelay_Resp whose Follow_Up never comes.
+
+A second Pdelay_Resp for the outstanding request resets the exchange.
+
+That reset also counts one, from either responder.
+
+Four consecutive losses keep asCapable.
+
+The fifth consecutive loss clears it.
+
+A completed exchange restarts the count.
 
 ## Microcode configuration
 

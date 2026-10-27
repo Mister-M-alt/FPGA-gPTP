@@ -183,6 +183,42 @@ State advances only after ready acceptance.
 
 [WaveDrom source](diagrams/wavedrom/tx_backpressure.json) defines this timing.
 
+## Microcode receipt state
+
+Timer slot 4 is the 375 ms Sync receipt watch.
+
+Every usable Sync pair restarts it, in either role.
+
+Adopting a new grandmaster starts it as well.
+
+Its expiry ages an elected peer through BECOME.
+
+Scratch word 46 records the role that expiry found.
+
+Only the slave value marks the port aged.
+
+An aged port drops every Announce.
+
+A usable pair or an asCapable rise clears that mark.
+
+A master's usable pair only restarts the watch.
+
+Scratch word 45 holds the pending Sync's source.
+
+Scratch word 6 stays the master's Sync sequence.
+
+Each Pdelay beat judges the previous request first.
+
+An uncompleted interval adds one lost response.
+
+The fifth consecutive loss clears asCapable.
+
+Scratch word 39 adds each matching response's armed sequence.
+
+A second response therefore leaves no pairable value.
+
+Its exchange counts as lost at the next beat.
+
 ## Publication invariant
 
 Microcode stages publication values first.

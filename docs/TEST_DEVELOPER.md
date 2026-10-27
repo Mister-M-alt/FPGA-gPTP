@@ -116,6 +116,15 @@ Prefer independent protocol formulas and frame builders.
 - Regains mastership without Announces after capability returns.
 - Publishes sync-ok in every master cycle.
 - Keeps it through a receipt timeout queued behind mastership.
+- Ages a grandmaster when its Sync stops or turns unusable.
+- Times each takeover against the 375 ms Sync watch.
+- Ages a grandmaster that never sends usable Sync.
+- Holds mastership while the aged peer keeps announcing.
+- Re-elects that peer once, after its Sync recovers.
+- Keeps 250 ms Sync and 60 ms Follow_Ups in use.
+- Keeps asCapable through four lost Pdelay responses.
+- Clears asCapable at the fifth, in each loss shape.
+- Resets an exchange answered by duplicate responses.
 - Clears it on every handover to a peer.
 - Appends thisClock to direct and multi-hop received paths.
 - Checks the seven-entry, eight-entry and absent path boundaries.
