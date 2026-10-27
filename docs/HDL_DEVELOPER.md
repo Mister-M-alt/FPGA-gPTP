@@ -199,7 +199,23 @@ It then ages an elected peer through BECGATE.
 
 That needs the peer's grandmaster priority1 below 255.
 
+Otherwise the expiry clears sync-ok, except in the master role.
+
 The mark is `SRTO_PASSED_C`, a priority threshold.
+
+It compares priority1 and the top three clockClass bits.
+
+Its lowest bit is sync-ok's.
+
+The presence bit times the mark is the leg's threshold.
+
+An unaged expiry clears that threshold from the flags.
+
+`MASK` does that: rd and not rb.
+
+So a master, with threshold zero, keeps sync-ok.
+
+The leg then ends in PDPAIR's flags write, `PUBFLAGS`.
 
 An aged port ages each Announce below that threshold.
 

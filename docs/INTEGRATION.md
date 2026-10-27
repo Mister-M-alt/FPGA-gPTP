@@ -302,6 +302,10 @@ A 375 ms Sync receipt timeout ages the grandmaster instead.
 
 This plane then becomes grandmaster, which sets the verdict.
 
+A priority1 255 grandmaster is not aged.
+
+Its timeout clears the verdict instead.
+
 Becoming grandmaster keeps the lock.
 
 A grandmaster failover through a Sync lapse stays locked.
@@ -396,6 +400,7 @@ Neither the synchronization flag nor addend magnitude determines it.
 | Warm reset | Retained scratch cannot revive the level |
 | asCapable loss | Hold level and applied rate; restart completion qualification |
 | Missing Sync; 375 ms receipt timeout | Ages the grandmaster; becoming grandmaster applies |
+| The same timeout under priority1 255 | Hold level and rate; clear the verdict |
 | Missing Follow_Up; 125 ms timeout | Discard pending pair; retain level and rate |
 | Grandmaster identity change | Hold level and rate; restart qualification |
 | Replacement step | Hold through step; clear with its integral-only addend |
@@ -560,6 +565,10 @@ Handing mastership to a peer clears bit 3.
 
 The first consumed Sync pair sets it again.
 
+On a slave, an unaged Sync receipt timeout clears it.
+
+That happens under a priority1 255 grandmaster, which stays elected.
+
 A self publication without mastership leaves bit 3 clear.
 
 ### Selection after reset
@@ -581,6 +590,8 @@ Three departures each return thisClock and {thisClock}.
 Announce silence for 3 s ages the peer out.
 
 So do 375 ms without a usable Sync pair.
+
+That needs a grandmaster priority1 below 255.
 
 A usable pair is a Sync with its own Follow_Up.
 
@@ -604,7 +615,7 @@ The watch belongs to the port, not to its role.
 
 Mastership leaves it running (802.1AS-2011 10.3.11).
 
-So an expiry found in the master role ages too.
+So a master-role expiry marks the port aged too.
 
 A port aged by Sync stays aged until usable Sync.
 
@@ -631,6 +642,10 @@ Ageing on Sync also requires gmPresent (10.3.11).
 gmPresent needs a grandmaster priority1 below 255.
 
 So a priority1 255 grandmaster is never aged by Sync.
+
+Its Sync receipt timeout clears sync-ok instead.
+
+That grandmaster stays elected.
 
 An aged port still elects such a grandmaster.
 

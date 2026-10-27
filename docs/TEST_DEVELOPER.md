@@ -126,6 +126,7 @@ Prefer independent protocol formulas and frame builders.
 - Ages on expiries found in the master role.
 - Keeps a pending Sync's Follow_Up watch across the takeover.
 - Never ages a priority1 255 grandmaster on Sync.
+- Clears sync-ok when that grandmaster's Sync stops.
 - Keeps asCapable through four lost Pdelay responses.
 - Clears asCapable at the fifth, in each loss shape.
 - Resets an exchange answered by duplicate responses.

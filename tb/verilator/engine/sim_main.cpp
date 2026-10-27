@@ -5526,12 +5526,12 @@ class GptpEngineHarness {
   // an aged port stays aged until Sync returns, whatever its Announces do.
   // Phase 36 left GME just adopted from mastership, whose watch had run
   // out while the port was incapable, and GME sends no Sync at all: only
-  // its adoption can start the watch. Then GMS's Sync fails in each shape of the issue while its
-  // Announce continues: the plane takes over within syncReceiptTimeout and
-  // one BMCA pass of the last usable pair, holds mastership without
-  // oscillating while the shape lasts, and returns to GMS once when Sync
-  // recovers. Sync every 250 ms keeps it deferring, and a Follow_Up 60 ms
-  // after its Sync is used
+  // its adoption can start the watch. Then GMS's Sync fails in each shape
+  // of the issue while its Announce continues: the plane takes over within
+  // syncReceiptTimeout and one BMCA pass of the last usable pair, holds
+  // mastership without oscillating while the shape lasts, and returns to
+  // GMS once when Sync recovers. Sync every 250 ms keeps it deferring, and
+  // a Follow_Up 60 ms after its Sync is used
   void age_a_grandmaster_whose_sync_fails() {
     const uint64_t GME = 0x0082E0FFFE000001ull;
     const uint64_t SRCE = 0x0082E0FFFE000002ull;
