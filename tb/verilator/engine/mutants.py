@@ -889,10 +889,10 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
             answer = "missed its named check"
         else:
             print(named[0])
-    # #82, #84, #85 and #88 controls must fail every check they name, for
-    # the same reason: each of those checks needs its own failing defect.
-    if breaks.startswith(("#82 ", "#84 ", "#85 ", "#88 ", P1_PREFIX)) and \
-            answer == "caught":
+    # #82, #84, #85, #87 and #88 controls must fail every check they name,
+    # for the same reason: each of those checks needs its own failing defect.
+    if breaks.startswith(("#82 ", "#84 ", "#85 ", "#87 ", "#88 ",
+                          P1_PREFIX)) and answer == "caught":
         failed = [line for line in output.splitlines()
                   if line.startswith("FAIL ")]
         missed = [want for want in breaks.split(" | ")
