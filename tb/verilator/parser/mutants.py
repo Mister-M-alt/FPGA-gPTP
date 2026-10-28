@@ -131,7 +131,7 @@ HEAD_PROBES = ("#88 head not the grandmaster, two entries",
 EMPTY_PROBES = ("#88 empty path", "#88 empty path between unknowns")
 
 #: (clean, refused) pairs of the stale-word check
-PAIRS =(("sync", "sync"), ("sync", "pdresp"), ("fu", "fu"), ("fu", "pdresp"),
+PAIRS = (("sync", "sync"), ("sync", "pdresp"), ("fu", "fu"), ("fu", "pdresp"),
          ("pdreq", "pdreq"), ("pdreq", "sync"), ("pdresp", "pdresp"),
          ("pdresp", "fu"))
 
