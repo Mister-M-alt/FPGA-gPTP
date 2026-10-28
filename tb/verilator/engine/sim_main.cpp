@@ -85,10 +85,8 @@
 // 8o      #88: a better grandmaster whose path count is not stepsRemoved+1
 //         (a NOTE to 802.1AS-2011 10.5.3.3.4), or whose path is not headed
 //         by it, is elected, and its path is published as received from
-//         entry 0 with thisClock appended. The issue's two shapes (priority1
-//         247 against 248: stepsRemoved 3 with one entry, and a head that
-//         is not the grandmaster) also stop our Announce for a whole
-//         interval, and every degraded grandmaster yields
+//         entry 0 with thisClock appended, and every degraded grandmaster
+//         yields. The issue's two shapes are phase 43
 // 8p      #87: without a path trace TLV, pathTrace keeps its previous value
 //         (802.1AS-2011 10.3.10.2.1 d): a better grandmaster G2 without a
 //         TLV keeps G1's path, with G1 at entry 0; from the parent an empty
@@ -217,6 +215,11 @@
 // 42      #89, the fourth pass only, after 41: a priority1 255 peer's
 //         usable Sync raises sync-ok, and when its Sync stops, sync-ok
 //         clears within syncReceiptTimeout with the peer still elected
+// 43      #88, after 40 and ahead of the whole-run grades: the issue's two
+//         shapes (priority1 247 against 248: stepsRemoved 3 with one entry,
+//         and a head that is not the grandmaster) are elected, publish
+//         their path from its received head, and stop our Announce for a
+//         whole interval of the parent's usable Sync
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
 // the phases a self publication passes through: boot, mastership, 36..38,
@@ -419,6 +422,7 @@ class GptpEngineHarness {
     drop_a_peer_whose_pdelay_stops();
     age_a_grandmaster_whose_sync_fails();
     age_the_port_whatever_role_the_timeout_finds();
+    defer_a_whole_interval_to_the_issue_shapes();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -2604,24 +2608,11 @@ class GptpEngineHarness {
   // ---- 8o: #88, neither the path count nor its head disqualifies --------
   //! 802.1AS-2011 10.3.10.2.1 disqualifies an Announce only by its a) to c);
   //! N = stepsRemoved+1 is a NOTE to 10.5.3.3.4, and d) copies pathSequence
-  //! as received. Every path below has a count other than stepsRemoved+1 or
-  //! a head other than its grandmaster. A better grandmaster is elected and
-  //! its path published from its received head, plus thisClock. a), b) and
-  //! c) on such paths open phase 8c..8m.
+  //! as received. Every path below has a count other than stepsRemoved+1.
+  //! A better grandmaster is elected and its path published from its
+  //! received head, plus thisClock. a), b) and c) on such paths open phase
+  //! 8c..8m; the issue's two shapes are phase 43.
   void defer_whatever_the_path_count() {
-    // The issue's first shape: priority1 247 against our 248,
-    // stepsRemoved 3 and a one-entry path.
-    const uint64_t GM_I = 0x00F1F1FFFE000001ull;
-    const uint64_t SRC_I = 0x00F1F1FFFE0000C3ull;
-    defer_to_a_better_grandmaster("#88 issue shape", 40, GM_I, 3, SRC_I,
-                                  {GM_I}, 8300000);
-    // Its second: a path not headed by the grandmaster. Entry 0 is the
-    // received head, never the grandmaster identity (#88)
-    const uint64_t GM_H = 0x00F5F5FFFE000001ull;
-    const uint64_t HEAD_H = 0x00F5F5FFFE0000A1ull;
-    const uint64_t SRC_H = 0x00F5F5FFFE0000C1ull;
-    defer_to_a_better_grandmaster("#88 head not the grandmaster", 52, GM_H, 1,
-                                  SRC_H, {HEAD_H, SRC_H}, 8250000);
     // shorter, then longer, than stepsRemoved+1
     const uint64_t GM_T = 0x00F2F2FFFE000001ull;
     const uint64_t T1 = 0x00F2F2FFFE0000B1ull;
@@ -2635,19 +2626,19 @@ class GptpEngineHarness {
                           8700000);
   }
 
-  //! One 8o issue shape: priority1 247 against our 248 from mastership.
-  //! The plane elects the peer, publishes `path` from its received head
-  //! plus thisClock in one commit, and stops its own Announce cadence for a
-  //! whole interval; the degraded grandmaster then hands mastership back.
+  //! One phase 43 issue shape: priority1 247 against our 248 from
+  //! mastership. The plane elects the peer, publishes `path` from its
+  //! received head plus thisClock in one commit, and stops its own Announce
+  //! cadence for a whole interval; the degraded grandmaster then hands
+  //! mastership back.
   void defer_to_a_better_grandmaster(const char *tag, uint16_t seq,
                                      uint64_t gm, uint16_t steps, uint64_t src,
-                                     const std::vector<uint64_t> &path,
-                                     uint64_t rx) {
+                                     const std::vector<uint64_t> &path) {
     char n[112];
     const std::vector<uint64_t> want = path_trace_of(path);
     const size_t c0 = commit_snaps.size();
     const uint16_t d0 = dut->dbg_rx_drop_o;
-    send_announce(seq, 247, gm, steps, src, path, rx);
+    send_announce(seq, 247, gm, steps, src, path, phc() + 100);
     snprintf(n, sizeof n, "%s: elected", tag);
     expect(n, dut->pub_gm_id_o, gm);
     snprintf(n, sizeof n, "%s: parent", tag);
@@ -2669,14 +2660,16 @@ class GptpEngineHarness {
     expect(n, dut->dbg_rx_drop_o, d0);
     run_svc(20000);                              // drain anything in flight
     const size_t before = txf.size();
-    run_svc(2100000);                            // 1.05 s: a whole interval
+    // 1.125 s, a whole interval: the parent's usable Sync every 125 ms
+    for (int k = 0; k < 9; k++)
+      s39_interval(SyncShape::usable, 250000, false, 1000, src);
     int anns = 0;
     for (size_t i = before; i < txf.size(); i++)
       if (type_of(txf[i]) == 0xB) anns++;
     snprintf(n, sizeof n, "%s: no Announce for one interval", tag);
     expect(n, anns, 0);
     send_announce(static_cast<uint16_t>(seq + 1), 250, gm, steps, src, path,
-                  rx + 100000);
+                  phc() + 100);
     snprintf(n, sizeof n, "%s: the degraded grandmaster yields", tag);
     expect(n, dut->pub_gm_id_o == OUR_CID && (dut->pub_flags_o & FL_AMGM), 1);
   }
@@ -5953,6 +5946,29 @@ class GptpEngineHarness {
            "is heard", park_a_sync_across_the_takeover(120000), 1);
     for (int k = 0; k < 16; k++)
       s39_interval(SyncShape::usable, 250000, k % 8 == 5);
+  }
+
+  // ---- 43: #88, after 40: the issue's two shapes defer a whole interval --
+  // 802.1AS-2011 10.3.11 (Figure 10-13 as corrected by Cor1) ages an elected
+  // grandmaster with no Sync within syncReceiptTimeout, so a whole interval
+  // of deferring needs the parent's Sync. The phase runs where phase 40 left
+  // usable Sync flowing, so the link-up pair of phase 10 stays the run's
+  // first. A degraded GMS hands mastership back, then each shape wins from
+  // mastership and its degrade hands it back again
+  void defer_a_whole_interval_to_the_issue_shapes() {
+    send_announce(s39_ann_seq++, 250, GMS, 1, SRCS, {GMS, SRCS}, phc() + 100);
+    // The issue's first shape: stepsRemoved 3 and a one-entry path
+    const uint64_t GM_I = 0x00F1F1FFFE000001ull;
+    const uint64_t SRC_I = 0x00F1F1FFFE0000C3ull;
+    defer_to_a_better_grandmaster("#88 issue shape", 40, GM_I, 3, SRC_I,
+                                  {GM_I});
+    // Its second: a path not headed by the grandmaster. Entry 0 is the
+    // received head, never the grandmaster identity (#88)
+    const uint64_t GM_H = 0x00F5F5FFFE000001ull;
+    const uint64_t HEAD_H = 0x00F5F5FFFE0000A1ull;
+    const uint64_t SRC_H = 0x00F5F5FFFE0000C1ull;
+    defer_to_a_better_grandmaster("#88 head not the grandmaster", 52, GM_H, 1,
+                                  SRC_H, {HEAD_H, SRC_H});
   }
 
   // ---- 41: #89, sync receipt ageing needs gmPresent (priority1 255 pass) ---
