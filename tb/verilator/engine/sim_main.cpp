@@ -80,7 +80,10 @@
 //         more publish their first eight, and an absent TLV stays empty
 // 10..12  slave sync path: offset, sync-ok verdict, the 125 ms
 //         Follow_Up and 375 ms sync receipt timeouts (Table 4.2); the
-//         first pair after asCapable, a link-up about 1 ms off, steps (#68)
+//         first pair after asCapable, a link-up about 1 ms off, steps (#68).
+//         #89: with the grandmaster still announcing, the receipt timeout
+//         ages it and this plane is grandmaster within 375 ms and one BMCA
+//         pass of the last usable pair (802.1AS-2011 10.3.11, Cor1)
 // 11b     a Sync/Follow_Up pair in a foreign domain never steers: the
 //         offset, the PHC writes and the flags hold, and the foreign
 //         Sync leaves no pending slot for a domain-0 Follow_Up (#6)
@@ -91,9 +94,9 @@
 // 11e     three Sync/Follow_Up pairs differing only in their flags word
 //         -- 0200/0000, 0208/0008 and twoStep flipped -- pair, steer and
 //         re-base the PHC alike (Table 11-4 ignored on reception, #64)
-// 12b     #68: a receipt timeout clears sync-ok and keeps the servo
-//         locked: the same grandmaster 50 us off slews, and after a
-//         second timeout 150 us off steps once
+// 12b     #68: a receipt timeout keeps the servo locked: the same
+//         grandmaster, re-elected once its Sync is heard again, 50 us off
+//         slews, and after a second timeout 150 us off steps once
 // 13..15  the servo under the #68 policy. At link-up (after asCapable
 //         falls and rises) +-15 us slews and +-25 us steps once, +-20 us
 //         slews and +-(20 us + 1 ns) steps; once locked +-90 us slews and
@@ -129,8 +132,10 @@
 // 21d     the delayed-dispatch shape with a BETTER announce adopts from its
 //         frozen context
 // 22..26  the pdelay verdict tail: the Milan floor, the threshold,
-//         two-exchange recovery, the fourth lost response, the stale
-//         ratio window
+//         two-exchange recovery, the stale ratio window. 25 (#90, #91):
+//         four lost responses keep asCapable and the fifth clears it, for
+//         no response, no Follow_Up, a duplicated response and three
+//         responses (802.1AS-2011 Figure 11-8 RESET, Cor1 and Cor2)
 // 27      the Milan 4.2.6.2.5 cease rule: storm, silence, resume,
 //         re-earn -- and same-identity duplicates are not a storm
 // 28b     #68: after a warm reset the lock survives in scratch, yet the
@@ -173,9 +178,33 @@
 //         mastership arms one only by replacing a peer grandmaster
 // 38      #85: every commit naming a peer grandmaster with a path ends it
 //         with thisClock, once, unless eight received entries fill it
+// 39      #89, after 36 and ahead of the whole-run grades: a grandmaster
+//         adopted with no usable Sync is aged within 375 ms of its adoption;
+//         then Sync stops, loses its Follow_Up, has it after the next Sync, or
+//         names the next sequenceId, while Announce continues: each time the
+//         takeover lands within 375 ms and one BMCA pass, the aged port stays
+//         master for 3 s of Announces, and recovered Sync, heard as master
+//         without steering, lets the next Announce re-elect the grandmaster
+//         once. Sync every 250 ms keeps it deferring, and a Follow_Up 60 ms
+//         after its Sync is used
+// 40      #89, after 39: an expiry ages the port whatever role it finds.
+//         One usable pair heard as master, then Sync lost again, leaves
+//         the next Announce aged; one 124 ms after the pair re-elects.
+//         Mastership from an Announce lapse leaves the Sync watch running,
+//         and a Sync pending at the takeover keeps its 125 ms Follow_Up
+//         watch: its Follow_Up 200 ms later pairs with nothing, 60 ms later
+//         it is heard
+// 41      #89, the fourth pass only, after 36: ageing on Sync needs
+//         gmPresent. The aged port refuses a priority1 1 Announce, elects a
+//         better priority1 255 peer and keeps it 4 s without Sync, then
+//         a priority1 1 Announce ages at once and this plane is master
+// 42      #89, the fourth pass only, after 41: a priority1 255 peer's
+//         usable Sync raises sync-ok, and when its Sync stops, sync-ok
+//         clears within syncReceiptTimeout with the peer still elected
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
-// the phases a self publication passes through: boot, mastership and 36..38.
+// the phases a self publication passes through: boot, mastership, 36..38,
+// 41 and 42.
 // There thisClock is not grandmaster-capable, so gmPresent stays clear in
 // every self publication and is set only while a capable peer is elected
 // (10.3.13.2.4 g). Its checks print with a "p1 255 " prefix.
@@ -278,6 +307,8 @@ class GptpEngineHarness {
     raise_ascapable_on_the_second_exchange();
     become_master_on_announce_receipt_timeout();
     drop_a_peer_whose_pdelay_stops();
+    age_only_while_a_grandmaster_is_present();
+    clear_sync_ok_when_sync_stops_without_a_grandmaster_present();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -323,7 +354,7 @@ class GptpEngineHarness {
     never_steer_from_a_follow_up_without_its_tlv();
     pair_a_padded_sync();
     pair_a_sync_whose_flag_bits_are_ignored();
-    drop_sync_ok_at_the_receipt_timeout();
+    age_the_grandmaster_at_the_sync_receipt_timeout();
     stay_locked_across_a_receipt_timeout();
     step_over_twenty_microseconds_at_link_up();
     step_over_a_hundred_microseconds_once_locked();
@@ -345,7 +376,7 @@ class GptpEngineHarness {
     accept_a_negative_delay_inside_the_milan_floor();
     drop_ascapable_over_the_threshold();
     recover_ascapable_in_two_good_exchanges();
-    clear_ascapable_at_the_fourth_lost_response();
+    clear_ascapable_at_the_fifth_lost_response();
     hold_the_ratio_across_a_stale_window();
     refuse_to_complete_an_exchange_twice();
     cease_on_multiple_responders_and_re_earn();
@@ -368,6 +399,8 @@ class GptpEngineHarness {
     keep_every_addend_inside_the_consumer_envelope();
     return_to_thisclock_around_a_winning_peer();
     drop_a_peer_whose_pdelay_stops();
+    age_a_grandmaster_whose_sync_fails();
+    age_the_port_whatever_role_the_timeout_finds();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -488,6 +521,9 @@ class GptpEngineHarness {
   uint64_t master_unsynced_cycles = 0;
 
   // ---- TX backpressure ------------------------------------------------------
+  //! every Pdelay_Req transmitted so far: a beat judges the request before
+  //! it, so the #90 phases count losses in these
+  uint64_t pd_reqs_sent = 0;
   std::vector<std::vector<uint8_t>> txf;
   std::vector<uint64_t> txns;               // egress ts fed per frame
   std::vector<uint8_t> cur;
@@ -663,6 +699,7 @@ class GptpEngineHarness {
       if (tx_sof) { cur.clear(); in_tx = true; }
       if (in_tx) cur.push_back(tx_data);
       if (tx_eof && in_tx) {
+        if (type_of(cur) == 0x2) pd_reqs_sent++;
         txf.push_back(cur);
         txns.push_back(0);
         if (auto_txts) auto_pend = static_cast<int>(txf.size()) - 1;
@@ -845,8 +882,12 @@ class GptpEngineHarness {
   // ---- auto peer: answers every Pdelay_Req the DUT transmits ----------------
   // peer clock runs at +2^-13 (~122 ppm) against ours; turnaround fields are
   // constants of the mode, the ingress stamp is t1 + wire turnaround.
+  //! PD_NOFU answers with a Pdelay_Resp and no Follow_Up, PD_DUP with two
+  //! identical Pdelay_Resp and one Follow_Up, PD_DUP3 with three (#90, #91).
+  //! None of the three completes an exchange (802.1AS-2011 Figure 11-8: a
+  //! second response is RESET), so none of them feeds the pdelay model
   enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_SELF, PD_DUAL,
-                PD_DUP, PD_DUAL_LATE };
+                PD_DUP, PD_DUAL_LATE, PD_NOFU, PD_DUP3 };
   PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
   size_t pd_seen = 0;
   int pd_self_sent = 0;             // PD_SELF pairs actually sent
@@ -897,12 +938,16 @@ class GptpEngineHarness {
       f.ts(t2); f.u64(OUR_CID); f.u16(1);
       send_frame(f.b, t4);
       run(400);
-      if (pd_mode == PD_DUAL || pd_mode == PD_DUP) {
+      if (pd_mode == PD_NOFU) continue;   // the Follow_Up never comes
+      const int dups = pd_mode == PD_DUP3 ? 2 :
+          (pd_mode == PD_DUAL || pd_mode == PD_DUP) ? 1 : 0;
+      for (int k = 1; k <= dups; k++) {
         uint64_t src2 = (pd_mode == PD_DUAL) ? NEAR_CID
                                              : PEER_CID;
+        // a pairing with a later response would compute 600 + 60 k ns
         Frame d = ptp(0x3, seq, 0, 0x0200, 20, src2);
-        d.ts(t2 + 40); d.u64(OUR_CID); d.u16(1);
-        send_frame(d.b, t4 + 80);
+        d.ts(t2 + 40 * k); d.u64(OUR_CID); d.u16(1);
+        send_frame(d.b, t4 + 80 * k);
         run(400);
       }
       Frame g = ptp(0xA, seq, 0, 0x0000, 20);
@@ -919,7 +964,7 @@ class GptpEngineHarness {
         send_frame(d.b, t4 + 2000);
         run(400);
       }
-      model_exchange(t1, t2, t3, t4);
+      if (dups == 0) model_exchange(t1, t2, t3, t4);
     }
   }
 
@@ -939,6 +984,17 @@ class GptpEngineHarness {
   bool wait_exchanges(int count, uint64_t max_ticks) {
     for (uint64_t n = 0; n < max_ticks; n++) {
       if (pdm.count >= count) return true;
+      tick();
+      if ((n & 255) == 0) service_pdelay();
+    }
+    return false;
+  }
+
+  //! Run, the auto-peer answering in its current mode, until `count`
+  //! Pdelay_Req frames have gone out in all. Bounded in DUT cycles
+  bool wait_requests(uint64_t count, uint64_t max_ticks) {
+    for (uint64_t n = 0; n < max_ticks; n++) {
+      if (pd_reqs_sent >= count) return true;
       tick();
       if ((n & 255) == 0) service_pdelay();
     }
@@ -2943,14 +2999,19 @@ class GptpEngineHarness {
     }
   }
 
+  //! Adoption also starts the 375 ms Sync receipt watch (#89), and phase 10's
+  //! pair must be the first after it, so the window below is two Sync slots
+  //! and ends inside that watch
   void stop_sync_transmission_after_adoption() {
-    run_svc(20000);                              // drain anything in flight
+    run_svc(10000);                              // drain anything in flight
     size_t before = txf.size();
-    run_svc(700000);                             // 0.35 s: ~3 sync slots
+    run_svc(500000);                             // 0.25 s: two sync slots
     int syncs = 0;
     for (size_t i = before; i < txf.size(); i++)
       if ((txf[i][14] & 0xF) == 0x0) syncs++;
     expect("sync TX stopped", syncs, 0);
+    expect("still slave inside the Sync receipt watch",
+           dut->pub_flags_o & 3, FL_PRESENT);
   }
 
   // ---- 10: as slave, peer sync -> offset; sync-ok rises -----------------
@@ -3260,21 +3321,104 @@ class GptpEngineHarness {
     }
   }
 
-  // ---- 12: syncReceiptTimeout (375 ms) -> sync-ok falls -----------------
-  void drop_sync_ok_at_the_receipt_timeout() {
-    expect("sync-ok falls on timeout",
-           wait_flags(FL_SYNCOK, 0, 900000ull), 1);
-    expect("still slave at the verdict", dut->pub_flags_o & 3, FL_PRESENT);
+  //! syncReceiptTimeout, 3 x the 125 ms Sync interval (802.1AS-2011
+  //! 10.6.3.1; Milan v1.2 Table 4.2), in 2 MHz cycles
+  static constexpr uint64_t SYNC_RTO_CYC = 375ull * 2000ull;
+  //! the timer's grain: a watch armed inside one millisecond expires on the
+  //! tick that ends its 375th, so up to one millisecond early
+  static constexpr uint64_t MS_CYC = 2000ull;
+  //! the slack the takeover may add after it: one BMCA pass through BECOME
+  //! to its commit, well under 2 ms
+  static constexpr uint64_t BMCA_PASS_CYC = 2ull * 2000ull;
+
+  //! The cycle of the last addend pulse, which every consumed pair writes:
+  //! the instant its sync receipt watch restarted
+  uint64_t last_pair_cyc() const { return adj_cyc.empty() ? 0 : adj_cyc.back(); }
+
+  //! #89: the first commit since `mark` that makes this plane grandmaster
+  const PubSnap *takeover_since(size_t mark) const {
+    for (size_t k = mark; k < commit_snaps.size(); k++)
+      if (commit_snaps[k].gm == OUR_CID && (commit_snaps[k].flags & FL_AMGM))
+        return &commit_snaps[k];
+    return nullptr;
+  }
+
+  //! #89: whether the takeover since `mark` landed in the window 802.1AS
+  //! -2011 10.3.11 gives it: no earlier than syncReceiptTimeout after the
+  //! last usable pair at `pair_cyc`, and no later than one BMCA pass after
+  bool took_over_on_time(size_t mark, uint64_t pair_cyc) const {
+    const PubSnap *t = takeover_since(mark);
+    return t && t->cyc >= pair_cyc + SYNC_RTO_CYC - MS_CYC &&
+           t->cyc <= pair_cyc + SYNC_RTO_CYC + BMCA_PASS_CYC;
+  }
+
+  // ---- 12: #89 -- syncReceiptTimeout (375 ms) ages the grandmaster ------
+  // 802.1AS-2011 10.3.11 (Figure 10-13 as corrected by Cor1): CURRENT goes
+  // to AGED when currentTime >= syncReceiptTimeoutTime && gmPresent, as on
+  // announce receipt timeout. The grandmaster keeps announcing, so its 3 s
+  // Announce watch never runs out; its Sync stopped at phase 11e's last
+  // pair. The port ages that grandmaster and this plane, the best of what
+  // remains, becomes grandmaster within syncReceiptTimeout plus one BMCA
+  // pass, with asCapable held and sync-ok carried by mastership (#84)
+  void age_the_grandmaster_at_the_sync_receipt_timeout() {
+    const uint64_t pair = last_pair_cyc();
+    const size_t c0 = commit_snaps.size();
+    run_svc(400000);                             // 200 ms into the watch
+    keep_the_gm_elected(0x02EF);                 // Announce continues
+    expect("#89 Sync stops: the Announce leaves the grandmaster elected",
+           dut->pub_flags_o & 3, FL_PRESENT);
+    expect("#89 Sync stops: the plane takes mastership",
+           wait_flags(FL_AMGM, FL_AMGM, 900000ull), 1);
+    run(200);
+    expect("#89 Sync stops: within syncReceiptTimeout and one BMCA pass",
+           took_over_on_time(c0, pair), 1);
+    expect("#89 Sync stops: the takeover names thisClock", dut->pub_gm_id_o,
+           OUR_CID);
     expect("timeout keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    expect("#89 Sync stops: mastership carries sync-ok",
+           dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
   }
 
   //! The parent re-announces the adopted grandmaster, so the 3 s Announce
   //! receipt watch restarts. A refresh is not an identity change, so it
-  //! leaves sync-ok and the lock alone; the receipt-timeout waits of the
-  //! #68 phases would otherwise outlast that watch and hand this plane
-  //! mastership
+  //! leaves sync-ok and the lock alone, and it does not restart the Sync
+  //! receipt watch either (#89)
   void keep_the_gm_elected(uint16_t seq) {
     announce(seq, 100, GMID, 0, PEER_CID);
+  }
+
+  //! #89: one usable Sync/Follow_Up pair heard while this plane is master.
+  //! 802.1AS-2011 Figure 10-4 (Cor1) takes it on any asCapable port, so it
+  //! restarts the port's sync receipt watch and clears an aged mark. It
+  //! steers nothing: no PHC pulse and no published offset. True if so
+  bool hear_a_pair_as_master(uint16_t seq, uint64_t local_rx,
+                             uint64_t src = PEER_CID) {
+    const size_t writes = steps_seen.size() + adj_seen.size();
+    const uint32_t off = static_cast<uint32_t>(dut->pub_offset_o);
+    const bool master = (dut->pub_flags_o & FL_AMGM) != 0;
+    sync_pair(seq, local_rx, local_rx - static_cast<uint64_t>(pdm.d) - 7777,
+              src);
+    return master && steps_seen.size() + adj_seen.size() == writes &&
+           static_cast<uint32_t>(dut->pub_offset_o) == off;
+  }
+
+  //! #89: the grandmaster this plane aged on a sync receipt timeout comes
+  //! back. Its Sync recovers first (heard as master), and its next Announce
+  //! elects it again, through `src`: a grandmaster change from thisClock,
+  //! so sync-ok is low and the servo stays locked (#68). Uses Sync
+  //! sequenceId `sseq` and Announce sequenceId `aseq`. True when the plane
+  //! had become master, steered on nothing while master, and is a slave of
+  //! `gm` again
+  bool reelect_after_the_sync_receipt_timeout(uint16_t sseq, uint16_t aseq,
+                                              uint64_t local_rx,
+                                              uint64_t gm, uint16_t steps,
+                                              uint64_t src) {
+    const bool aged = wait_flags(FL_AMGM, FL_AMGM, 900000ull);
+    run(200);
+    const bool heard = hear_a_pair_as_master(sseq, local_rx, src);
+    announce(aseq, 100, gm, steps, src);
+    return aged && heard && (dut->pub_flags_o & 3) == FL_PRESENT &&
+           dut->pub_gm_id_o == gm;
   }
 
   //! One asCapable fall and rise under the phase 10 grandmaster: a far
@@ -3298,25 +3442,31 @@ class GptpEngineHarness {
   }
 
   // ---- 12b: #68 -- a receipt timeout leaves the servo locked ------------
-  // phase 12's receipt timeout cleared sync-ok with asCapable held and the
-  // grandmaster unchanged. Only an asCapable rise re-arms the link-up (the
+  // phase 12's receipt timeout aged the grandmaster with asCapable held, and
+  // this plane became master (#89). Its Sync recovers (heard as master) and
+  // its next Announce elects it again: an identity change from thisClock,
+  // so sync-ok is low. Only an asCapable rise re-arms the link-up (the
   // manager's ruling on #68), so the servo is still locked and the
   // threshold is still 100 us: the same grandmaster 50 us off -- over the
-  // link-up 20 us -- slews with no step pulse. A second receipt timeout,
-  // then 150 us off: over 100 us, one step pulse of -offset
+  // link-up 20 us -- slews with no step pulse. A second receipt timeout and
+  // return, then 150 us off: over 100 us, one step pulse of -offset
   void stay_locked_across_a_receipt_timeout() {
     const uint64_t T12B = 25000000000ull;
     const size_t s0 = steps_seen.size();
-    keep_the_gm_elected(0x02F0);
+    expect("receipt timeout, same GM: re-elected after Sync recovers",
+           reelect_after_the_sync_receipt_timeout(0x0117, 0x02F0,
+                                                  T12B - 500000000ull, GMID, 0,
+                                                  PEER_CID), 1);
     expect("receipt timeout, same GM: asCapable held",
            dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     expect_policy_pair("receipt timeout, same GM, +50 us", 0x0118, T12B,
                        50000, false, false, PEER_CID, 0);
     expect("receipt timeout, same GM, +50 us: no step pulse",
            steps_seen.size(), s0);
-    keep_the_gm_elected(0x02F1);
-    expect("receipt timeout, same GM: the second timeout",
-           wait_flags(FL_SYNCOK, 0, 900000ull), 1);
+    expect("receipt timeout, same GM: the second timeout and return",
+           reelect_after_the_sync_receipt_timeout(0x011A, 0x02F1,
+                                                  T12B + 500000000ull, GMID, 0,
+                                                  PEER_CID), 1);
     expect("receipt timeout, same GM: asCapable held again",
            dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     expect_policy_pair("receipt timeout, same GM, +150 us", 0x0119,
@@ -3460,13 +3610,17 @@ class GptpEngineHarness {
 
   // ---- 15: closed loop -- a +140 ppm master converges to lock -----------
   // the master clock runs independent of our phc: 1.5 s ahead at start,
-  // +0.07 ns per cycle faster. The receipt timeout clears sync-ok first
-  // but leaves the servo locked, so the first pair is a locked one far
-  // over 100 us and steps (#68); the PI then drives the measured offset to
-  // zero with the integrator carrying the rate.
+  // +0.07 ns per cycle faster. The receipt timeout ages the grandmaster
+  // first (#89), and its return clears sync-ok but leaves the servo
+  // locked, so the first pair is a locked one far over 100 us and steps
+  // (#68); the PI then drives the measured offset to zero with the
+  // integrator carrying the rate.
   void converge_the_closed_loop_on_a_fast_master() {
     expect("closed loop starts unsynchronized",
-           wait_flags(FL_SYNCOK, 0, 900000ull), 1);
+           reelect_after_the_sync_receipt_timeout(0x01FF, 0x02FF,
+                                                  phc() + 150, GMID, 0,
+                                                  PEER_CID) &&
+               (dut->pub_flags_o & FL_SYNCOK) == 0, 1);
     size_t steps_before = steps_seen.size();
     int64_t intg_at_entry = svm.intg;            // phases 13..14's deposits
     cl_mst_base =
@@ -3724,12 +3878,13 @@ class GptpEngineHarness {
 
   // ---- 18d: #68 -- a failover after a receipt timeout stays locked ------
   // the usual way a grandmaster disappears: its Syncs stop, the 375 ms
-  // receipt timeout clears sync-ok with asCapable held, and a new
-  // grandmaster is then adopted through the same parent. Only an asCapable
-  // rise re-arms the link-up (the manager's ruling on #68), so the servo
-  // is still locked: 50 us behind, the first pair slews with no step
-  // pulse. A second failover the same way, then 150 us ahead: over 100 us,
-  // one step pulse of -offset
+  // receipt timeout ages it with asCapable held and this plane becomes
+  // master (#89), and the parent then carries a new grandmaster: its Sync
+  // first (heard as master), then its Announce, which is adopted through
+  // the same parent. Only an asCapable rise re-arms the link-up (the
+  // manager's ruling on #68), so the servo is still locked: 50 us behind,
+  // the first pair slews with no step pulse. A second failover the same
+  // way, then 150 us ahead: over 100 us, one step pulse of -offset
   void stay_locked_across_a_failover_after_a_receipt_timeout() {
     const uint64_t SRC5 = 0x00F1F1FFFE000009ull;
     const uint64_t T18D = 52000000000ull;
@@ -3752,9 +3907,15 @@ class GptpEngineHarness {
       // the old grandmaster still announces; only its Syncs stop
       announce(static_cast<uint16_t>(50 + 2 * i), 100, f.from, 1, SRC5);
       snprintf(n, sizeof n, "%s: the receipt timeout comes first", f.tag);
-      expect(n, wait_flags(FL_SYNCOK, 0, 900000ull), 1);
+      expect(n, wait_flags(FL_AMGM, FL_AMGM, 900000ull), 1);
       snprintf(n, sizeof n, "%s: asCapable held", f.tag);
       expect(n, dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+      snprintf(n, sizeof n, "%s: the new grandmaster's Sync is heard", f.tag);
+      expect(n, hear_a_pair_as_master(static_cast<uint16_t>(0x0618 + i),
+                                      T18D - 500000000ull +
+                                          static_cast<uint64_t>(i) *
+                                              1000000000ull,
+                                      SRC5), 1);
       announce(static_cast<uint16_t>(51 + 2 * i), 100, f.to, 1, SRC5);
       snprintf(n, sizeof n, "%s: new identity adopted", f.tag);
       expect(n, dut->pub_gm_id_o, f.to);
@@ -3777,8 +3938,9 @@ class GptpEngineHarness {
   // the sync-ok verdict phase 18d left high, in the commit that changes the
   // grandmaster to thisClock. That Announce waits behind a stalled Pdelay
   // response until the Sync receipt watch 18d's last pair armed has
-  // expired, so the timeout's event is queued behind the takeover's, where
-  // BECOME's disarm cannot reach it: the master it then meets keeps sync-ok
+  // expired, so the timeout's event is queued behind the takeover's. The
+  // master it then meets has no received information to age (#89), so it
+  // keeps sync-ok, and its own commit names thisClock with sync-ok again
   void take_mastership_when_the_parent_degrades() {
     expect("sync-ok high before the takeover",
            dut->pub_flags_o & FL_SYNCOK, FL_SYNCOK);
@@ -3801,7 +3963,7 @@ class GptpEngineHarness {
     expect("gm is us again", dut->pub_gm_id_o, OUR_CID);
     expect("#84 takeover: nothing commits while dispatch is held",
            c_held, c0);
-    // the takeover commit, then the queued timeout's own commit
+    // the takeover commit, and none from the queued timeout behind it
     size_t named = 0;
     size_t named_synced = 0;
     for (size_t k = c0; k < commit_snaps.size(); k++) {
@@ -3818,7 +3980,9 @@ class GptpEngineHarness {
     expect("#84 takeover: the queued receipt timeout commits after it",
            named >= 2, 1);
     expect("#84 takeover: a queued receipt timeout keeps sync-ok",
-           named_synced, named);
+           named_synced == named &&
+               (dut->pub_flags_o & (FL_AMGM | FL_SYNCOK)) ==
+                   (FL_AMGM | FL_SYNCOK), 1);
   }
 
   // ---- 20: every two-step Sync carries a zero reserved body --------------
@@ -3838,8 +4002,17 @@ class GptpEngineHarness {
   // the link-up (the manager's ruling), so the servo is still locked on
   // the return from mastership: 50 us ahead, the first pair after the
   // re-adoption slews with no step pulse. The first pair after asCapable
-  // falls and returns is a link-up: 25 us behind, it steps once
+  // falls and returns is a link-up: 25 us behind, it steps once. Phase
+  // 19's queued receipt timeout found the master role, yet the port's
+  // syncReceiptTimeoutTime had passed all the same (802.1AS-2011 10.3.11),
+  // so the grandmaster's Announce is aged at once until its Sync is heard
   void stop_consuming_sync_when_ascapable_falls() {
+    announce(0x042B, 100, GMID, 0, PEER_CID);
+    expect("#89 takeover: the queued receipt timeout leaves the port aged",
+           (dut->pub_flags_o & (FL_PRESENT | FL_AMGM)) ==
+                   (FL_PRESENT | FL_AMGM) &&
+               dut->pub_gm_id_o == OUR_CID, 1);
+    hear_a_pair_as_master(0x04FF, TRX6 + 4500000000ull);
     announce(43, 100, GMID, 0, PEER_CID);        // adopt again
     expect("re-adopted", dut->pub_flags_o & 3, FL_PRESENT);
     expect("return from mastership: asCapable held",
@@ -3872,10 +4045,12 @@ class GptpEngineHarness {
   }
 
   // ---- 21b: become resets the best record -- no ghost GM ----------------
-  // announce silence rides out the receipt timeout (pdelay keeps
+  // Sync and Announce silence ride out the receipt timeout (pdelay keeps
   // asCapable alive), the plane becomes master, and the DEAD parent's
   // record must be gone: a mediocre newcomer (worse than the ghost,
-  // better than us) must be ADOPTED, not lose to a ghost
+  // better than us) must be ADOPTED, not lose to a ghost. The Sync
+  // receipt timeout aged the port (#89), so the newcomer's Sync comes
+  // first, as a live grandmaster's does
   void reset_the_best_record_on_become() {
     NEWGM = 0x00BEEFFFFE000002ull;
     NEWSRC = 0x00BEEFFFFE000001ull;
@@ -3889,6 +4064,8 @@ class GptpEngineHarness {
         char n[72]; snprintf(n, sizeof(n), "own-GM transition clears tail %u", k);
         expect(n, pub_path_tail(k), 0);
       }
+      expect("the newcomer's Sync is heard",
+             hear_a_pair_as_master(0x0570, TRX6 + 12000000000ull, NEWSRC), 1);
       announce(70, 150, NEWGM, 0, NEWSRC);
       expect("newcomer adopted, no ghost", dut->pub_gm_id_o, NEWGM);
       expect("newcomer is the parent", dut->pub_parent_id_o, NEWSRC);
@@ -3975,18 +4152,59 @@ class GptpEngineHarness {
     }
   }
 
-  // ---- 25: lost responses clear asCapable at the FOURTH -----------------
-  // 802.1AS-2011 11.2.12.4: the count must EXCEED allowedLostResponses=3
-  void clear_ascapable_at_the_fourth_lost_response() {
-    pd_mode = PD_OFF;
-    size_t off_mark = txf.size();
-    expect("lost responses clear capable",
-           wait_flags(FL_ASCAP, 0, 12000000ull), 1);
-    {
-      int reqs = 0;
-      for (size_t i = off_mark; i < txf.size(); i++)
-        if (txf[i].size() > 14 && (txf[i][14] & 0xF) == 0x2) reqs++;
-      expect("fall at the fourth lost", reqs == 4 || reqs == 5, 1);
+  // ---- 25: #90/#91 -- lost responses clear asCapable at the FIFTH --------
+  // 802.1AS-2011 11.2.15.3, Figure 11-8 as corrected by Cor1 and Cor2: an
+  // interval that ends without a completed exchange is RESET, which
+  // increments lostResponses while it is at most allowedLostResponses (3)
+  // and only otherwise clears asCapable. The beat that sends request k + 1
+  // judges request k, so k - 1 losses stand once the k-th request of a run
+  // has gone out: four after the fifth (asCapable kept), five after the
+  // sixth (asCapable cleared). Each shape runs from a completed exchange:
+  // no response, a response without its Follow_Up, and (#91) a duplicated
+  // response, which takes WAITING_FOR_PDELAY_RESP_FOLLOW_UP to RESET, and
+  // three responses, whose third may not re-arm the reset exchange. A
+  // pairing with a later response would publish a delay 60 ns longer
+  struct LossShape { const char *tag; PdMode mode; };
+  void clear_ascapable_at_the_fifth_lost_response() {
+    const std::array<LossShape, 4> shapes = {{
+      {"#90 no response", PD_OFF},
+      {"#90 no follow-up", PD_NOFU},
+      {"#91 duplicated response", PD_DUP},
+      {"#91 three responses", PD_DUP3},
+    }};
+    for (size_t s = 0; s < shapes.size(); s++) {
+      const LossShape &sh = shapes[s];
+      char n[96];
+      pd_mode = PD_NORMAL;
+      snprintf(n, sizeof n, "%s: runs from a capable plane", sh.tag);
+      expect(n, wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+      snprintf(n, sizeof n, "%s: runs from a completed exchange", sh.tag);
+      expect(n, wait_exchanges(pdm.count + 1, 4000000ull), 1);
+      const uint32_t pd = dut->pub_pdelay_ns_o;
+      pd_mode = sh.mode;
+      const uint64_t mark = pd_reqs_sent;
+      for (uint64_t k = 1; k <= 6; k++) {
+        snprintf(n, sizeof n, "%s: request %llu goes out", sh.tag,
+                 static_cast<unsigned long long>(k));
+        expect(n, wait_requests(mark + k, 4000000ull), 1);
+        run(2000);
+        if (k == 2) {
+          snprintf(n, sizeof n, "%s: one loss keeps asCapable", sh.tag);
+          expect(n, dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+        } else if (k == 5) {
+          snprintf(n, sizeof n, "%s: four losses keep asCapable", sh.tag);
+          expect(n, dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+        } else if (k == 6) {
+          snprintf(n, sizeof n, "%s: the fifth loss clears asCapable", sh.tag);
+          expect(n, dut->pub_flags_o & FL_ASCAP, 0);
+        }
+      }
+      // a duplicated exchange carries a Follow_Up a re-armed pairing
+      // would complete, 60 ns longer
+      if (sh.mode == PD_DUP || sh.mode == PD_DUP3) {
+        snprintf(n, sizeof n, "%s: no exchange completes", sh.tag);
+        expect(n, dut->pub_pdelay_ns_o, pd);
+      }
     }
   }
 
@@ -4115,12 +4333,14 @@ class GptpEngineHarness {
     expect("the ladder re-earns",
            wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
     // duplicates from the SAME identity are not a storm (4.2.6.2.5
-    // says multiple CLOCK IDENTITIES): four dup-answered intervals
-    // must leave capable standing
+    // says multiple CLOCK IDENTITIES): requests keep going out through
+    // four dup-answered intervals. Each is a lost response (#91, phase
+    // 25), and four losses leave capable standing
     pd_mode = PD_DUP;
     {
-      int base = pdm.count;
-      expect("dup intervals ran", wait_exchanges(base + 4, 12000000ull), 1);
+      const uint64_t mark = pd_reqs_sent;
+      expect("#91 duplicates are not a storm: requests keep going out",
+             wait_requests(mark + 5, 12000000ull), 1);
       run(4000);
     }
     expect("duplicates are not a storm",
@@ -5134,6 +5354,10 @@ class GptpEngineHarness {
            self ? self->flags : ~0u, self_present);
 
     const size_t still0 = commit_snaps.size();
+    // the first comes inside D's Sync receipt watch: once that runs out, the
+    // aged mark refuses D's Announces as well (#89), so only this one shows
+    // that the asCapable gate refuses them by itself
+    send_announce(seq++, 1, GMD, 2, SRCD, path_d, phc() + 100);
     for (int beat = 0; beat < 3; beat++) {
       run_svc(2000000);
       send_announce(seq++, 1, GMD, 2, SRCD, path_d, phc() + 100);
@@ -5176,6 +5400,402 @@ class GptpEngineHarness {
            back && back->gm == GME &&
                committed_path_is(*back, {SRCE, OUR_CID}),
            1);
+  }
+
+  // ---- 39: #89, a grandmaster whose Sync fails is aged, and stays aged ----
+  //! What each Sync interval of a scripted grandmaster carries: a usable
+  //! pair, nothing, a Sync whose Follow_Up comes only after the next Sync,
+  //! a Sync with no Follow_Up, or a Follow_Up naming the next sequenceId
+  enum class SyncShape { usable, stopped, late_follow_up, no_follow_up,
+                         next_sequence };
+  //! the source, grandmaster and sequenceIds phase 39 sends with
+  static constexpr uint64_t GMS = 0x0089A0FFFE000001ull;
+  static constexpr uint64_t SRCS = 0x0089A0FFFE000002ull;
+  uint16_t s39_sync_seq = 0x8901;
+  uint16_t s39_ann_seq = 0x8A01;
+  //! the late shape's Follow_Up still owed: its Sync's sequenceId and stamp
+  bool s39_late_owed = false;
+  uint16_t s39_late_seq = 0;
+  uint64_t s39_late_local = 0;
+
+  void s39_announce() {
+    send_announce(s39_ann_seq++, 1, GMS, 1, SRCS, {GMS, SRCS}, phc() + 100);
+  }
+
+  //! One Sync interval, `period` cycles from its Sync to the next. A usable
+  //! pair is measured exactly on time (offset zero); every other Follow_Up
+  //! is skewed 777 ns, so one wrongly paired would publish that offset.
+  //! An Announce of GMS closes the interval when `announce` is set. `src`
+  //! sends both messages, SRCS unless another grandmaster's port is named
+  void s39_interval(SyncShape shape, uint64_t period, bool announce,
+                    uint64_t fu_after = 1000, uint64_t src = SRCS) {
+    uint64_t spent = 0;
+    if (shape != SyncShape::stopped) {
+      const uint64_t local = phc() + 150;
+      const uint16_t seq = s39_sync_seq++;
+      Frame f = ptp(0x0, seq, 0, 0x0208, 10, src);
+      f.ts(0);
+      send_frame(f.b, local);
+      run(1000);
+      spent += 1000 + f.b.size();
+      const uint64_t on_time = local - static_cast<uint64_t>(pdm.d);
+      if (shape == SyncShape::late_follow_up && s39_late_owed) {
+        // the previous Sync's Follow_Up, after this Sync
+        Frame g = follow_up(s39_late_seq, 0, s39_late_local -
+                            static_cast<uint64_t>(pdm.d) - 777, src);
+        send_frame(g.b, local + 500);
+        run(1000);
+        spent += 1000 + g.b.size();
+      }
+      if (shape == SyncShape::usable || shape == SyncShape::next_sequence) {
+        run_svc(fu_after);
+        spent += fu_after;
+        const bool usable = shape == SyncShape::usable;
+        Frame g = follow_up(usable ? seq : static_cast<uint16_t>(seq + 1), 0,
+                            usable ? on_time : on_time - 777, src);
+        send_frame(g.b, local + fu_after * 500);
+        run(1000);
+        spent += 1000 + g.b.size();
+      }
+      s39_late_owed = shape == SyncShape::late_follow_up;
+      s39_late_seq = seq;
+      s39_late_local = local;
+    }
+    if (announce) {
+      s39_announce();
+      spent += 8000;
+    }
+    if (spent < period) run_svc(period - spent);
+  }
+
+  //! the last commit of the run naming `gm`, or null
+  const PubSnap *last_commit_naming(uint64_t gm) const {
+    for (size_t k = commit_snaps.size(); k-- > 0;)
+      if (commit_snaps[k].gm == gm) return &commit_snaps[k];
+    return nullptr;
+  }
+
+  //! the index just past the last commit of the run naming `gm`
+  size_t index_after_commit_naming(uint64_t gm) const {
+    for (size_t k = commit_snaps.size(); k-- > 0;)
+      if (commit_snaps[k].gm == gm) return k + 1;
+    return commit_snaps.size();
+  }
+
+  //! #89: from a master whose port is aged, `shape` keeps arriving with an
+  //! Announce every second for `seconds`: no commit may elect GMS again
+  bool hold_mastership_while(SyncShape shape, int seconds) {
+    const size_t c0 = commit_snaps.size();
+    for (int k = 0; k < 8 * seconds; k++)
+      s39_interval(shape, 250000, k % 8 == 3);
+    return !a_commit_since_names(c0, GMS) &&
+           (dut->pub_flags_o & FL_AMGM) == FL_AMGM;
+  }
+
+  //! #89: Sync recovers. The first usable pair is heard as master and
+  //! steers nothing; the next Announce elects GMS; usable Sync then keeps it
+  //! elected through two seconds of Announces. Checks under `tag`
+  void recover_from_the_aged_port(const char *tag) {
+    char n[128];
+    const size_t writes = steps_seen.size() + adj_seen.size();
+    const uint32_t off = static_cast<uint32_t>(dut->pub_offset_o);
+    s39_interval(SyncShape::usable, 250000, false);
+    snprintf(n, sizeof n, "#89 %s: Sync recovery is heard as master and "
+             "steers nothing", tag);
+    expect(n, (dut->pub_flags_o & FL_AMGM) == FL_AMGM &&
+                  steps_seen.size() + adj_seen.size() == writes &&
+                  static_cast<uint32_t>(dut->pub_offset_o) == off, 1);
+    s39_announce();
+    snprintf(n, sizeof n, "#89 %s: the next Announce elects the grandmaster",
+             tag);
+    expect(n, (dut->pub_flags_o & 3) == FL_PRESENT &&
+                  dut->pub_gm_id_o == GMS, 1);
+    const size_t c0 = commit_snaps.size();
+    const size_t a0 = adj_seen.size();
+    for (int k = 0; k < 16; k++)
+      s39_interval(SyncShape::usable, 250000, k % 8 == 5);
+    snprintf(n, sizeof n, "#89 %s: usable Sync keeps it elected", tag);
+    expect(n, !a_commit_since_names(c0, OUR_CID) &&
+                  (dut->pub_flags_o & 3) == FL_PRESENT &&
+                  adj_seen.size() == a0 + 16, 1);
+  }
+
+  // 802.1AS-2011 10.3.11 (Figure 10-13 as corrected by Cor1): CURRENT goes
+  // to AGED on currentTime >= syncReceiptTimeoutTime && gmPresent. Figure
+  // 10-4 (Cor1) refreshes that time on any Sync an asCapable port takes, so
+  // an aged port stays aged until Sync returns, whatever its Announces do.
+  // Phase 36 left GME just adopted from mastership, whose watch had run
+  // out while the port was incapable, and GME sends no Sync at all: only
+  // its adoption can start the watch. Then GMS's Sync fails in each shape
+  // of the issue while its Announce continues: the plane takes over within
+  // syncReceiptTimeout and one BMCA pass of the last usable pair, holds
+  // mastership without oscillating while the shape lasts, and returns to
+  // GMS once when Sync recovers. Sync every 250 ms keeps it deferring, and
+  // a Follow_Up 60 ms after its Sync is used
+  void age_a_grandmaster_whose_sync_fails() {
+    const uint64_t GME = 0x0082E0FFFE000001ull;
+    const uint64_t SRCE = 0x0082E0FFFE000002ull;
+    pd_mode = PD_NORMAL;
+    const PubSnap *adopt = last_commit_naming(GME);
+    const size_t after_adopt = index_after_commit_naming(GME);
+    expect("#89 never usable: phase 36 adopted the grandmaster",
+           adopt != nullptr, 1);
+    expect("#89 never usable: the grandmaster is aged",
+           wait_flags(FL_AMGM, FL_AMGM, 900000ull), 1);
+    run(200);
+    expect("#89 never usable: within syncReceiptTimeout of its adoption",
+           adopt && took_over_on_time(after_adopt, adopt->cyc), 1);
+    {
+      const size_t c0 = commit_snaps.size();
+      uint16_t seq = 0x8501;
+      for (int k = 0; k < 3; k++) {
+        run_svc(2000000);
+        send_announce(seq++, 2, GME, 1, SRCE, {GME, SRCE}, phc() + 100);
+      }
+      expect("#89 never usable: the aged port stays master while Announces "
+             "continue", !a_commit_since_names(c0, GME) &&
+                             (dut->pub_flags_o & FL_AMGM) == FL_AMGM, 1);
+    }
+    recover_from_the_aged_port("first grandmaster");
+
+    struct Failure { const char *tag; SyncShape shape; };
+    const std::array<Failure, 4> failures = {{
+      {"Sync stops", SyncShape::stopped},
+      {"no Follow_Up", SyncShape::no_follow_up},
+      {"Follow_Up after the next Sync", SyncShape::late_follow_up},
+      {"Follow_Up with the next sequenceId", SyncShape::next_sequence},
+    }};
+    for (const Failure &f : failures) {
+      char n[128];
+      const uint64_t pair = last_pair_cyc();
+      const size_t c0 = commit_snaps.size();
+      const uint32_t off = static_cast<uint32_t>(dut->pub_offset_o);
+      for (int k = 0; k < 6; k++)
+        s39_interval(f.shape, 250000, k == 1);   // Announce continues
+      snprintf(n, sizeof n, "#89 %s: the plane takes mastership within "
+               "syncReceiptTimeout and one BMCA pass", f.tag);
+      expect(n, took_over_on_time(c0, pair), 1);
+      // a Follow_Up that could be paired wrongly publishes its skew
+      if (f.shape == SyncShape::late_follow_up ||
+          f.shape == SyncShape::next_sequence) {
+        snprintf(n, sizeof n, "#89 %s: no unusable pair is consumed",
+                 f.tag);
+        expect(n, static_cast<uint32_t>(dut->pub_offset_o), off);
+      }
+      snprintf(n, sizeof n, "#89 %s: the aged port stays master while "
+               "Announces continue", f.tag);
+      expect(n, hold_mastership_while(f.shape, 3), 1);
+      recover_from_the_aged_port(f.tag);
+    }
+
+    {
+      const size_t c0 = commit_snaps.size();
+      const size_t a0 = adj_seen.size();
+      for (int k = 0; k < 12; k++)
+        s39_interval(SyncShape::usable, 500000, k % 4 == 1);
+      expect("#89 Sync every 250 ms keeps the plane deferring",
+             !a_commit_since_names(c0, OUR_CID) &&
+                 (dut->pub_flags_o & 3) == FL_PRESENT &&
+                 adj_seen.size() == a0 + 12, 1);
+    }
+    {
+      const size_t c0 = commit_snaps.size();
+      const size_t a0 = adj_seen.size();
+      for (int k = 0; k < 8; k++)
+        s39_interval(SyncShape::usable, 250000, k == 4, 120000);
+      expect("#89 a Follow_Up 60 ms after its Sync is used",
+             !a_commit_since_names(c0, OUR_CID) &&
+                 (dut->pub_flags_o & 3) == FL_PRESENT &&
+                 adj_seen.size() == a0 + 8 &&
+                 static_cast<uint32_t>(dut->pub_offset_o) == 0, 1);
+    }
+  }
+
+  //! #89: a usable pair heard as master clears the aged mark, its next
+  //! Announce elects GMS, and usable Sync with an Announce keeps it elected
+  void return_to_gms() {
+    s39_interval(SyncShape::usable, 250000, false);
+    s39_announce();
+    for (int k = 0; k < 8; k++) s39_interval(SyncShape::usable, 250000, k == 5);
+  }
+
+  //! #89: from a slave of GMS, its Announces stop while usable Sync runs on
+  //! until 125 ms before the 3 s Announce watch lapses, and then Sync stops
+  //! too. BECOME takes mastership with the Sync watch still running, so its
+  //! expiry 125 ms later marks the port and the next Announce elects
+  //! nothing. Returns to GMS. True when the lapse made this plane master and
+  //! that Announce elected nothing
+  bool outlive_mastership_with_the_sync_watch() {
+    s39_announce();                                     // its watch: 3 s
+    for (int k = 0; k < 23; k++)
+      s39_interval(SyncShape::usable, 250000, false);
+    const bool slave = (dut->pub_flags_o & 3) == FL_PRESENT;
+    const bool lapsed = wait_flags(FL_AMGM, FL_AMGM, 400000ull);
+    run_svc(800000);                                    // the Sync watch ends
+    const size_t c0 = commit_snaps.size();
+    s39_announce();
+    const bool aged = !a_commit_since_names(c0, GMS) &&
+                      (dut->pub_flags_o & FL_AMGM) == FL_AMGM;
+    return_to_gms();
+    return slave && lapsed && aged;
+  }
+
+  //! #89: from a slave of GMS with usable Sync, a Sync parked 339 ms after
+  //! the last usable pair still waits for its Follow_Up when the sync
+  //! receipt timeout makes this plane master 36 ms later. That Follow_Up
+  //! comes `fu_cyc` after its Sync, then GMS announces 100 ms later. 1 when
+  //! that Announce elected GMS, 0 when it elected nothing, and -1 when the
+  //! takeover did not land between the Sync and its Follow_Up
+  int park_a_sync_across_the_takeover(uint64_t fu_cyc) {
+    const uint64_t p0 = cyc;
+    s39_interval(SyncShape::usable, 4000, false);       // the last usable pair
+    run_svc(680000 - (cyc - p0));
+    const uint64_t local = phc() + 150;
+    const uint16_t seq = s39_sync_seq++;
+    Frame f = ptp(0x0, seq, 0, 0x0208, 10, SRCS);
+    f.ts(0);
+    const uint64_t sync_cyc = cyc;
+    send_frame(f.b, local);
+    run(1000);
+    const bool slave = (dut->pub_flags_o & 3) == FL_PRESENT;
+    const bool master = wait_flags(FL_AMGM, FL_AMGM, 200000ull);
+    const bool before = master && cyc - sync_cyc < fu_cyc;
+    if (before) run_svc(fu_cyc - (cyc - sync_cyc));
+    Frame g = follow_up(seq, 0, local - static_cast<uint64_t>(pdm.d), SRCS);
+    send_frame(g.b, local + (cyc - sync_cyc) * 500);
+    run(1000);
+    run_svc(200000);
+    const size_t c0 = commit_snaps.size();
+    s39_announce();
+    if (!slave || !before) return -1;
+    return a_commit_since_names(c0, GMS) ? 1 : 0;
+  }
+
+  // ---- 40: #89, a sync receipt timeout ages the port whatever role ------
+  // 802.1AS-2011 10.3.11 (Figure 10-13 as corrected by Cor1) ages the
+  // port's information whenever currentTime >= syncReceiptTimeoutTime &&
+  // gmPresent, and only a received Sync moves that time, so the role the
+  // port held when the time passed does not matter. From phase 39's slave of
+  // GMS: Sync stops, a lone usable pair is heard as master and Sync stops
+  // again, so GMS's Announce 624 ms after that pair is aged at once, while
+  // one 124 ms after a lone pair elects GMS. Mastership won by an Announce
+  // lapse leaves the watch running. A Sync parked when the timeout makes
+  // this plane master keeps its 125 ms Follow_Up watch (11.2.13): a
+  // Follow_Up 200 ms after it pairs with nothing, and one 60 ms after it is
+  // heard as master and lets the next Announce elect GMS
+  void age_the_port_whatever_role_the_timeout_finds() {
+    pd_mode = PD_NORMAL;
+    for (int k = 0; k < 4; k++) s39_interval(SyncShape::stopped, 250000, false);
+    const size_t c0 = commit_snaps.size();
+    s39_interval(SyncShape::usable, 250000, false);
+    for (int k = 0; k < 4; k++) s39_interval(SyncShape::stopped, 250000, false);
+    s39_announce();
+    expect("#89 a lone pair heard as master: a later Announce elects nothing",
+           !a_commit_since_names(c0, GMS) &&
+               (dut->pub_flags_o & FL_AMGM) == FL_AMGM, 1);
+    s39_interval(SyncShape::usable, 250000, false);
+    s39_announce();
+    expect("#89 a lone pair heard as master: an Announce inside its watch "
+           "elects the grandmaster",
+           (dut->pub_flags_o & 3) == FL_PRESENT && dut->pub_gm_id_o == GMS, 1);
+    for (int k = 0; k < 8; k++) s39_interval(SyncShape::usable, 250000, k == 5);
+    expect("#89 Announce lapse: a sync receipt timeout after mastership ages "
+           "the next Announce", outlive_mastership_with_the_sync_watch(), 1);
+    expect("#89 parked Sync: a Follow_Up 200 ms after it pairs with nothing",
+           park_a_sync_across_the_takeover(400000), 0);
+    return_to_gms();
+    expect("#89 parked Sync: a Follow_Up 60 ms after it, after the takeover, "
+           "is heard", park_a_sync_across_the_takeover(120000), 1);
+    for (int k = 0; k < 16; k++)
+      s39_interval(SyncShape::usable, 250000, k % 8 == 5);
+  }
+
+  // ---- 41: #89, sync receipt ageing needs gmPresent (priority1 255 pass) ---
+  // gmPresent is TRUE only while the grandmaster's priority1 is below 255
+  // (802.1AS-2011 10.2.3.13, 10.3.12.1.4 g), and 10.3.11 ages on a sync
+  // receipt timeout only with it. Phase 36 adopted GME, which sends no Sync,
+  // so its port is aged and marked. A priority1 1 grandmaster's Announce
+  // there is aged at once. A better priority1 255 peer, whose election
+  // leaves gmPresent FALSE, is elected and stays elected through 4 s of
+  // Announces without Sync. A priority1 1 Announce on that still-aged port
+  // is aged at once again, and this plane becomes master
+  void age_only_while_a_grandmaster_is_present() {
+    const uint64_t G255 = 0x0000000000000101ull;
+    const uint64_t S255 = 0x0000000000000102ull;
+    const uint64_t GP = 0x0089B0FFFE000001ull;
+    const uint64_t SP = 0x0089B0FFFE000002ull;
+    uint16_t seq = 0x8B01;
+    pd_mode = PD_NORMAL;
+    wait_flags(FL_AMGM, FL_AMGM, 900000ull);
+    run(200);
+    size_t c0 = commit_snaps.size();
+    send_announce(seq++, 1, GP, 1, SP, {GP, SP}, phc() + 100);
+    expect("#89 gmPresent: a priority1 1 Announce on the aged port elects "
+           "nothing", !a_commit_since_names(c0, GP) &&
+                          (dut->pub_flags_o & FL_AMGM) == FL_AMGM, 1);
+    send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+    expect("#89 gmPresent: the aged port elects a priority1 255 grandmaster",
+           (dut->pub_flags_o & 3) == FL_PRESENT && dut->pub_gm_id_o == G255, 1);
+    c0 = commit_snaps.size();
+    for (int k = 0; k < 4; k++) {
+      run_svc(2000000);
+      send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+    }
+    expect("#89 gmPresent: a priority1 255 grandmaster without Sync stays "
+           "elected", !a_commit_since_names(c0, OUR_CID) &&
+                          (dut->pub_flags_o & 3) == FL_PRESENT &&
+                          dut->pub_gm_id_o == G255, 1);
+    c0 = commit_snaps.size();
+    send_announce(seq++, 1, GP, 1, SP, {GP, SP}, phc() + 100);
+    run(200);
+    expect("#89 gmPresent: a priority1 1 Announce on the aged port makes "
+           "this plane master", !a_commit_since_names(c0, GP) &&
+                                    (dut->pub_flags_o & FL_AMGM) == FL_AMGM &&
+                                    dut->pub_gm_id_o == OUR_CID, 1);
+  }
+
+  // ---- 42: #89, sync-ok needs Sync under any grandmaster (p1 255 pass) ---
+  // Under a priority1 255 grandmaster gmPresent is FALSE (802.1AS-2011
+  // 10.2.3.13), so 10.3.11 ages nothing on a sync receipt timeout and the
+  // peer stays elected. Its Sync has stopped all the same, so the expiry
+  // clears sync-ok. From phase 41's mastership a better priority1 255 peer
+  // is elected and sends a usable pair every 125 ms for 2 s, with an
+  // Announce each second. Then its Sync stops while its Announces go on:
+  // sync-ok stands 350 ms after the last pair, is clear 380 ms after it
+  // with the peer still elected, and stays clear for 1 s more
+  void clear_sync_ok_when_sync_stops_without_a_grandmaster_present() {
+    const uint64_t G255 = 0x0000000000000103ull;
+    const uint64_t S255 = 0x0000000000000104ull;
+    uint16_t seq = 0x8C01;
+    pd_mode = PD_NORMAL;
+    wait_flags(FL_AMGM, FL_AMGM, 900000ull);
+    run(200);
+    send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+    const bool elected =
+        (dut->pub_flags_o & 3) == FL_PRESENT && dut->pub_gm_id_o == G255;
+    for (int k = 0; k < 16; k++) {
+      if (k % 8 == 3)
+        send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+      s39_interval(SyncShape::usable, 250000, false, 1000, S255);
+    }
+    expect("#89 gmPresent: a priority1 255 grandmaster's usable Sync raises "
+           "sync-ok", elected && dut->pub_gm_id_o == G255 &&
+                          (dut->pub_flags_o & (3 | FL_SYNCOK)) ==
+                              (FL_PRESENT | FL_SYNCOK), 1);
+    const size_t c0 = commit_snaps.size();
+    s39_interval(SyncShape::usable, 4000, false, 1000, S255);  // the last pair
+    const bool held = !wait_flags(FL_SYNCOK, 0, 700000ull);    // 350 ms
+    const bool fell = wait_flags(FL_SYNCOK, 0, 60000ull);      // by 380 ms
+    for (int k = 0; k < 8; k++) {
+      if (k == 3)
+        send_announce(seq++, 255, G255, 1, S255, {G255, S255}, phc() + 100);
+      s39_interval(SyncShape::stopped, 250000, false);
+    }
+    expect("#89 gmPresent: when its Sync stops, sync-ok clears within "
+           "syncReceiptTimeout and the peer stays elected",
+           held && fell && !a_commit_since_names(c0, OUR_CID) &&
+               dut->pub_gm_id_o == G255 &&
+               (dut->pub_flags_o & (3 | FL_SYNCOK)) == FL_PRESENT, 1);
   }
 
   //! #82: every commit of the whole run that names thisClock, whatever
@@ -5316,14 +5936,24 @@ class GptpEngineHarness {
   void keep_slew_inactive_across_idle_lapses() {
     // An idle receipt lapse must not arm the completion qualifier. Check
     // both the lapse itself and fresh consumed pairs, including every edge.
+    // The lapse ages the grandmaster (#89); its Sync and Announce then
+    // elect it again, and nothing on that round trip may move the level
     const size_t idle_edges = slew_edges.size();
     const size_t idle_rates = adj_seen.size();
     run_svc(800000); // 400 ms exceeds the 375 ms Sync receipt watch
-    expect("slew: idle timeout clears sync-ok", dut->pub_flags_o & FL_SYNCOK, 0);
+    expect("slew: idle timeout ages the grandmaster", dut->pub_flags_o & FL_AMGM,
+           FL_AMGM);
     expect("slew: idle timeout stays asCapable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     expect("slew: idle timeout stays inactive", dut->phc_slew_active_o, 0);
     expect("slew: idle timeout has no level edge", slew_edges.size(), idle_edges);
     expect("slew: idle timeout leaves the rate alone", adj_seen.size(), idle_rates);
+    expect("slew: idle timeout's grandmaster returns",
+           reelect_after_the_sync_receipt_timeout(slew_seq++, 0x750A,
+                                                  phc() + 1000000, GMID, 0,
+                                                  PEER_CID), 1);
+    expect("slew: idle return stays inactive", dut->phc_slew_active_o, 0);
+    expect("slew: idle return has no level edge", slew_edges.size(), idle_edges);
+    expect("slew: idle return leaves the rate alone", adj_seen.size(), idle_rates);
     slew_probe("slew: in-band pair after idle timeout stays inactive", 0, false);
     slew_probe("slew: second pair after idle timeout stays inactive", 100, false);
 
@@ -5402,12 +6032,25 @@ class GptpEngineHarness {
     run(6000);
     expect("slew: missing Follow_Up holds the interval", slew_edges.size(), lapse_edges);
     expect("slew: late Follow_Up cannot retire the rate", adj_seen.size(), lapse_rates);
+    // The Sync stays missing: the receipt timeout ages the grandmaster
+    // (#89), and mastership retires the active correction exactly as a
+    // degraded parent's does below: one integral-only rate, one falling edge
     run_svc(800000);
-    expect("slew: missing Sync clears sync-ok", dut->pub_flags_o & FL_SYNCOK, 0);
-    expect("slew: missing Sync holds the affected interval", slew_edges.size(), lapse_edges);
-    expect("slew: missing Sync holds the affected rate", adj_seen.size(), lapse_rates);
-    slew_probe("slew: timeout restarts completion qualification", 0, true);
-    slew_probe("slew: two fresh pairs complete after timeout", 0, false);
+    expect("slew: missing Sync ages the grandmaster", dut->pub_flags_o & FL_AMGM,
+           FL_AMGM);
+    expect("slew: missing Sync retires the correction", dut->phc_slew_active_o, 0);
+    expect("slew: missing Sync writes one replacement rate", adj_seen.size(),
+           lapse_rates + 1);
+    expect("slew: missing Sync keeps the integral-only rate", last_adj(),
+           adj_bits(-svm.intg));
+    expect("slew: missing Sync has one falling edge", slew_edges.size(),
+           lapse_edges + 1);
+    expect("slew: missing Sync's grandmaster returns",
+           reelect_after_the_sync_receipt_timeout(slew_seq++, 0x750B,
+                                                  phc() + 1000000, GMID, 0,
+                                                  PEER_CID), 1);
+    slew_probe("slew: return after the missing Sync stays inactive", 0, false);
+    slew_probe("slew: second return pair stays inactive", 0, false);
 
     slew_probe("slew: next correction starts", -5000, true);
     slew_probe("slew: first settled pair before GM change", 0, true);
@@ -5441,7 +6084,13 @@ class GptpEngineHarness {
   }
 
   void hold_slew_across_capability_loss() {
+    // Out-of-band pairs keep the correction active and the Sync receipt
+    // watch fed (#89) until the bad delay's verdict drops asCapable
     pd_mode = PD_FAR;
+    for (int k = 0; k < 12 && (dut->pub_flags_o & FL_ASCAP); k++) {
+      slew_probe("slew: active slave pairs until asCapable falls", 5000, true);
+      wait_flags(FL_ASCAP, 0, 200000);
+    }
     expect("slew: bad delay drops asCapable", wait_flags(FL_ASCAP, 0, 2500000), 1);
     const size_t lost_edges = slew_edges.size();
     const size_t lost_rates = adj_seen.size();

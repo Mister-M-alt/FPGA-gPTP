@@ -4,6 +4,43 @@
 """gPTP µcode ROM image generator -- v8, the announce qualification and the
 Pdelay_Resp_Follow_Up pairing rounds.
 
+FPGA-gPTP #89, #90 and #91, the receipt rules of 802.1AS-2011 as corrected
+by Cor1 and Cor2, the edition Milan v1.2 profiles:
+
+  * Sync receipt timeout ages the port (10.3.11, Figure 10-13). CURRENT
+    goes to AGED when currentTime >= syncReceiptTimeoutTime && gmPresent,
+    exactly as on announce receipt timeout. The 375 ms watch (timer slot
+    4, 3 x 125 ms, 10.6.3.1 and Milan v1.2 Table 4.2) is restarted by
+    every usable Sync/Follow_Up pair and by the adoption of a new
+    grandmaster. On expiry a slave of an elected peer whose grandmaster
+    has priority1 below 255 runs BMCA again through BECGATE. gmPresent is
+    FALSE under a priority1 255 grandmaster (10.2.3.13, 10.3.12.1.4 g), so
+    its slave is never aged by Sync, and its expiry clears sync-ok
+    instead. That is the v4 rule below, where expiry only cleared sync-ok,
+    kept for the case that ages nothing; a master keeps sync-ok (#84).
+  * An aged port stays aged until Sync returns. Cor1 strikes the parent
+    condition from Figure 10-4, so any Sync on an asCapable port refreshes
+    syncReceiptTimeoutTime, whatever the port's role, and nothing else
+    moves it. So every expiry marks the port, whatever role it finds, and
+    mastership stops neither the Sync watch nor a pending Sync's 125 ms
+    Follow_Up watch (11.2.13). A master still pairs the aged peer's Sync
+    and Follow_Up, steering nothing. Until such a pair arrives, every
+    Announce with gmPresent is aged at once and leaves the plane master.
+    So the plane does not oscillate between master and slave at the
+    Announce rate while Sync is broken, nor when one pair is heard and
+    Sync breaks again. The first usable pair re-opens election, and the
+    peer's next Announce is adopted once.
+  * lostResponses (11.2.15.3, Figure 11-8 RESET): an interval that ends
+    without a completed exchange increments the count while it is at most
+    allowedLostResponses (3), and only otherwise clears asCapable. Four
+    consecutive losses keep asCapable and the fifth clears it. The v4
+    reading of 11.2.12.4 ("at the fourth") is retired.
+  * In WAITING_FOR_PDELAY_RESP_FOLLOW_UP, a second Pdelay_Resp carrying
+    the outstanding sequenceId takes the machine to RESET, whatever its
+    source. Its Follow_Up then pairs with nothing, and the interval counts
+    as a lost response. Per Cor2, RESET waits for the interval timer, so
+    the next request still goes out on the 1 s beat.
+
 FPGA-gPTP #82: before any peer, and whenever none is elected, this plane is
 its own grandmaster with the path {thisClock} (802.1AS-2020 10.3.13.2.4 b,
 i). thisClock is now ROM data at two fixed words, so the engine publishes it
@@ -106,12 +143,11 @@ now the receive rule on both messages:
     WAITING_FOR_PDELAY_INTERVAL_TIMER). The identity bookkeeping of the
     cease rule still sees that response.
 
-With more than one responder in an interval the LAST matching
-Pdelay_Resp owns the stored t2/t4 and the pairing, which keeps one
-exchange's timestamps from one clock; the multiple-responder policy
-itself stays the Milan 4.2.6.2.5 cease rule below (the 2011 figure's
-RESET on a second response is not adopted, as the v7 round decided for
-same-identity duplicates). Identity scope on the Pdelay_Resp is the
+A second Pdelay_Resp for the outstanding sequenceId before the Follow_Up
+resets the exchange (#91, above), from the same responder or another, so
+no exchange pairs timestamps from two responses. The multiple-responder
+policy itself stays the Milan 4.2.6.2.5 cease rule below, which still
+sees every matching response. Identity scope on the Pdelay_Resp is the
 WHOLE requestingPortIdentity the figure names, the clockIdentity and
 the 16-bit portNumber behind it (bank words 6 and 7), so a response
 addressed to another port of this clock arms nothing (FPGA-gPTP #36).
@@ -160,8 +196,8 @@ v5 closed the loop; v6 completes the receive-side state machines of
     the best record to ourselves.
   * Sync/Follow_Up pairing (11.4.4): the Follow_Up must match the
     pending Sync's sequenceId AND sourcePortIdentity, or it pairs with
-    nothing. The source is held in the master-role slot 6 alias (a
-    slave never runs the sync-TX builder), voided at adoption.
+    nothing. The source is voided at adoption. It shared the master's
+    slot 6 until #89 let a master pair as well, and now has its own cell.
   * asCapable gates consumption (10.2.4.1): a fall while slave stops
     Sync/Follow_Up processing -- the servo no longer steers on a link
     whose delay verdict is dead. Pdelay keeps running; it is how the
@@ -281,12 +317,12 @@ RG_BANK, RG_TS, RG_SCR, RG_PUB, RG_PHC, RG_TMR = (
 # ---- scratch map -----------------------------------------------------------
 # v6 reclaimed three write-only slots (the old S_OFFSET/S_AMGM/S_TICK:
 # pub word 4 is the offset record, flags bit 1 is the role, the tick
-# counter had no reader) for the BTCA best-vector record, and slot 6 is
-# role-exclusive: sync-seq-in-flight while master, the pending Sync's
-# sourcePortIdentity while slave (adopt clears it at the role change).
+# counter had no reader) for the BTCA best-vector record. Slot 6 holds the
+# master's sync-seq-in-flight. Until #89 it was also the slave's pending
+# Sync source; a master now pairs Sync too, so that source has its own
+# cell (S_SYNCSRC below).
 S_SYNCTS, S_HDR, S_BESTPV, S_BESTID = 0, 1, 2, 3
 S_PDELAY, S_T2, S_SSEQFLY = 4, 5, 6
-S_SYNCSRC = S_SSEQFLY                    # the slave-role alias
 S_PDOK, S_PDLOST = 7, 8                  # asCapable ladder counters
 S_FUORG = 9                              # 0xC2000001 (info-TLV org tail)
 S_MYPV = 10                              # our {p1, cq, p2, 16'0} vector
@@ -339,7 +375,9 @@ S_TXQ_RESP = 41                          # the second egress-timestamp
 S_RSPSEQ, S_RSPSRC = 39, 40              # the armed Pdelay_Resp: its
                                          # sequenceId | RSP_ARMED_C, and
                                          # its sourcePortIdentity (written
-                                         # before it is ever read: no init)
+                                         # before it is ever read: no init).
+                                         # At least 2 * RSP_ARMED_C once a
+                                         # second response reset it (#91)
 # ---- the requester's own pairing state (FPGA-gPTP #31) ---------------------
 S_T1V = 37       # "S_T1 holds this request's own t1". A measured t1 may be
                  # numeric zero, so the value cannot carry its own validity.
@@ -374,6 +412,20 @@ S_PDSTEP = 44    # current request overlaps our own PHC step
 # SECOND asCapable SETTER breaks this: it must write S_LOCK as well. That
 # rise is also the ONLY unlock (#68 ruling): a receipt timeout, a
 # grandmaster change and becoming grandmaster leave S_LOCK alone.
+# ---- sync receipt (FPGA-gPTP #89) ------------------------------------------
+S_SYNCSRC = 45   # the pending Sync's sourcePortIdentity. Read only behind
+                 # a nonzero S_SYNCTS, and prog_rx_sync writes both in one
+                 # straight-line block, so the pair carries over a warm
+                 # reset together (the S_T3 idiom); no init write
+S_SRTO = 46      # SRTO_PASSED_C from a sync receipt timeout, whatever role
+                 # it found, until a usable Sync/Follow_Up pair (SRWATCH)
+                 # or an asCapable rise (PDPAIR) writes zero: the port's
+                 # syncReceiptTimeoutTime has passed. An Announce whose
+                 # grandmaster's priority1 and top clockClass bits compare
+                 # below the cell would make gmPresent TRUE, so it
+                 # is aged at once. Every value it holds is read in an
+                 # asCapable period that started with that rise, so a warm
+                 # reset cannot carry a stale mark into a live port.
 # S_BESTPV holds {p1, cq, p2} in [63:16] and stepsRemoved+1 in [15:0]
 # (steps ranks BELOW the identity in 10.3.5, so it never joins the
 # packed compare -- the pv compare masks the low 16 first)
@@ -438,9 +490,21 @@ UTC_OFF_C = 37
 NPD_HI_C = 800                  # neighborPropDelayThresh ns, 4.2.6.1.1
 NPD_LO_C = 80                   # negative-delay floor ns, 4.2.6.2.7
 ASCAP_UP_C = 2                  # exchanges to asCapable, 4.2.6.2.4 in [2,5]
-LOST_N_C = 3                    # allowedLostResponses, 802.1AS-2011 10.2.4.1
+LOST_N_C = 3                    # allowedLostResponses, 802.1AS-2011 11.5.3
+# Figure 11-8 RESET increments lostResponses while it is at most
+# allowedLostResponses and clears asCapable only otherwise, so the count
+# that clears it is allowedLostResponses + 2: the fifth consecutive loss
+LOST_CLEARS_AT_C = LOST_N_C + 2
 SYNC_RTO_MS_C = 375             # syncReceiptTimeout, Table 4.2
 FU_RTO_MS_C = 125               # followUpReceiptTimeout, Table 4.2
+# gmPresent is TRUE exactly when the grandmaster's priority1 is below 255
+# (802.1AS-2011 10.2.3.13, 10.3.12.1.4 g). A vector's priority1 and the top
+# three bits of its clockClass, its bits 63:53 as S_BESTPV and BTCA hold
+# it, compare below this value exactly when its priority1 is below 255. It
+# is also the aged mark S_SRTO holds, so one compare asks both questions.
+# Its lowest bit is sync-ok's, so a sync receipt timeout that ages nothing
+# masks with it to clear sync-ok alone (prog_leg_srto)
+SRTO_PASSED_C = 0xFF << 3
 CEASE_N_C = 3                   # successive multi-answered reqs, 4.2.6.2.5
 CEASE_MS_C = 300_000            # resume after 5 min (--cease-ms overrides)
                                 # counted down in 1 s cadence beats
@@ -504,9 +568,13 @@ def set_servo_gains(clk_hz: int) -> None:
 # publish flags bits. The µcode's bit 0 means a peer is elected; the engine
 # also publishes it while thisClock is grandmaster-capable (#82)
 FL_PRESENT_C, FL_AMGM_C, FL_ASCAP_C, FL_SYNCOK_C = 1, 2, 4, 8
-# the left shift that carries the master bit onto sync-ok (prog_leg_srto)
-SYNCOK_BY_AMGM_C = 2
-assert FL_AMGM_C << SYNCOK_BY_AMGM_C == FL_SYNCOK_C
+# The role, read from those flags: an asCapable slave of an elected peer or
+# an asCapable master. The Follow_Up handler's branch-free gate subtracts
+# ROLE_SLAVE_C and takes 0 or 1, so the master's value must be the next one
+ROLE_MASK_C = FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C
+ROLE_SLAVE_C = FL_PRESENT_C | FL_ASCAP_C
+ROLE_MASTER_C = FL_AMGM_C | FL_ASCAP_C
+assert ROLE_MASTER_C == ROLE_SLAVE_C + 1
 
 # 802.1AS-2011 Table 11-7 controlField values for every message this plane
 # transmits. Keep the map exhaustive so adding a TX message cannot silently
@@ -608,6 +676,17 @@ class Prog:
     def label(self, name: str) -> None:
         """Name the address the next emitted instruction will occupy."""
         self.items.append(("label", name))
+
+    def address(self, name: str) -> int:
+        """The absolute µPC of a local label, for another program's branch
+        into this one's tail."""
+        addr = self.base
+        for it in self.items:
+            if it[0] == "label" and it[1] == name:
+                return addr
+            if it[0] != "label":
+                addr += 1
+        raise KeyError(name)
 
     def words(self) -> list[int]:
         """Resolve every label against this program's real base and pack
@@ -791,14 +870,21 @@ def e_sat(p: Prog, reg: int, lim: int, tag: str) -> None:
 
 def prog_rx_sync(base: int) -> Prog:
     """Sync receipt (entry 16): park the receipt stamp, the header and the
-    sourcePortIdentity, then arm the Follow_Up watch. Heard while master it
-    writes nothing: slot 6 then holds our own in-flight Sync sequence.
+    sourcePortIdentity, then arm the Follow_Up watch, on any asCapable port.
+
+    802.1AS-2011 Figure 10-4 as corrected by Cor1 takes every Sync on an
+    asCapable port, whatever its role, because syncReceiptTimeoutTime is
+    the port's (#89): a master must see an aged peer's Sync recover. The
+    Follow_Up handler decides what a pair does in each role. The cells
+    written here are the pending Sync's own; none is a master's.
     """
     p = Prog(base)
-    # gate FIRST: a rogue Sync heard while master must not touch the
-    # slot-6 alias (it holds OUR in-flight FU sequence in that role)
-    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C,
-                FL_PRESENT_C | FL_ASCAP_C, "sl", "out")
+    # asCapable or out, branching out on the clear bit: one word less
+    # than e_flag_gate, which the #89 receipt rules spend
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=FL_ASCAP_C)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="out")
     p.emit("WRST", ra=RTS0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
     p.emit("RDST", rd=RA, imm=RG_BANK | 0, fmt=FMT_Q)
     p.emit("WRST", ra=RA, imm=RG_SCR | S_HDR, fmt=FMT_Q)
@@ -813,14 +899,26 @@ def prog_rx_sync(base: int) -> Prog:
 
 def prog_rx_followup(base: int) -> Prog:
     """Follow_Up receipt (entry 64): pair it with the pending Sync on
-    sequenceId and sourcePortIdentity, publish the offset (local minus
-    master, less correctionField and the link delay), then run SERVO."""
+    sequenceId and sourcePortIdentity. A slave publishes the offset (local
+    minus master, less correctionField and the link delay), then runs
+    SERVO. A master only restarts the sync receipt watch and clears the
+    aged mark (SRWATCH, #89)."""
     p = Prog(base)
     e_guard_init(p, "out")
-    # an asCapable fall stops consumption: the servo must not steer on
-    # a link whose delay verdict is dead (802.1AS-2011 10.2.4.1)
-    e_flag_gate(p, FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C,
-                FL_PRESENT_C | FL_ASCAP_C, "sl", "out")
+    # Only an asCapable slave of an elected peer or an asCapable master
+    # pairs: an asCapable fall stops consumption, since the servo must not
+    # steer on a link whose delay verdict is dead (802.1AS-2011 10.2.4.1).
+    # Branch-free: the role less ROLE_SLAVE_C is 0 for the slave and 1 for
+    # the master, and every other role wraps to at least 2. RC keeps it
+    # until the pairing is decided; the pairing below never writes RC
+    p.emit("RDST", rd=RC, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_AND, imm=ROLE_MASK_C)
+    p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_SUB, imm=ROLE_SLAVE_C)
+    p.emit("CMP", ra=RC, rb=0, fmt=FMT_D,
+           imm=ROLE_MASTER_C - ROLE_SLAVE_C + 1)
+    p.emit("BRS", cnd=BRS_LT, label="role")
+    p.emit("BR", label="out")
+    p.label("role")
     # a Sync must be pending and valid: the FU-receipt timeout zeroes it,
     # so a Follow_Up later than 125 ms pairs with nothing and is dropped
     p.emit("RDST", rd=RD_, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
@@ -843,6 +941,10 @@ def prog_rx_followup(base: int) -> Prog:
     p.emit("BRS", cnd=BRS_Z, label="paired")
     p.emit("BR", label="out")
     p.label("paired")
+    # a master's pair is usable Sync and nothing more: it steers nothing,
+    # publishes nothing, and only restarts the port's sync receipt watch
+    p.emit("CMP", ra=RC, rb=0, fmt=FMT_D, imm=ROLE_MASTER_C - ROLE_SLAVE_C)
+    p.emit("BRS", cnd=BRS_Z, label=LB["SRWATCH"])
     e_full_ts(p, RA)
     p.emit("RDST", rd=RB, imm=RG_BANK | 1, fmt=FMT_Q)
     p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_SAR, imm=16)
@@ -927,22 +1029,37 @@ def prog_leg_slew(base: int) -> Prog:
 
 
 def prog_leg_svrate(base: int) -> Prog:
-    """Replace the rate and finish a consumed pair's policy transaction."""
+    """Replace the rate and finish a consumed pair's policy transaction,
+    then restart the sync receipt watch through SRWATCH."""
     p = Prog(base)
     # the whole trim, proportional plus integral, stays inside the rate
     # envelope the parent's egress reconstruction enforces
     e_sat(p, RT, RUNTIME["ilim"], "sv_a")                    # +-200 ppm
     p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)          # negate
     p.emit("WRST", ra=RT, imm=RG_PHC | 0, fmt=FMT_Q)         # adjfine
-    p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   # consumed
-    p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
-    p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)         # sync watch
-    p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)          # FU watch off
     # a consumed pair locks the servo; only an asCapable rise unlocks it
     p.emit("MOVE", rd=RT, ra=0, imm=STEP_LOCKED_NS_C - STEP_LINKUP_NS_C)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_LOCK, fmt=FMT_Q)
     e_flags(p, orm=FL_SYNCOK_C)
     p.emit("COMMIT")
+    p.emit("BR", label=LB["SRWATCH"])
+    return p
+
+
+def prog_leg_srwatch(base: int) -> Prog:
+    """A usable Sync/Follow_Up pair in either role (#89): consume the
+    pending Sync, restart the 375 ms sync receipt watch, stop the Follow_Up
+    watch, and clear any aged mark (802.1AS-2011 + Cor1 Figure 10-4 sets
+    syncReceiptTimeoutTime on every Sync an asCapable port receives).
+
+    It is the slave's SVRATE tail and the master's whole answer to a pair,
+    so the two roles share one definition of "Sync has been received"."""
+    p = Prog(base)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)   # consumed
+    p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
+    p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)         # sync watch
+    p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)          # FU watch off
+    p.emit("WRST", ra=0, imm=RG_SCR | S_SRTO, fmt=FMT_Q)     # not aged
     p.emit("END")
     return p
 
@@ -985,6 +1102,17 @@ def prog_rx_announce(base: int) -> Prog:
     p.emit("RDST", rd=RA, imm=RG_BANK | 8, fmt=FMT_Q)   # their {utc,p1,cq,p2}
     p.emit("WRST", ra=RA, imm=RG_PUB | 5, fmt=FMT_Q)    # publish raw: bench
     p.emit("ALU", rd=RA, ra=RA, rb=0, cnd=ALU_SHL, imm=16)  # {p1,cq,p2,0}
+    # 802.1AS-2011 10.3.11 (Figure 10-13, Cor1): while the port's
+    # syncReceiptTimeoutTime has passed, information received with a
+    # grandmaster of priority1 below 255 (gmPresent) is aged at once, so it
+    # elects nothing and BECGATE leaves or makes the plane master. A
+    # priority1 255 grandmaster leaves gmPresent FALSE and competes as ever.
+    # Only a usable Sync/Follow_Up pair or an asCapable rise clears the
+    # mark (#89)
+    p.emit("ALU", rd=RU, ra=RA, rb=0, cnd=ALU_SHR, imm=53)  # p1,class[7:5]
+    p.emit("RDST", rd=RT, imm=RG_SCR | S_SRTO, fmt=FMT_Q)
+    p.emit("CMP", ra=RU, rb=RT, fmt=FMT_D)
+    p.emit("BRS", cnd=BRS_LT, label=LB["BECGATE"])
     p.emit("RDST", rd=RB, imm=RG_BANK | 9, fmt=FMT_Q)   # their gm identity
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_ADD, imm=1)  # steps+1
     p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_AND, imm=0xFFFF)
@@ -1138,40 +1266,47 @@ def _pdresp_answers_the_outstanding_request(p):
 
 
 def _pdresp_arm_the_pairing(p):
-    """Arm the Follow_Up pairing and store t2/t4, unless this interval's
-    exchange is already complete or its pair already frozen.
+    """Arm the Follow_Up pairing and store t2/t4, or reset an armed
+    exchange, unless this interval's exchange is already complete or its
+    pair already frozen.
 
-    Both refusals branch to the bookkeeping rather than to the exit, so the
+    Every refusal reaches the bookkeeping rather than the exit, so the
     4.2.6.2.5 count still sees a response whose operands are refused."""
-    # Figure 11-8 (as corrected by Cor2-2015): once the outstanding
-    # request's pair has completed, the machine waits for the interval
-    # timer, and a further Pdelay_Resp for that sequenceId is not an
-    # exchange. S_PDGOT is set by both verdict paths of the completion
-    # and cleared by each new request, so while it stands nothing
-    # re-arms: a replayed pair can neither recompute the delay nor climb
-    # the ladder a second time in one interval. The Milan 4.2.6.2.5
-    # identity bookkeeping below still sees every matching response
-    p.emit("RDST", rd=RU, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
-    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
-    p.emit("BRS", cnd=BRS_Z, label="arm")
-    p.emit("BR", label="multi")                                   # completed
-    p.label("arm")
-    # A complete pair is already frozen, waiting only for its own t1
-    # (FPGA-gPTP #31). Its identity and its t2/t3/t4 are THIS exchange's
-    # operands and must not be rewritten: a later response carries another
-    # exchange's times, and the deferred tail would compute from a mixture.
-    # Fall through to the 4.2.6.2.5 bookkeeping, which still sees every
+    # Two states take no response, one test for both (RV is free here):
+    # * Figure 11-8 (as corrected by Cor2-2015): once the outstanding
+    #   request's pair has completed, the machine waits for the interval
+    #   timer, and a further Pdelay_Resp for that sequenceId is not an
+    #   exchange. S_PDGOT is set by both verdict paths of the completion
+    #   and cleared by each new request, so while it stands nothing
+    #   re-arms: a replayed pair can neither recompute the delay nor climb
+    #   the ladder a second time in one interval.
+    # * A complete pair is already frozen, waiting only for its own t1
+    #   (FPGA-gPTP #31). Its identity and its t2/t3/t4 are THIS exchange's
+    #   operands and must not be rewritten: a later response carries
+    #   another exchange's times, and the deferred tail would compute from
+    #   a mixture.
+    # The Milan 4.2.6.2.5 identity bookkeeping below still sees every
     # matching response, so the distinct-responder verdict is unchanged
-    p.emit("RDST", rd=RU, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)
+    p.emit("RDST", rd=RU, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
+    p.emit("RDST", rd=RV, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)
+    p.emit("ALU", rd=RU, ra=RU, rb=RV, cnd=ALU_OR)
     p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="arm_go")
-    p.emit("BR", label="multi")                                   # frozen
+    p.emit("BR", label="multi")                       # completed or frozen
     p.label("arm_go")
-    # arm the Follow_Up pairing: this sequence, this responder. The LAST
-    # matching response before the Follow_Up owns the stored t2/t4, so
-    # the Follow_Up must come from it; a second identity is the Milan
-    # 4.2.6.2.5 bookkeeping below, not a reset
+    # WAITING_FOR_PDELAY_RESP: arm the Follow_Up pairing with this sequence
+    # and this responder. WAITING_FOR_PDELAY_RESP_FOLLOW_UP: a second
+    # Pdelay_Resp with the outstanding sequenceId, from any responder, goes
+    # to RESET (#91), which counts the interval as a lost response at the
+    # next beat. One sum does both: S_RSPSEQ += sequenceId | RSP_ARMED_C.
+    # From zero it arms. Armed, or already reset, it reaches at least
+    # 2 * RSP_ARMED_C, which no Follow_Up's sequenceId | RSP_ARMED_C can
+    # equal, and stays nonzero, so no later response re-arms the interval
+    # (RESET leaves only on the interval timer). The operands written below
+    # then belong to no exchange
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_OR, imm=RSP_ARMED_C)
+    p.emit("RDST", rd=RU, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=RU, cnd=ALU_ADD)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_RSPSEQ, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_SCR | S_RSPSRC, fmt=FMT_Q)
     e_full_ts(p, RA)
@@ -1397,7 +1532,7 @@ def _tmr_init_once(p, mac, seq_seed, sync_seq_seed):
     for s in (((S_MYSEQ,) if not seq_seed else ()) +
               ((S_SSEQ,) if not sync_seq_seed else ()) + (
               S_SYNCTS, S_PDELAY, S_T2, S_SSEQFLY,
-              S_PDOK, S_PDLOST, S_PDGOT, S_NR3, S_NRR, S_INTG,
+              S_PDOK, S_PDLOST, S_NR3, S_NRR, S_INTG,
               S_T1, S_T4, S_TXQ_TMR, S_TXQ_RESP,
               S_ASEQ,
               S_RSP1, S_IVMULTI, S_CEASE,
@@ -1424,6 +1559,9 @@ def _tmr_init_once(p, mac, seq_seed, sync_seq_seed):
         p.emit("WRST", ra=RT, imm=RG_SCR | seed_cell, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_INIT, fmt=FMT_Q)
+    # S_PDGOT starts answered: this dispatch falls through to the request
+    # leg, which then judges no request that was never sent (#90)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)   # announce receipt
 
@@ -1510,34 +1648,37 @@ def prog_leg_pdreq(base: int) -> Prog:
     cadence gate and cease rule above it filled 139 words (140 in a seeded
     regression image), and this leg is 59 words with its pairing clears.
     Left in place it would have run past entry 704. #82 has since taken
-    thisClock out of the init leg's constants (130 and 131 words). The
-    packer puts the leg in free space, which is what that two-pass
-    assembler is for."""
+    thisClock out of the init leg's constants (130 and 131 words), and
+    #90's branch-free loss count made this leg 56 words. The packer puts
+    the leg in free space, which is what that two-pass assembler is
+    for."""
     p = Prog(base)
     _tmr_pdelay_request(p)
     return p
 
 
 def _tmr_pdelay_request(p):
-    """Judge the previous request (802.1AS-2011 10.2.4.1 lost-response
-    accounting), then queue this interval's Pdelay_Req."""
-    # ---- lost-response accounting (802.1AS-2011 10.2.4.1): before each
-    # new request, judge the last one; skip until a first was ever sent
-    p.emit("RDST", rd=RA, imm=RG_SCR | S_MYSEQ, fmt=FMT_Q)
-    p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=0)
-    p.emit("BRS", cnd=BRS_Z, label="pd_go")
+    """Judge the previous request (802.1AS-2011 11.2.15.3, Figure 11-8
+    RESET), then queue this interval's Pdelay_Req."""
+    # ---- lost-response accounting: before each new request, judge the
+    # last one. An interval that ends without a completed exchange is the
+    # figure's RESET (with Cor2, RESET waits for this interval timer):
+    #   if (lostResponses <= allowedLostResponses) lostResponses += 1;
+    #   else asCapable = FALSE;
+    # so the 1st..4th consecutive losses count 1..4 with asCapable kept, and
+    # the 5th clears it (#90; the normative figure decides, not the "above
+    # which" prose of 11.2.12.4). A completed exchange restarts the count
+    # (WAITING_FOR_PDELAY_INTERVAL_TIMER sets lostResponses = 0). The init
+    # leg sets S_PDGOT, so the request it sends itself is never judged.
+    # Branch-free: S_PDLOST = (S_PDLOST + 1) & (S_PDGOT - 1). S_PDGOT holds
+    # 0 or 1 only: every writer writes 0, 1 or S_PDSTEP, itself 0 or 1
     p.emit("RDST", rd=RB, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
-    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=0)
-    p.emit("BRS", cnd=BRS_Z, label="pd_lost")
-    p.emit("WRST", ra=0, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
-    p.emit("BR", label="pd_go")
-    p.label("pd_lost")
-    p.emit("RDST", rd=RB, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
-    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_ADD, imm=1)
-    p.emit("WRST", ra=RB, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
-    # 802.1AS-2011 11.2.12.4: the verdict falls when the count EXCEEDS
-    # allowedLostResponses -- at the fourth, not the third
-    p.emit("CMP", ra=RB, rb=0, fmt=FMT_D, imm=LOST_N_C + 1)
+    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_SUB, imm=1)   # 0 or all ones
+    p.emit("RDST", rd=RC, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
+    p.emit("ALU", rd=RC, ra=RC, rb=0, cnd=ALU_ADD, imm=1)
+    p.emit("ALU", rd=RC, ra=RC, rb=RB, cnd=ALU_AND)
+    p.emit("WRST", ra=RC, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
+    p.emit("CMP", ra=RC, rb=0, fmt=FMT_D, imm=LOST_CLEARS_AT_C)
     p.emit("BRS", cnd=BRS_LT, label="pd_go")
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
     e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
@@ -1663,8 +1804,9 @@ def prog_btca(base: int) -> Prog:
     # sync-ok verdict (v5 flickered it at the parent's announce rate)
     p.emit("WRST", ra=RW, imm=RG_PUB | 0, fmt=FMT_Q)
     e_flags(p, andm=FL_ASCAP_C, orm=FL_PRESENT_C)
+    # the pending Sync is void; its source (S_SYNCSRC, its own cell since
+    # #89) is read only behind a nonzero S_SYNCTS, so it needs no clear
     p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCTS, fmt=FMT_Q)
-    p.emit("WRST", ra=0, imm=RG_SCR | S_SYNCSRC, fmt=FMT_Q)
     p.emit("RDST", rd=RT, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND, imm=TXP_SYNC_C)
     p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
@@ -1673,6 +1815,13 @@ def prog_btca(base: int) -> Prog:
     p.label("pk")
     p.emit("WRST", ra=0, imm=RG_TMR | 1, fmt=FMT_Q)        # sync TX off
     p.emit("WRST", ra=0, imm=RG_TMR | 3, fmt=FMT_Q)        # ann TX off
+    # A new grandmaster starts the sync receipt watch, so one that never
+    # sends a usable Sync is aged like one whose Sync stops (#89).
+    # 802.1AS-2011 leaves syncReceiptTimeoutTime unset before the first
+    # Sync; 802.1AS-2020 Figure 10-14 sets it here (SUPERIOR_MASTER_PORT).
+    # A parent refresh (same_gm) restarts nothing
+    p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
+    p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)       # sync watch
     p.label("same_gm")
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)       # receipt watch
@@ -1747,8 +1896,10 @@ def prog_become(base: int) -> Prog:
     p.emit("MOVE", rd=RT, ra=0, imm=2)
     p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)  # announce now
     p.emit("WRST", ra=0, imm=RG_TMR | 2, fmt=FMT_Q)   # stop the watch
-    p.emit("WRST", ra=0, imm=RG_TMR | 4, fmt=FMT_Q)   # a master expects
-    p.emit("WRST", ra=0, imm=RG_TMR | 5, fmt=FMT_Q)   #   no sync
+    # The port's Sync watches run on (#89). syncReceiptTimeoutTime is the
+    # port's, so an expiry after this still marks it (10.3.11). A parked
+    # Sync keeps its Follow_Up watch (11.2.13), so a Follow_Up later than
+    # followUpReceiptTimeout pairs with nothing in the master role either
     p.emit("BR", label=LB["SELF"])
     return p
 
@@ -1959,7 +2110,8 @@ def _pdpost_verdict(p):
     p.emit("BRS", cnd=BRS_LT, label="good")
     p.emit("BR", label="bad")
     p.label("good")
-    p.emit("WRST", ra=0, imm=RG_SCR | S_PDLOST, fmt=FMT_Q)
+    # lostResponses restarts at the next beat, its only reader, which finds
+    # S_PDGOT set by either verdict (#90); no completion outlives that beat
     p.emit("RDST", rd=RT, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_ADD, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
@@ -1972,10 +2124,19 @@ def _pdpost_verdict(p):
     p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=FL_ASCAP_C)
     p.emit("BRS", cnd=BRS_Z, label="done")           # already capable
     p.emit("WRST", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)  # rose: link-up
+    # and a port that becomes asCapable has received no information yet,
+    # so nothing in it is aged: no mark outlives a reset or a lapse (#89)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_SRTO, fmt=FMT_Q)
     p.emit("BR", label="done")
     p.label("bad")
     p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
-    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
+    p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_AND,
+           imm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
+    # PUBFLAGS: RT becomes the flags word, then prog_leg_pdpair's COMMIT and
+    # END. A sync receipt timeout that ages nothing ends here too (#89)
+    p.label("pubflags")
+    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)
     p.label("done")
 
 
@@ -1995,24 +2156,42 @@ def prog_leg_resume(base: int) -> Prog:
 
 
 def prog_leg_srto(base: int) -> Prog:
-    """Sync receipt timeout (375 ms): the sync-ok verdict falls. The servo
-    stays locked, so the next pair still uses the locked threshold (#68).
+    """Sync receipt timeout (375 ms, #89): syncReceiptTimeoutTime has
+    passed. The port is marked, whatever role the expiry found, and an
+    elected peer whose grandmaster has priority1 below 255 is aged exactly
+    as on announce receipt timeout (802.1AS-2011 10.3.11, Figure 10-13 as
+    corrected by Cor1: CURRENT to AGED when currentTime >=
+    syncReceiptTimeoutTime && gmPresent). BECGATE then runs BMCA again: on
+    this single port the plane's own vector is the best, so BECOME takes
+    the grandmaster role.
 
-    A master keeps its verdict (#84). BECOME disarms this watch, but a
-    disarm cannot recall an expiry already queued behind BECOME's own
-    event. So sync-ok survives here exactly where the master bit stands:
-    the flags shifted left by SYNCOK_BY_AMGM_C put bit 1 on bit 3, and the
-    other three bits pass. Branch-free, because a gated form is two words
-    longer and the packer then has no gap for it."""
+    A priority1 255 grandmaster leaves gmPresent FALSE (10.3.12.1.4 g), so
+    its slave stays elected, but its Sync has stopped: sync-ok falls, as
+    the v4 rule had it on every expiry outside mastership. A master is
+    only marked: it keeps its sync-ok (#84), and its peer's next Announce
+    is aged at once. An incapable port has no information to age, and its
+    mark ends at the asCapable rise. The servo stays locked (#68).
+
+    Branch-free: the presence bit times SRTO_PASSED_C is the mark for an
+    elected peer and zero otherwise. The elected vector's bits 63:53
+    compare below it exactly for a peer with gmPresent, and nothing
+    compares below zero. Otherwise MASK clears that product's bits from
+    the flags, and sync-ok is the only flag among them, so a peer that is
+    not aged loses sync-ok and a master loses nothing. PDPAIR's tail then
+    publishes the flags and commits."""
+    assert SRTO_PASSED_C & (2 * FL_SYNCOK_C - 1) == FL_SYNCOK_C
     p = Prog(base)
+    p.emit("MOVE", rd=RU, ra=0, imm=SRTO_PASSED_C)
+    p.emit("WRST", ra=RU, imm=RG_SCR | S_SRTO, fmt=FMT_Q)
     p.emit("RDST", rd=RT, imm=RG_PUB | 2, fmt=FMT_Q)
-    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=SYNCOK_BY_AMGM_C)
-    p.emit("ALU", rd=RU, ra=RU, rb=0, cnd=ALU_OR,
-           imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)
-    p.emit("ALU", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)
-    p.emit("WRST", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)
-    p.emit("COMMIT")
-    p.emit("END")
+    p.emit("ALU", rd=RV, ra=RT, rb=0, cnd=ALU_AND, imm=FL_PRESENT_C)
+    p.emit("MD", rd=RV, ra=RV, rb=RU, cnd=MD_MULS)    # the mark, or zero
+    p.emit("RDST", rd=RW, imm=RG_SCR | S_BESTPV, fmt=FMT_Q)
+    p.emit("ALU", rd=RW, ra=RW, rb=0, cnd=ALU_SHR, imm=53)  # p1,class[7:5]
+    p.emit("CMP", ra=RW, rb=RV, fmt=FMT_D)
+    p.emit("BRS", cnd=BRS_LT, label=LB["BECGATE"])
+    p.emit("MASK", rd=RT, ra=R0, rb=RV)               # RT & ~RV
+    p.emit("BR", label=LB["PUBFLAGS"])
     return p
 
 
@@ -2149,7 +2328,7 @@ LEG_FNS = [
     ("SYNCTX", prog_leg_synctx), ("ANNTX", prog_leg_anntx),
     ("PDPOST", prog_leg_pdpost), ("PDPAIR", prog_leg_pdpair),
     ("PDEPOCH", prog_leg_pdepoch),
-    ("SRTO", prog_leg_srto),
+    ("SRTO", prog_leg_srto), ("SRWATCH", prog_leg_srwatch),
     ("FUTO", prog_leg_futo), ("SERVO", prog_leg_servo),
     ("SLEW", prog_leg_slew), ("SVRATE", prog_leg_svrate),
     ("RESUME", prog_leg_resume), ("PDREQ", prog_leg_pdreq),
@@ -2178,6 +2357,7 @@ def build(mac: int, seq_seed: int = 0,
     # pass 1: measure (word counts are independent of branch targets)
     for name, _ in LEG_FNS:
         LB[name] = 0
+    LB["PUBFLAGS"] = 0
     fixed_sz = [(b, len(fn(b).words())) for b, fn in fixed]
     leg_sz = [(name, len(fn(0).words())) for name, fn in LEG_FNS]
 
@@ -2210,6 +2390,8 @@ def build(mac: int, seq_seed: int = 0,
                 break
         else:
             raise AssertionError(f"leg {name} ({sz} words) does not fit")
+    # PDPAIR's flags-publishing tail, which SRTO shares (#89)
+    LB["PUBFLAGS"] = prog_leg_pdpair(LB["PDPAIR"]).address("pubflags")
 
     # pass 2: emit with real bases
     rom = [None] * DEPTH

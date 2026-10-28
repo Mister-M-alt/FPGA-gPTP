@@ -37,9 +37,10 @@ behaviour. Closing that would need a reachable state, not another mutant.
 
 The lapse hook's asCapable term is also defence in depth. Removing only
 that term survives: Sync pairs cannot be consumed while incapable, and
-the 375 ms Sync receipt watch clears sync-ok before capability can recover
-through two good Pdelay exchanges at 1 s cadence. Only mastership disarms
-that watch, and mastership retires the qualifier itself. This is a
+the fall's leg drops the elected peer by writing the whole flags word
+zero, sync-ok included, before capability can recover through two good
+Pdelay exchanges at 1 s cadence (since #89 the Sync receipt watch ages a
+slave instead). Mastership retires the qualifier itself. This is a
 reachability argument from the current policy, not an executed proof;
 revisit it if the timer or capability recovery rules change.
 
@@ -63,6 +64,9 @@ sys.path.insert(0, str((HERE / "../../").resolve()))
 
 from mutation_verdict import TALLY, verdict  # noqa: E402
 
+sys.path.insert(0, str(HERE))
+from receipt_mutants import GENERATOR, RECEIPT_MUTATIONS  # noqa: E402
+
 #: the RTL the suite builds, in the order the Makefile lists it
 RTL_SOURCES = (
     "ucpu/gptp_ucpu_pkg.sv",
@@ -72,7 +76,6 @@ RTL_SOURCES = (
     "common/KL_gptp_timer.sv",
     "top/KL_gptp_engine.sv",
 )
-GENERATOR = "ucode/gen_gptp_ucode.py"
 #: the shipping arguments of this suite's image, as tb/verilator/engine/Makefile
 GENARGS = ("--clk-hz", "2000000", "--cease-ms", "3000")
 #: the Makefile's fourth pass (#82): a priority1 of 255, the self-publication
@@ -100,6 +103,11 @@ MUTATIONS = [
      "    p.emit(\"MOVE\", rd=RB, ra=0, imm=3)                       # reload, then -1",
      "    p.emit(\"MOVE\", rd=RB, ra=0, imm=2)                       # early completion",
      "slew: first in-band pair cannot clear"),
+    # #89: nothing is in band, so no pair after a Sync lapse completes
+    ("the tracking band is empty", GENERATOR,
+     "    p.emit(\"CMP\", ra=RW, rb=0, fmt=FMT_D, imm=2 * SLEW_SETTLED_NS_C + 1)\n",
+     "    p.emit(\"CMP\", ra=RW, rb=0, fmt=FMT_D, imm=0)\n",
+     "slew: second return pair stays inactive"),
     ("slew clears before the replacement rate", "top/KL_gptp_engine.sv",
      "                if (st_wdata_w[1:0] != 2'd0)\n"
      "                  phc_slew_active_o <= 1'b1;",
@@ -157,6 +165,8 @@ MUTATIONS = [
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)\n"
      "    p.emit(\"BR\", label=LB[\"TXT1OK\"])\n",
      "a lost result writes no time and completes no exchange"),
+    # word-neutral since #89 filled TXLOST's gap: each arm falls into the
+    # request arm, cancelling the requester exchange (and the timer claim)
     ("lost Sync cancels the requester exchange", GENERATOR,
      "    p.label(\"sync\")\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)\n"
@@ -164,8 +174,7 @@ MUTATIONS = [
      "origin time\n",
      "    p.label(\"sync\")\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_TMR, fmt=FMT_Q)\n"
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_T1V, fmt=FMT_Q)\n"
-     "    p.emit(\"END\")\n",
+     "    p.emit(\"BR\", label=\"t1\")\n",
      "a lost Sync result retires the Sync claim and nothing else"),
     ("lost response cancels the requester exchange", GENERATOR,
      "    p.label(\"resp\")\n"
@@ -174,19 +183,13 @@ MUTATIONS = [
      "carry\n",
      "    p.label(\"resp\")\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_TXQ_RESP, fmt=FMT_Q)\n"
-     "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)\n"
-     "    p.emit(\"END\")\n",
+     "    p.emit(\"BR\", label=\"t1\")\n",
      "a lost Pdelay_Resp result retires the response claim and nothing "
      "else"),
     # ---- the retained pairing context -------------------------------------
     ("a later response re-arms the frozen pair", GENERATOR,
-     "    p.emit(\"RDST\", rd=RU, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)\n"
-     "    p.emit(\"CMP\", ra=RU, rb=0, fmt=FMT_D, imm=0)\n"
-     "    p.emit(\"BRS\", cnd=BRS_Z, label=\"arm_go\")\n"
-     "    p.emit(\"BR\", label=\"multi\")                                   "
-     "# frozen\n"
-     "    p.label(\"arm_go\")\n",
-     "    p.label(\"arm_go\")\n",
+     "    p.emit(\"RDST\", rd=RV, imm=RG_SCR | S_PDWAIT, fmt=FMT_Q)\n",
+     "    p.emit(\"MOVE\", rd=RV, ra=0, imm=0)\n",
      "a complete pair keeps its own identity and operands until its t1"),
     ("the tail runs before its own t1", GENERATOR,
      "    p.emit(\"RDST\", rd=RT, imm=RG_SCR | S_T1V, fmt=FMT_Q)\n"
@@ -260,14 +263,10 @@ MUTATIONS = [
      "the servo stays locked across a grandmaster identity change"),
     # only an asCapable rise re-arms the link-up (the manager's ruling on
     # #68): each of these two re-adds a retired re-arm
-    # word-neutral, because the packer has no gap for a longer receipt
-    # timeout leg (#84): a slave's timeout as before, plus the unlock
+    # one word longer, which the ROM still holds (#89)
     ("a receipt timeout unlocks the servo", GENERATOR,
-     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL, imm=SYNCOK_BY_AMGM_C)\n"
-     "    p.emit(\"ALU\", rd=RU, ra=RU, rb=0, cnd=ALU_OR,\n"
-     "           imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n",
-     "    p.emit(\"MOVE\", rd=RU, ra=0,"
-     " imm=FL_PRESENT_C | FL_AMGM_C | FL_ASCAP_C)\n"
+     "    p.emit(\"WRST\", ra=RU, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n",
+     "    p.emit(\"WRST\", ra=RU, imm=RG_SCR | S_SRTO, fmt=FMT_Q)\n"
      "    p.emit(\"WRST\", ra=0, imm=RG_SCR | S_LOCK, fmt=FMT_Q)\n",
      "the servo stays locked across a Sync receipt timeout"),
     ("becoming grandmaster unlocks the servo", GENERATOR,
@@ -441,8 +440,9 @@ MUTATIONS = [
      " | #82 Pdelay loss: that commit carries {thisClock}"
      " | #82 Pdelay loss: Announces from the incapable port elect nothing"),
     ("an incapable port's Announces still compete", GENERATOR,
+     "    # 802.1AS: a port that is not asCapable does not enter the contest\n"
      "    e_flag_gate(p, FL_ASCAP_C, FL_ASCAP_C, \"ac\", \"out\")\n",
-     "",
+     "    # 802.1AS: a port that is not asCapable does not enter the contest\n",
      "#82 Pdelay loss: Announces from the incapable port elect nothing"),
     ("the asCapable drop keeps the flags word", GENERATOR,
      "    p.emit(\"WRST\", ra=0, imm=RG_PUB | 2, fmt=FMT_Q)\n"
@@ -500,19 +500,15 @@ MUTATIONS = [
      " | #84 every master cycle publishes sync-ok"
      " | p1 255 #84 first mastership: the master flags carry sync-ok"
      " | p1 255 #84 every master cycle publishes sync-ok"),
+    # word-neutral: the mask is the mark itself, so every expiry that ages
+    # nothing clears sync-ok, a master's included
     ("a queued receipt timeout clears a master's sync-ok", GENERATOR,
-     "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SHL,"
-     " imm=SYNCOK_BY_AMGM_C)\n",
-     "    p.emit(\"MOVE\", rd=RU, ra=0, imm=0)\n",
+     "    p.emit(\"MASK\", rd=RT, ra=R0, rb=RV)               # RT & ~RV\n",
+     "    p.emit(\"MASK\", rd=RT, ra=R0, rb=RU)               # RT & ~RV\n",
      "#84 takeover: a queued receipt timeout keeps sync-ok"
      " | #84 every master cycle publishes sync-ok"),
-    ("the receipt timeout publishes nothing", GENERATOR,
-     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n"
-     "    p.emit(\"COMMIT\")\n",
-     "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
-     "    p.emit(\"WRST\", ra=RT, imm=RG_PUB | 2, fmt=FMT_Q)\n",
-     "#84 takeover: the queued receipt timeout commits after it"),
+    # ---- #89, #90 and #91: receipt_mutants.py -----------------------------
+    *RECEIPT_MUTATIONS,
     ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
      "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
      "                 disp_ready_w && !disp_valid_r;",
@@ -728,9 +724,11 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
             answer = "missed its named check"
         else:
             print(named[0])
-    # #82, #84 and #85 controls must fail every check they name, for the
-    # same reason: each of those checks needs its own failing defect.
-    if breaks.startswith(("#82 ", "#84 ", "#85 ", P1_PREFIX)) and \
+    # #82, #84, #85, #89, #90 and #91 controls must fail every check they
+    # name, for the same reason: each of those checks needs its own failing
+    # defect.
+    if breaks.startswith(("#82 ", "#84 ", "#85 ", "#89 ", "#90 ", "#91 ",
+                          P1_PREFIX)) and \
             answer == "caught":
         failed = [line for line in output.splitlines()
                   if line.startswith("FAIL ")]
