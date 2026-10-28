@@ -26,6 +26,9 @@
 #include "../../common/verilator_harness.hpp"
 
 constexpr uint64_t LOCAL_CID = 0x02A1B2FFFEC3D4E5ull;
+//! Word 12 bit 63: a path trace TLV was present, even an empty one (#87).
+//! 802.1AS-2011 10.3.10.2.1 d) copies only a present TLV to pathTrace.
+constexpr uint64_t PT_PRESENT = 1ull << 63;
 
 //! Cycles held in reset, and cycles idled after it before the first frame.
 constexpr int kResetTicks = 4;
@@ -153,6 +156,8 @@ class RxParserHarness {
   void check_an_incomplete_declared_chain_is_refused();
   void check_a_duplicate_path_tlv_is_refused();
   void check_declared_path_boundaries_and_padding();
+  void check_a_path_count_need_not_match_steps_removed();
+  void check_a_path_head_and_an_empty_path_qualify();
   void check_sync();
   void check_follow_up_with_information_tlv();
   void check_pdelay_resp();
@@ -356,7 +361,7 @@ void RxParserHarness::check_announce_with_a_two_hop_path_trace() {
     expect_eq("ann w9 gmid", bank[9], 0x00220FFFFE334455ull);
     expect_eq("ann w10", bank[10],
               (1ull << 48) | (0xA0ull << 40));
-    expect_eq("ann w12 hops", bank[12], 2);
+    expect_eq("ann w12 hops", bank[12], PT_PRESENT | 2);
     expect_eq("ann w16 pt0", bank[16], 0x00220FFFFE334455ull);
     expect_eq("ann w17 pt1", bank[17], 0x2222222222222222ull);
   }
@@ -364,19 +369,18 @@ void RxParserHarness::check_announce_with_a_two_hop_path_trace() {
 
 // ---- Announce declared-length and complete-PathTrace boundary --------
 // A fixed 64-octet Announce without PathTrace is qualified and reported
-// honestly as count zero. If a declared suffix is present, 10.5.3.3 makes
-// PathTrace lengthField 8N and N=stepsRemoved+1. These probes bind parsing
-// to the PTP message rather than physical Ethernet padding and bite
-// independently on an invalid declared suffix, overrun, truncation,
-// misalignment, and count mismatch. A valid message may still have
-// arbitrary physical padding after its declared end.
+// absent, with count zero (#87). If a declared suffix is present, 10.5.3.3
+// makes PathTrace lengthField 8N. These probes bind parsing to the PTP message
+// rather than physical Ethernet padding and bite independently on an
+// invalid declared suffix, overrun, truncation and misalignment. A valid
+// message may still have arbitrary physical padding after its declared end.
 void RxParserHarness::check_a_declared_suffix_binds_parsing_to_the_message() {
   {
     uint16_t d0 = dut->drop_cnt_o;
     Frame f = announce_frame(0xA001, AGM, 0, ASRC, {});
     feed(f.b, false);                               // declared/exact 64
     expect_eq("TLV-less ann: event", ev_seen ? ev_code : 0, 3);
-    expect_eq("TLV-less ann: zero count and loop", bank[12], 0);
+    expect_eq("TLV-less ann: absent, zero count and loop", bank[12], 0);
     expect_eq("TLV-less ann: no retained identity", bank.count(16), 0);
     expect_eq("TLV-less ann: no drop", dut->drop_cnt_o, d0);
   }
@@ -388,7 +392,7 @@ void RxParserHarness::check_a_declared_suffix_binds_parsing_to_the_message() {
     f.u16(0x0008); f.u16(16); f.u64(AGM); f.u64(LOCAL_CID);
     feed(f.b, false);
     expect_eq("out-of-message path: event", ev_seen ? ev_code : 0, 3);
-    expect_eq("out-of-message path: zero count and loop", bank[12], 0);
+    expect_eq("out-of-message path: absent, zero count and loop", bank[12], 0);
     expect_eq("out-of-message path: no retained identity", bank.count(16), 0);
     expect_eq("out-of-message path: no drop", dut->drop_cnt_o, d0);
   }
@@ -446,7 +450,7 @@ void RxParserHarness::check_unknown_tlvs_are_skipped_around_the_path_tlv() {
     append_path_tlv(f, {AGM, ASRC});
     feed(f.b, false);
     expect_eq("unknown before path: event", ev_seen ? ev_code : 0, 3);
-    expect_eq("unknown before path: count", bank[12], 2);
+    expect_eq("unknown before path: count", bank[12], PT_PRESENT | 2);
     expect_eq("unknown before path: head", bank[16], AGM);
     expect_eq("unknown before path: tail", bank[17], ASRC);
     expect_eq("unknown before path: no drop", dut->drop_cnt_o, d0);
@@ -458,7 +462,7 @@ void RxParserHarness::check_unknown_tlvs_are_skipped_around_the_path_tlv() {
     append_tlv(f, 0x2222, {0xB1, 0xB2});
     feed(f.b, false);
     expect_eq("unknown after path: event", ev_seen ? ev_code : 0, 3);
-    expect_eq("unknown after path: count", bank[12], 2);
+    expect_eq("unknown after path: count", bank[12], PT_PRESENT | 2);
     expect_eq("unknown after path: head", bank[16], AGM);
     expect_eq("unknown after path: tail", bank[17], ASRC);
     expect_eq("unknown after path: no drop", dut->drop_cnt_o, d0);
@@ -472,7 +476,7 @@ void RxParserHarness::check_unknown_tlvs_are_skipped_around_the_path_tlv() {
     append_tlv(f, 0x3333, {1, 2, 3, 4});
     feed(f.b, false);
     expect_eq("unknowns around path: event", ev_seen ? ev_code : 0, 3);
-    expect_eq("unknowns around path: count", bank[12], 2);
+    expect_eq("unknowns around path: count", bank[12], PT_PRESENT | 2);
     expect_eq("unknowns around path: head", bank[16], AGM);
     expect_eq("unknowns around path: tail", bank[17], ASRC);
     expect_eq("unknowns around path: no drop", dut->drop_cnt_o, d0);
@@ -630,19 +634,11 @@ void RxParserHarness::check_declared_path_boundaries_and_padding() {
   }
   {
     uint16_t d0 = dut->drop_cnt_o;
-    Frame f = announce_frame(0xA005, AGM, 2, ASRC, {AGM, ASRC});
-    feed(f.b, false);                               // N=2, steps+1=3
-    expect_eq("path-count mismatch: no event", ev_seen, 0);
-    expect_eq("path-count mismatch: one drop", dut->drop_cnt_o,
-              static_cast<uint16_t>(d0 + 1));
-  }
-  {
-    uint16_t d0 = dut->drop_cnt_o;
     Frame f = announce_frame(0xA006, AGM, 0, ASRC, {AGM});
     f.u16(0x0008); f.u16(8); f.u64(LOCAL_CID);      // physical padding
     feed(f.b, false);
     expect_eq("valid ann with padding: event", ev_seen ? ev_code : 0, 3);
-    expect_eq("valid ann with padding: count", bank[12], 1);
+    expect_eq("valid ann with padding: count", bank[12], PT_PRESENT | 1);
     expect_eq("valid ann with padding: no drop", dut->drop_cnt_o, d0);
   }
   {
@@ -654,10 +650,129 @@ void RxParserHarness::check_declared_path_boundaries_and_padding() {
     Frame f = announce_frame(0xA007, AGM, 8, ASRC, path);
     feed(f.b, false);
     expect_eq("deep self path: event", ev_seen ? ev_code : 0, 3);
-    expect_eq("deep self path: full count+loop", bank[12], 0x109);
+    expect_eq("deep self path: full count+loop", bank[12],
+              PT_PRESENT | 0x109);
     expect_eq("deep self path: first retained", bank[16], AGM);
     expect_eq("deep self path: eighth retained", bank[23], 0x7007);
     expect_eq("deep self path: no drop", dut->drop_cnt_o, d0);
+  }
+}
+
+// ---- #88: the hop count is not a qualification rule -------------------
+// 802.1AS-2011 10.5.3.3.4 gives N = stepsRemoved+1 only as a NOTE, and
+// 10.3.10.2.1 disqualifies an Announce only by its a) to c). A complete
+// PathTrace shorter or longer than stepsRemoved+1 is therefore accepted,
+// its true count and every retained identity reported. The first probe is
+// the issue's shape: stepsRemoved 3 and a one-entry path. A short path
+// holding thisClock still reports the loop, for (c) to refuse.
+void RxParserHarness::check_a_path_count_need_not_match_steps_removed() {
+  constexpr uint64_t AHOP = 0x001122FFFE778899ull;
+  struct Probe {
+    const char *tag;
+    uint16_t seq;
+    uint16_t steps;
+    std::vector<uint64_t> path;
+    uint64_t w12;
+  };
+  const Probe probes[] = {
+      {"#88 one entry, stepsRemoved 3", 0xA020, 3, {AGM}, PT_PRESENT | 1},
+      {"#88 two entries, stepsRemoved 2", 0xA021, 2, {AGM, ASRC},
+       PT_PRESENT | 2},
+      {"#88 three entries, stepsRemoved 0", 0xA022, 0, {AGM, AHOP, ASRC},
+       PT_PRESENT | 3},
+      {"#88 short loop, stepsRemoved 5", 0xA023, 5, {AGM, LOCAL_CID},
+       PT_PRESENT | 0x102},
+  };
+  for (const Probe &p : probes) {
+    const uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(p.seq, AGM, p.steps, ASRC, p.path);
+    feed(f.b, false);
+    char n[96];
+    snprintf(n, sizeof n, "%s: event", p.tag);
+    expect_eq(n, ev_seen ? ev_code : 0, 3);
+    snprintf(n, sizeof n, "%s: presence, count and loop", p.tag);
+    expect_eq(n, bank[12], p.w12);
+    for (size_t k = 0; k < p.path.size(); k++) {
+      snprintf(n, sizeof n, "%s: identity %zu", p.tag, k);
+      expect_eq(n, bank[16 + static_cast<uint32_t>(k)], p.path[k]);
+    }
+    snprintf(n, sizeof n, "%s: no drop", p.tag);
+    expect_eq(n, dut->drop_cnt_o, d0);
+  }
+}
+
+// ---- #88: neither the head nor an empty path disqualifies -------------
+// 802.1AS-2011 10.3.10.2.1 a) to c) are the only disqualifying rules, and
+// d) copies pathSequence as received. A path whose first entry is not the
+// announced grandmasterIdentity is accepted with that head reported at
+// word 16. A zero-length path trace TLV is a present, empty pathSequence:
+// accepted, reported present with count zero, and still singular, so a
+// second PathTrace behind it is refused. A loop at
+// the head of a foreign-headed path is still reported for (c).
+void RxParserHarness::check_a_path_head_and_an_empty_path_qualify() {
+  constexpr uint64_t XHEAD = 0x00BAD0FFFE000001ull;
+  struct Probe {
+    const char *tag;
+    uint16_t seq;
+    std::vector<uint64_t> path;
+    uint64_t w12;
+  };
+  const Probe probes[] = {
+      {"#88 head not the grandmaster, two entries", 0xA050, {XHEAD, ASRC},
+       PT_PRESENT | 2},
+      {"#88 head not the grandmaster, one entry", 0xA051, {ASRC},
+       PT_PRESENT | 1},
+      {"#88 head is thisClock", 0xA052, {LOCAL_CID, ASRC},
+       PT_PRESENT | 0x102},
+  };
+  for (const Probe &p : probes) {
+    const uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(p.seq, AGM, 1, ASRC, p.path);
+    feed(f.b, false);
+    char n[96];
+    snprintf(n, sizeof n, "%s: event", p.tag);
+    expect_eq(n, ev_seen ? ev_code : 0, 3);
+    snprintf(n, sizeof n, "%s: presence, count and loop", p.tag);
+    expect_eq(n, bank[12], p.w12);
+    for (size_t k = 0; k < p.path.size(); k++) {
+      snprintf(n, sizeof n, "%s: identity %zu", p.tag, k);
+      expect_eq(n, bank[16 + static_cast<uint32_t>(k)], p.path[k]);
+    }
+    snprintf(n, sizeof n, "%s: no drop", p.tag);
+    expect_eq(n, dut->drop_cnt_o, d0);
+  }
+  {
+    const uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA053, AGM, 0, ASRC, {});
+    append_path_tlv(f, {});
+    feed(f.b, false);
+    expect_eq("#88 empty path: event", ev_seen ? ev_code : 0, 3);
+    expect_eq("#88 empty path: present, count zero", bank[12], PT_PRESENT);
+    expect_eq("#88 empty path: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    const uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA054, AGM, 0, ASRC, {});
+    append_tlv(f, 0x1111, {0xA1, 0xA2});
+    append_path_tlv(f, {});
+    append_tlv(f, 0x2222, {});
+    feed(f.b, false);
+    expect_eq("#88 empty path between unknowns: event",
+              ev_seen ? ev_code : 0, 3);
+    expect_eq("#88 empty path between unknowns: present, count zero",
+              bank[12], PT_PRESENT);
+    expect_eq("#88 empty path between unknowns: no drop", dut->drop_cnt_o, d0);
+  }
+  {
+    const uint16_t d0 = dut->drop_cnt_o;
+    Frame f = announce_frame(0xA055, AGM, 0, ASRC, {});
+    append_path_tlv(f, {});
+    append_path_tlv(f, {AGM});
+    feed(f.b, false);
+    expect_eq("#88 path after an empty path: no event", ev_seen, 0);
+    expect_eq("#88 path after an empty path: no w12", bank.count(12), 0);
+    expect_eq("#88 path after an empty path: one drop", dut->drop_cnt_o,
+              static_cast<uint16_t>(d0 + 1));
   }
 }
 
@@ -1520,6 +1635,8 @@ int RxParserHarness::run() {
   check_an_incomplete_declared_chain_is_refused();
   check_a_duplicate_path_tlv_is_refused();
   check_declared_path_boundaries_and_padding();
+  check_a_path_count_need_not_match_steps_removed();
+  check_a_path_head_and_an_empty_path_qualify();
   check_sync();
   check_follow_up_with_information_tlv();
   check_pdelay_resp();

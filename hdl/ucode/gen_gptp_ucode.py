@@ -101,14 +101,17 @@ The three rules now run ahead of every write the handler makes:
     loop-prevention rule. The streaming parser checks every declared hop,
     including those beyond the eight retained public slots, and reports the
     result beside the true count in bank word 12. A fixed Announce without
-    PathTrace reports count and loop as zero; a present TLV must have the
-    announced grandmaster at its head and N == stepsRemoved+1. The µcode
-    therefore consumes one coherent qualification bit rather than walking a
-    truncated storage window.
+    PathTrace reports count and loop as zero. A present TLV may be empty,
+    its N may differ from stepsRemoved+1 (10.5.3.3.4 states that only as a
+    NOTE), and its head need not be the announced grandmaster (#88). The
+    µcode therefore consumes one coherent qualification bit rather than
+    walking a truncated storage window.
 
-(d)'s pathTrace copy for a SlavePort, with thisClock appended (802.1AS-2020
-10.3.13.2.4 f) 5), #85), is the published path, which the parent serves to
-GET_AS_PATH (IEEE 1722.1-2021 7.4.41).
+(d)'s pathTrace copy for a SlavePort, with thisClock appended (#85), is the
+published path, which the parent serves to GET_AS_PATH (IEEE 1722.1-2021
+7.4.41). The engine applies it at the `take` below: a present TLV's
+pathSequence from its received head plus thisClock, and without a TLV the
+previous pathTrace (#87).
 Only its Announce transmit side has no reader on a single-port end station:
 a slave port transmits no Announce (the ANNTX leg is gated on the master
 role).
@@ -1088,10 +1091,11 @@ def prog_rx_announce(base: int) -> Prog:
     p.emit("BRS", cnd=BRS_LT, label="steps_ok")
     p.emit("BR", label="out")
     p.label("steps_ok")
-    # (c) for a present TLV, the parser has already checked its framing, head
-    #     and count, and compared EVERY hop (not merely stored w16..w23) with
+    # (c) for a present TLV, the parser has already checked its framing
+    #     and compared EVERY hop (not merely stored w16..w23) with
     #     thisClock. For an absent TLV both count and loop are zero. Word 12
-    #     bit 8 is the complete loop verdict in either case.
+    #     bit 8 is the complete loop verdict in either case; its presence
+    #     bit 63 lies above the 32 bits this compare reads.
     p.emit("RDST", rd=RV, imm=RG_BANK | 12, fmt=FMT_Q)
     p.emit("ALU", rd=RV, ra=RV, rb=0, cnd=ALU_SHR, imm=8)
     p.emit("CMP", ra=RV, rb=0, fmt=FMT_D, imm=0)
@@ -1768,11 +1772,12 @@ def prog_btca(base: int) -> Prog:
     p.emit("WRST", ra=RB, imm=RG_SCR | S_BESTID, fmt=FMT_Q)
     p.emit("WRST", ra=RD_, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     # Stage this taken Announce's frozen PathTrace into the raw publish bank.
-    # Address 7 atomically copies the count/tail-only publication snapshot,
-    # appends thisClock to a nonempty path (#85) and clears inactive tail
-    # words. Handler reads independently use the compact
-    # serial ann_ctx_r port; spending fourteen ROM words to copy the same path
-    # through that port would overflow this deliberately full µcode image.
+    # Address 7 atomically copies a present TLV's entries from entry 0,
+    # appends thisClock (#85) and clears inactive entries; without a TLV it
+    # keeps the previous pathTrace (#87). Handler reads independently use
+    # the compact serial ann_ctx_r port; spending fourteen ROM words to copy
+    # the same path through that port would overflow this deliberately full
+    # µcode image.
     # `they_win` is also reachable from a later worse Announce, so that later
     # frame never executes this `take` block and cannot replace the selected
     # path. The wrapper samples the raw bank only at the final COMMIT.
@@ -1920,7 +1925,7 @@ def prog_self(base: int) -> Prog:
     p.emit("WRST", ra=RC, imm=RG_SCR | S_BESTSRC, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     # A nonzero write is the self-master form of the same publication
-    # transaction: one GM entry and an erased tail.
+    # transaction: the path {thisClock}, every later entry erased.
     p.emit("WRST", ra=RT, imm=RG_PUB | 6, fmt=FMT_Q)
     p.emit("COMMIT")
     p.emit("END")

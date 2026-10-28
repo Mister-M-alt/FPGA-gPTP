@@ -27,8 +27,10 @@
 //                                            2 transmit admission credit)
 //                  2  scratch RAM       RW  (64 x 64, protocol state)
 //                  3  publish bank      RW  (0 gm id, 1 parent id, 2 flags,
-//                                            3 pdelay ns, 6 path count, 8..14
-//                                            path tail, 15 thisClock RO)
+//                                            3 pdelay ns, 6 path count, 7..14
+//                                            path entries 0..7 (a write to 7
+//                                            stages the taken path), 15
+//                                            thisClock RO)
 //                  4  PHC control       RW  (0 rate, 1 step, 2 slew verdict,
 //                                            3 integral-only rate)
 //                  5  timer arm         WO  (slot = addr, delta ms = data)
@@ -115,13 +117,14 @@ module KL_gptp_engine
     output logic [31:0] pub_pdelay_ns_o,
     output logic [31:0] pub_offset_o,  //! last sync offset, ns (signed)
     output logic [63:0] pub_annq_o,    //! last received announce vector, raw
-    //! Raw pathTrace publication: the selected Announce's pathSequence with
-    //! thisClock appended (#85), so its length includes the separately
-    //! published GM at slot zero and thisClock last, or zero for an absent
-    //! TLV. pub_path_o carries slots 1..7; inactive slots are zero.
-    //! After reset or a departed peer: thisClock and {thisClock} (#82).
+    //! pathTrace (802.1AS-2011 10.3.8.21) as entries 0..7: entry k in bits
+    //! 64*k +: 64, the count the number of entries published, 1..8, and
+    //! every inactive entry zero. A path trace TLV's pathSequence copied as
+    //! received, its head included, plus thisClock (10.3.10.2.1 d), #85,
+    //! #88); without a TLV the previous pathTrace stays (#87). After reset
+    //! or a departed peer: {thisClock} (10.3.12.1.1, 10.3.12.1.4 i), #82).
     output logic  [3:0] pub_path_count_o,
-    output logic [7*64-1:0] pub_path_o,
+    output logic [8*64-1:0] pub_path_o,
     output logic        pub_commit_o,
 
     //! reserved effect strobes (base-ISA compat, unused by gPTP µcode)
@@ -220,13 +223,15 @@ module KL_gptp_engine
   //! than a wide register snapshot or a multi-read replica of bank_r.
   (* ram_style = "distributed" *) logic [63:0] ann_ctx_r [0:31];
   //! Publication needs the selected path in one state-port transaction. Keep
-  //! only that payload beside the serial-read context: the count plus w17..w23
-  //! (w16 is the separately published GM). Inactive words may remain stale
-  //! here; address 7 count-gates and zeroes them in the raw publish bank. No
-  //! reset/initial value is required: a qualified frame always writes w12 and
-  //! every tail word its count makes active before its handler can read them.
+  //! only that payload beside the serial-read context: w12's presence and
+  //! count, and w16..w23, the first eight received entries. Inactive words
+  //! may remain stale here; address 7 count-gates and zeroes them in the raw
+  //! publish bank. No reset/initial value is required: a qualified frame
+  //! always writes w12 and every entry its count makes active before its
+  //! handler can read them.
   logic [7:0] ann_pub_count_r;
-  logic [7*64-1:0] ann_pub_tail_r;
+  logic ann_pub_present_r;
+  logic [8*64-1:0] ann_pub_path_r;
   logic ann_ctx_busy_r, ann_frame_capture_r, ann_event_capture_r;
   logic [2:0] ann_fin_wait_r;
   logic ann_reject_w, ann_deferred_capture_w, evq_full_w, push_w;
@@ -311,10 +316,12 @@ module KL_gptp_engine
         if (bank_addr_w == 5'd3) frame_pn_r  <= bank_wdata_w[15:0];
         if (ann_frame_capture_r || ann_deferred_capture_w) begin
           ann_ctx_r[bank_addr_w] <= bank_wdata_w;
-          if (bank_addr_w == 5'd12)
-            ann_pub_count_r <= bank_wdata_w[7:0];
-          if ((bank_addr_w >= 5'd17) && (bank_addr_w <= 5'd23))
-            ann_pub_tail_r[64*(bank_addr_w-5'd17) +: 64] <= bank_wdata_w;
+          if (bank_addr_w == 5'd12) begin
+            ann_pub_count_r   <= bank_wdata_w[7:0];
+            ann_pub_present_r <= bank_wdata_w[63];
+          end
+          if ((bank_addr_w >= 5'd16) && (bank_addr_w <= 5'd23))
+            ann_pub_path_r[64*(bank_addr_w-5'd16) +: 64] <= bank_wdata_w;
           //! Reserve at the first Announce-only bank word, well before EOF,
           //! so a zero-gap successor cannot overwrite source/path staging in
           //! the two cycles before the deferred event appears.
@@ -701,33 +708,33 @@ module KL_gptp_engine
   logic [63:0] pub_gm_r, pub_parent_r, pub_annq_r;
   logic [31:0] pub_flags_r, pub_pdelay_r, pub_offset_r;
   logic  [3:0] pub_path_count_r;
-  logic [7*64-1:0] pub_path_r;
+  logic [8*64-1:0] pub_path_r;
   //! Path state is staged directly into the raw publish bank on BTCA `take`.
   //! The wrapper samples that bank only on COMMIT, just as it already does for
-  //! GM/parent. If the local vector wins, BECOME overwrites it with `[self]`
-  //! before the handler's sole COMMIT; a worse Announce never executes `take`
-  //! and therefore cannot disturb the selected record. Every reset loads the
-  //! self publication, thisClock and {thisClock}, and invalidates the best
-  //! record below, so only a newly received Announce competes with the local
-  //! vector (#82); outward wires stay gated to canonical zero while the raw GM
-  //! is zero.
-  //! The raw public ABI is bounded to eight complete entries. Count zero is
-  //! the honest publication for a selected fixed Announce without PathTrace;
-  //! its GM remains separately published and every tail word is zero. A
-  //! received path of one to seven entries publishes them and thisClock;
-  //! eight or more publish the first eight received entries.
+  //! GM/parent. If the local vector wins, BECOME overwrites it with
+  //! {thisClock} before the handler's sole COMMIT; a worse Announce never
+  //! executes `take` and therefore cannot disturb the selected record. Every
+  //! reset loads the self publication, thisClock and {thisClock}, and
+  //! invalidates the best record below, so only a newly received Announce
+  //! competes with the local vector (#82); outward wires stay gated to
+  //! canonical zero while the raw GM is zero.
+  //! The raw public ABI is bounded to eight entries, from entry 0.
+  //! 802.1AS-2011 10.3.10.2.1 d): a present path trace TLV's pathSequence is
+  //! copied to pathTrace and thisClock appended (#85). The copy keeps the
+  //! received head, whichever grandmasterIdentity the Announce names (#88),
+  //! and an empty pathSequence gives {thisClock}. A received path of up to
+  //! seven entries publishes them and thisClock; eight or more publish the
+  //! first eight received entries, which are also pathTrace's first eight.
+  //! Without a TLV, d) writes nothing, so the previous pathTrace stays:
+  //! {thisClock} after reset or mastership (10.3.12.1.1, 10.3.12.1.4 i)),
+  //! else the last path copied from a TLV (#87).
   wire [3:0] ann_pub_count_clamped_w = (ann_pub_count_r > 8'd8)
       ? 4'd8 : ann_pub_count_r[3:0];
-  //! #85: a slave port's pathTrace is the received pathSequence with
-  //! thisClock appended, unless that sequence is empty (802.1AS-2020
-  //! 10.3.13.2.4 f) 5), 10.3.9.23). The appended entry takes the slot after
-  //! the received ones while it fits the eight-entry ABI. A received path of
-  //! eight or more entries publishes its first eight, as before: that prefix
-  //! is also the first eight entries of pathTrace.
-  wire       path_append_w = (ann_pub_count_clamped_w != 4'd0) &&
-                             (ann_pub_count_clamped_w != 4'd8);
+  wire       path_append_w = (ann_pub_count_clamped_w != 4'd8);
   wire [3:0] path_trace_count_w = ann_pub_count_clamped_w +
                                   {3'd0, path_append_w};
+  //! {thisClock}: entry 0 thisClock, every other entry zero
+  wire [8*64-1:0] self_path_w = {{7*64{1'b0}}, rom_clock_id_w};
 
   //! Policy-owned completion qualifier: remaining in-band pairs, 0..2.
   //! Separate from the exported level: a zero verdict stages completion,
@@ -789,8 +796,8 @@ module KL_gptp_engine
           4'd4: st_rd_mux_w = {32'd0, pub_offset_r};
           4'd5: st_rd_mux_w = pub_annq_r;
           4'd6: st_rd_mux_w = {60'd0, pub_path_count_r};
-          4'd8, 4'd9, 4'd10, 4'd11, 4'd12, 4'd13, 4'd14:
-            st_rd_mux_w = pub_path_r[64*(st_addr_w[3:0]-4'd8) +: 64];
+          4'd7, 4'd8, 4'd9, 4'd10, 4'd11, 4'd12, 4'd13, 4'd14:
+            st_rd_mux_w = pub_path_r[64*(st_addr_w[3:0]-4'd7) +: 64];
           4'd15: st_rd_mux_w = rom_clock_id_w;
           default: st_rd_mux_w = 64'd0;
         endcase
@@ -835,7 +842,7 @@ module KL_gptp_engine
       pub_offset_r    <= '0;
       pub_annq_r      <= '0;
       pub_path_count_r <= 4'd1;
-      pub_path_r       <= '0;
+      pub_path_r       <= self_path_w;
       boot_done_r     <= 1'b0;
       boot_cnt_r      <= '0;
       boot_pub_pend_r   <= 1'b1;
@@ -875,7 +882,7 @@ module KL_gptp_engine
         $error("PathTrace COMMIT before BTCA path contest resolved");
       if (pub_commit_o && (pub_path_count_r == 4'd0) &&
           (pub_path_r != '0))
-        $error("Raw empty PathTrace committed with a nonzero tail");
+        $error("Empty pathTrace committed with a nonzero entry");
 `endif
 
       if (!boot_done_r) begin
@@ -957,37 +964,41 @@ module KL_gptp_engine
               4'd4: pub_offset_r <= st_wdata_w[31:0];
               4'd5: pub_annq_r   <= st_wdata_w;
               //! Address 6 selects the already-staged best path (zero, hence
-              //! no write) or overwrites it with the self-master one-entry
-              //! path (nonzero). The handler has no COMMIT between address 7
-              //! and this own-vs-best contest, so raw transients are private.
+              //! no write) or overwrites it with the self-master path
+              //! {thisClock} (nonzero; 10.3.12.1.4 i)). The handler has no
+              //! COMMIT between address 7 and this own-vs-best contest, so
+              //! raw transients are private.
               4'd6: begin
 `ifndef SYNTHESIS
                 path_stage_pending_r <= 1'b0;
 `endif
                 if (st_wdata_w[3:0] != 4'd0) begin
                   pub_path_count_r <= 4'd1;
-                  pub_path_r       <= '0;
+                  pub_path_r       <= self_path_w;
                 end
               end
               //! Address 7 stages the current frozen Announce payload only
-              //! after BTCA `take`. Copy all active tails, append thisClock
-              //! (#85) and clear every inactive word on this one edge, so a
-              //! following COMMIT cannot expose parser-stale data from a
-              //! prior longer PathTrace.
+              //! after BTCA `take`. With a TLV, copy every active received
+              //! entry from entry 0, append thisClock (#85) and clear every
+              //! inactive entry on this one edge, so a following COMMIT
+              //! cannot expose parser-stale data from a prior longer
+              //! PathTrace. Without one, the previous pathTrace stays (#87).
               4'd7: begin
 `ifndef SYNTHESIS
                 path_stage_pending_r <= 1'b1;
 `endif
-                pub_path_count_r <= path_trace_count_w;
-                for (int unsigned pk = 0; pk < 7; pk++) begin
-                  if (4'(pk + 2) <= ann_pub_count_clamped_w)
-                    pub_path_r[64*pk +: 64] <=
-                        ann_pub_tail_r[64*pk +: 64];
-                  else if (path_append_w &&
-                           (4'(pk + 1) == ann_pub_count_clamped_w))
-                    pub_path_r[64*pk +: 64] <= rom_clock_id_w;
-                  else
-                    pub_path_r[64*pk +: 64] <= 64'd0;
+                if (ann_pub_present_r) begin
+                  pub_path_count_r <= path_trace_count_w;
+                  for (int unsigned pk = 0; pk < 8; pk++) begin
+                    if (4'(pk + 1) <= ann_pub_count_clamped_w)
+                      pub_path_r[64*pk +: 64] <=
+                          ann_pub_path_r[64*pk +: 64];
+                    else if (path_append_w &&
+                             (4'(pk) == ann_pub_count_clamped_w))
+                      pub_path_r[64*pk +: 64] <= rom_clock_id_w;
+                    else
+                      pub_path_r[64*pk +: 64] <= 64'd0;
+                  end
                 end
               end
               default: ;

@@ -461,39 +461,57 @@ Sample outputs when `pub_commit_o` rises.
 | Status | Presence, mastership, capability, synchronization |
 | Measurements | Peer delay and signed offset |
 | Announce | Raw selected priority vector |
-| Path | Count plus seven retained tail identities |
+| Path | pathTrace from entry 0, with its count |
 
-Zero path count means no received PathTrace.
+`pub_path_o` carries eight entries.
 
-Counts include the separately published grandmaster.
+Entry k occupies bits 64k through 64k plus 63.
 
-Retained paths contain at most eight identities.
+`pub_path_count_o` counts the published entries.
+
+That count runs from one to eight.
 
 Inactive path entries remain zero.
 
 ### Path of an elected peer
 
-[Issue #85](https://github.com/Mister-M-alt/FPGA-gPTP/issues/85) records this rule.
+[Issue #85](https://github.com/Mister-M-alt/FPGA-gPTP/issues/85) appends thisClock.
 
-802.1AS-2020 clause 10.3.13.2.4 defines it.
+[Issue #88](https://github.com/Mister-M-alt/FPGA-gPTP/issues/88) keeps the received head.
 
-Its item f5 is the slave port case.
+[Issue #87](https://github.com/Mister-M-alt/FPGA-gPTP/issues/87) keeps a path without TLV.
 
-The path is the received pathSequence plus thisClock.
+802.1AS-2011 clause 10.3.10.2.1 defines it.
 
-thisClock is therefore the last published entry.
+Its item d copies a path trace TLV.
+
+The received pathSequence is copied unchanged.
+
+thisClock is then appended as the last entry.
+
+Entry 0 is therefore the received head.
+
+That head need not be the grandmaster.
 
 A directly attached grandmaster publishes two entries.
 
-An absent PathTrace still publishes count zero.
+An empty pathSequence publishes thisClock alone.
 
-Seven received entries fill all eight slots.
+Seven received entries fill all eight entries.
 
 Longer received paths publish their first eight entries.
 
 Those entries are also pathTrace's first eight.
 
+An Announce without that TLV writes no path.
+
+The previous path therefore stays published.
+
+After reset or mastership, that is thisClock alone.
+
 The grandmaster and its path change in one commit.
+
+GET_AS_PATH can serve these entries unchanged.
 
 ### Before any peer
 

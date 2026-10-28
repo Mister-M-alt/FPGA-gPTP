@@ -19,11 +19,11 @@ run:
 	$(VERILATOR) $(VFLAGS) $(SRCS) $(CPP) -o Vparser_sim
 	./obj_dir/Vparser_sim
 
-# Rule 8: prove the rx_err_i checks above are load-bearing. Eight defects
-# are injected into the real parser RTL, one at a time, and each must fail
-# every check it names in the SAME harness; the unmutated build must still
-# pass. Mutants are built in a temporary directory, so nothing is written
-# into the tree.
+# Rule 8: prove the rx_err_i and #87/#88 PathTrace checks above are
+# load-bearing. Fifteen defects are injected into the real parser RTL, one at
+# a time, and each must fail every check it names in the SAME harness; the
+# unmutated build must still pass. Mutants are built in a temporary
+# directory, so nothing is written into the tree.
 mutants:
 	python3 mutants.py
 

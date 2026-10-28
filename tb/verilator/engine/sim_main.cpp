@@ -71,13 +71,27 @@
 //         without us, in a bank whose upper hop words still hold our
 //         identity) and two half-identity controls (source and first
 //         hop differing from ours in one 32-bit half) adopt, and a
-//         degrade hands mastership back each time (#7)
+//         degrade hands mastership back each time (#7). It opens with
+//         a), b) and c) on paths whose count is not stepsRemoved+1 (#88).
+//         A TLV-less control keeps the [thisClock] mastership left (#87)
 // 8n      #85: a slave port publishes the received pathSequence with
-//         thisClock appended (802.1AS-2020 10.3.13.2.4 f 5, 10.3.9.23): a
-//         directly attached grandmaster [GM] publishes [GM, thisClock], a
+//         thisClock appended (802.1AS-2011 10.3.10.2.1 d): a directly
+//         attached grandmaster [GM] publishes [GM, thisClock], a
 //         four-bridge path publishes its five entries and thisClock, seven
-//         entries put thisClock in the last of the eight slots, eight or
-//         more publish their first eight, and an absent TLV stays empty
+//         entries put thisClock in the last of the eight entries, eight or
+//         more publish their first eight, an empty TLV publishes
+//         [thisClock] (#88), and an absent TLV keeps the [thisClock]
+//         mastership left (#87)
+// 8o      #88: a better grandmaster whose path count is not stepsRemoved+1
+//         (a NOTE to 802.1AS-2011 10.5.3.3.4), or whose path is not headed
+//         by it, is elected, and its path is published as received from
+//         entry 0 with thisClock appended, and every degraded grandmaster
+//         yields. The issue's two shapes are phase 43
+// 8p      #87: without a path trace TLV, pathTrace keeps its previous value
+//         (802.1AS-2011 10.3.10.2.1 d): a better grandmaster G2 without a
+//         TLV keeps G1's path, with G1 at entry 0; from the parent an empty
+//         TLV publishes [thisClock] and a path headed elsewhere publishes
+//         that head at entry 0
 // 10..12  slave sync path: offset, sync-ok verdict, the 125 ms
 //         Follow_Up and 375 ms sync receipt timeouts (Table 4.2); the
 //         first pair after asCapable, a link-up about 1 ms off, steps (#68).
@@ -176,8 +190,8 @@
 //         leaves mastership for a peer grandmaster clears it. The parent's
 //         tu is 0 there except during a Milan v1.2 Annex B.1.1 holdover;
 //         mastership arms one only by replacing a peer grandmaster
-// 38      #85: every commit naming a peer grandmaster with a path ends it
-//         with thisClock, once, unless eight received entries fill it
+// 38      #85: every commit naming a peer grandmaster ends its path with
+//         thisClock, once, unless eight received entries fill it
 // 39      #89, after 36 and ahead of the whole-run grades: a grandmaster
 //         adopted with no usable Sync is aged within 375 ms of its adoption;
 //         then Sync stops, loses its Follow_Up, has it after the next Sync, or
@@ -201,6 +215,11 @@
 // 42      #89, the fourth pass only, after 41: a priority1 255 peer's
 //         usable Sync raises sync-ok, and when its Sync stops, sync-ok
 //         clears within syncReceiptTimeout with the peer still elected
+// 43      #88, after 40 and ahead of the whole-run grades: the issue's two
+//         shapes (priority1 247 against 248: stepsRemoved 3 with one entry,
+//         and a head that is not the grandmaster) are elected, publish
+//         their path from its received head, and stop our Announce for a
+//         whole interval of the parent's usable Sync
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
 // the phases a self publication passes through: boot, mastership, 36..38,
@@ -341,11 +360,13 @@ class GptpEngineHarness {
     refuse_a_better_announce_in_a_foreign_domain();
     refuse_unqualified_announces_and_admit_the_controls();
     append_thisclock_to_each_received_path();
+    defer_whatever_the_path_count();
+    keep_the_previous_path_without_a_tlv();
     adopt_a_better_announce_and_hold_its_path();
     clamp_a_deep_path_and_take_a_parent_refresh();
     walk_past_an_unknown_tlv_to_a_later_path_trace();
     refuse_a_malformed_announce_suffix();
-    refuse_a_path_trace_whose_head_is_not_the_announced_gm();
+    copy_a_path_trace_whose_head_is_not_the_announced_gm();
     hold_the_frozen_announce_context_under_overload();
     stop_sync_transmission_after_adoption();
     steer_on_the_first_peer_sync();
@@ -401,6 +422,7 @@ class GptpEngineHarness {
     drop_a_peer_whose_pdelay_stops();
     age_a_grandmaster_whose_sync_fails();
     age_the_port_whatever_role_the_timeout_finds();
+    defer_a_whole_interval_to_the_issue_shapes();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -492,14 +514,15 @@ class GptpEngineHarness {
 
   uint64_t cyc = 0;
   uint64_t commits_seen = 0;
-  //! the width of the published PathTrace tail: pub_path_o carries seven
-  //! clockIdentities behind the separately published grandmaster, flattened
-  //! into 7x2 little-endian 32-bit words (see pub_path_tail below)
+  //! pub_path_o carries pathTrace's first eight entries from entry 0,
+  //! flattened into 8x2 little-endian 32-bit words (see pub_path_entry
+  //! below). The head is entry 0; the tail is the seven entries after it.
   static constexpr unsigned PATH_TAIL_SLOTS = 7;
   struct PubSnap {
     uint64_t gm;
     uint64_t parent;
     uint8_t count;
+    uint64_t head;
     uint64_t tail[PATH_TAIL_SLOTS];
     uint64_t cyc;    //!< the harness cycle that sampled this commit
     uint32_t flags;
@@ -653,7 +676,8 @@ class GptpEngineHarness {
     if (boot_watch) {
       boot_cycles++;
       if (dut->pub_gm_id_o != OUR_CID) boot_bad_gm++;
-      bool self_path = dut->pub_path_count_o == 1;
+      bool self_path = dut->pub_path_count_o == 1 &&
+                       pub_path_head() == OUR_CID;
       for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++)
         self_path &= pub_path_tail(k) == 0;
       if (!self_path) boot_bad_path++;
@@ -673,9 +697,9 @@ class GptpEngineHarness {
       s.count = dut->pub_path_count_o;
       s.cyc = cyc;
       s.flags = dut->pub_flags_o;
+      s.head = pub_path_head();
       for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++)
-        s.tail[k] = static_cast<uint64_t>(dut->pub_path_o[2 * k])
-                  | (static_cast<uint64_t>(dut->pub_path_o[2 * k + 1]) << 32);
+        s.tail[k] = pub_path_tail(k);
       commit_snaps.push_back(s);
     }
     if (dut->phc_addend_we_o) {
@@ -1111,18 +1135,21 @@ class GptpEngineHarness {
 
   // an announce carrying {p1, gmid, steps} from `src` with a path trace TLV
   // (802.1AS-2011 10.5.3.3: tlvType 0x0008, one clockIdentity per hop);
-  // an empty path omits the TLV
+  // an empty path omits the TLV, unless `empty_tlv` asks for a zero-length
+  // one, an empty pathSequence (#88)
   void send_announce(uint16_t seq, uint8_t p1, uint64_t gmid,
                      uint16_t steps, uint64_t src,
-                     const std::vector<uint64_t> &path, uint64_t rx_ts) {
-    uint16_t tlv = path.empty() ? 0 : static_cast<uint16_t>(4 + 8 * path.size());
+                     const std::vector<uint64_t> &path, uint64_t rx_ts,
+                     bool empty_tlv = false) {
+    const bool has_tlv = !path.empty() || empty_tlv;
+    uint16_t tlv = has_tlv ? static_cast<uint16_t>(4 + 8 * path.size()) : 0;
     Frame a = ptp(0xB, seq, 0, 0x0008, static_cast<uint16_t>(30 + tlv), src);
     for (int i = 0; i < 10; i++) a.u8(0);
     a.u16(0xFFC4); a.u8(0);
     a.u8(p1); a.u32(OUR_CQ); a.u8(248);
     a.u64(gmid);
     a.u16(steps); a.u8(0xA0);
-    if (!path.empty()) {
+    if (has_tlv) {
       a.u16(0x0008); a.u16(static_cast<uint16_t>(8 * path.size()));
       for (uint64_t hop : path) a.u64(hop);
     }
@@ -1145,30 +1172,35 @@ class GptpEngineHarness {
     return static_cast<uint16_t>((f[o] << 8) | f[o + 1]);
   }
 
-  //! Verilator exposes the 7x64 flattened publication as little-endian
+  //! Verilator exposes the 8x64 flattened publication as little-endian
   //! 32-bit words. Keep this oracle outside the RTL's indexing expression.
-  uint64_t pub_path_tail(unsigned slot) {
-    return static_cast<uint64_t>(dut->pub_path_o[2 * slot])
-         | (static_cast<uint64_t>(dut->pub_path_o[2 * slot + 1]) << 32);
+  uint64_t pub_path_entry(unsigned k) {
+    return static_cast<uint64_t>(dut->pub_path_o[2 * k])
+         | (static_cast<uint64_t>(dut->pub_path_o[2 * k + 1]) << 32);
   }
+  //! entry 0, the head of pathTrace: the received head, or thisClock
+  uint64_t pub_path_head() { return pub_path_entry(0); }
+  //! tail slot `slot` is entry slot + 1
+  uint64_t pub_path_tail(unsigned slot) { return pub_path_entry(slot + 1); }
 
-  //! #82: the committed path is exactly `head` followed by `tail` (the
-  //! separately published grandmaster plus the identities behind it), with
-  //! every inactive tail slot zero. {thisClock} is count one, no tail.
+  //! #82: the committed path is exactly `path`, from entry 0, with every
+  //! inactive entry zero. {thisClock} is count one, thisClock at entry 0.
   static bool committed_path_is(const PubSnap &s,
-                                const std::vector<uint64_t> &tail) {
-    bool same = s.count == tail.size() + 1;
+                                const std::vector<uint64_t> &path) {
+    bool same = !path.empty() && s.count == path.size() &&
+                s.head == path[0];
     for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++)
-      same &= s.tail[k] == (k < tail.size() ? tail[k] : 0);
+      same &= s.tail[k] == (k + 1 < path.size() ? path[k + 1] : 0);
     return same;
   }
 
-  //! #85: the pathTrace an elected peer's Announce leaves published, as
-  //! 802.1AS-2020 10.3.13.2.4 f) 5) states it: the received pathSequence
-  //! with thisClock appended unless that sequence is empty, bounded to the
-  //! first eight entries, all the publication carries.
+  //! #85, #88: the pathTrace a present path trace TLV leaves published, as
+  //! 802.1AS-2011 10.3.10.2.1 d) states it: the received pathSequence, its
+  //! head included, with thisClock appended, bounded to the first eight
+  //! entries, all the publication carries. An empty one gives {thisClock}.
+  //! Without a TLV, d) writes nothing: each probe names the kept path.
   static std::vector<uint64_t> path_trace_of(std::vector<uint64_t> received) {
-    if (!received.empty()) received.push_back(OUR_CID);
+    received.push_back(OUR_CID);
     if (received.size() > 8) received.resize(8);
     return received;
   }
@@ -1353,7 +1385,7 @@ class GptpEngineHarness {
     expect("#82 cold release: that commit is the first edge after release",
            s ? s->cyc - cold_release_cyc : ~0ull, 0);
     expect("#82 cold release: that commit carries thisClock and {thisClock}",
-           s && s->gm == OUR_CID && committed_path_is(*s, {}), 1);
+           s && s->gm == OUR_CID && committed_path_is(*s, {OUR_CID}), 1);
     expect("#82 cold release: that commit's flags are gmPresent alone",
            s ? s->flags : ~0u, self_present);
   }
@@ -1868,6 +1900,7 @@ class GptpEngineHarness {
            self_present | FL_AMGM | FL_ASCAP | FL_SYNCOK);
     expect("gm is us", dut->pub_gm_id_o, OUR_CID);
     expect("self path has one entry", dut->pub_path_count_o, 1);
+    expect("self path entry 0 is thisClock", pub_path_head(), OUR_CID);
     for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
       char n[64]; snprintf(n, sizeof(n), "self path tail %u is zero", k);
       expect(n, pub_path_tail(k), 0);
@@ -2334,9 +2367,13 @@ class GptpEngineHarness {
            dut->dbg_rx_drop_o, static_cast<uint16_t>(drops + 1));
   }
 
+  //! `parent_canary` false drops the parent check alone: an own-source probe
+  //! names thisClock as its source, so even an admitted frame would leave
+  //! thisClock the published parent, and no defect could fail that check.
   void refuse_probe(const char *tag, uint16_t seq, uint64_t gm,
                     uint16_t steps, uint64_t src,
-                    const std::vector<uint64_t> &path, uint64_t rx) {
+                    const std::vector<uint64_t> &path, uint64_t rx,
+                    bool parent_canary = true) {
     uint32_t flags0 = dut->pub_flags_o;
     uint64_t annq0 = dut->pub_annq_o;
     uint16_t drops0 = dut->dbg_rx_drop_o;
@@ -2346,8 +2383,10 @@ class GptpEngineHarness {
     expect(n, dut->pub_flags_o & FL_AMGM, FL_AMGM);
     snprintf(n, 96, "%s: gm still us", tag);
     expect(n, dut->pub_gm_id_o, OUR_CID);
-    snprintf(n, 96, "%s: parent still us", tag);
-    expect(n, dut->pub_parent_id_o, OUR_CID);
+    if (parent_canary) {
+      snprintf(n, 96, "%s: parent still us", tag);
+      expect(n, dut->pub_parent_id_o, OUR_CID);
+    }
     snprintf(n, 96, "%s: flags untouched", tag);
     expect(n, dut->pub_flags_o, flags0);
     snprintf(n, 96, "%s: raw vector never published", tag);
@@ -2358,7 +2397,8 @@ class GptpEngineHarness {
 
   // an adopt-control: a priority1-1 announce that MUST be adopted, then
   // the same announcer degrades below us, a parent update our own
-  // vector then wins (10.3.5), and mastership returns at once
+  // vector then wins (10.3.5), and mastership returns at once. Each control
+  // starts from mastership, so a TLV-less one keeps {thisClock} (#87)
   void adopt_control(const char *tag, uint16_t seq, uint64_t gm,
                      uint16_t steps, uint64_t src,
                      const std::vector<uint64_t> &path, uint64_t rx) {
@@ -2371,9 +2411,12 @@ class GptpEngineHarness {
     expect(n, dut->pub_parent_id_o, src);
     snprintf(n, 96, "%s: no longer master", tag);
     expect(n, dut->pub_flags_o & FL_AMGM, 0);
-    const std::vector<uint64_t> served = path_trace_of(path);
+    const std::vector<uint64_t> served =
+        path.empty() ? std::vector<uint64_t>{OUR_CID} : path_trace_of(path);
     snprintf(n, 96, "%s: raw path count", tag);
     expect(n, dut->pub_path_count_o, served.size());
+    snprintf(n, 96, "%s: raw path head", tag);
+    expect(n, pub_path_head(), served[0]);
     for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
       const uint64_t want = (k + 1 < served.size()) ? served[k + 1] : 0;
       snprintf(n, 96, "%s: raw path tail %u", tag, k + 1);
@@ -2404,6 +2447,16 @@ class GptpEngineHarness {
   // the hop count can see it (FPGA-gPTP #7)
   void refuse_unqualified_announces_and_admit_the_controls() {
     const uint64_t PEER2 = 0x0080E1FFFE445566ull;
+    // #88: a), b) and c) on paths whose count differs from stepsRemoved+1,
+    // which the parser now admits, so the microcode alone must refuse them.
+    // Each leads its own kind, so removing that rule moves this plane first.
+    const uint64_t GM_R = 0x00F4F4FFFE000001ull;
+    refuse_probe("#88 own source, one entry, stepsRemoved 3", 46, GM_R, 3,
+                 OUR_CID, {GM_R}, 5520000, false);
+    refuse_probe("#88 stepsRemoved 255, one entry", 47, GM_R, 255, PEER2,
+                 {GM_R}, 5540000);
+    refuse_probe("#88 short loop, stepsRemoved 5", 48, GM_R, 5, PEER2,
+                 {GM_R, OUR_CID}, 5560000);
     // 8c: (a) sent by this time-aware system: our own clockIdentity as
     // the source, a foreign MAC (a reflected or forged frame)
     refuse_probe("own-source announce", 12, 0x0000000000002222ull, 0,
@@ -2475,9 +2528,10 @@ class GptpEngineHarness {
                   OUR_CID ^ 1ull,
                   {0x00D3D3FFFE000007ull, OUR_CID ^ (1ull << 40)}, 6900000);
     // A competing fixed Announce without PathTrace is otherwise qualified.
-    // The selected donor ABI must publish the separately exported GM with an
-    // honest raw path count zero and zero every tail; it must not fabricate
-    // `[GM]` or retain the preceding two-hop control.
+    // 802.1AS-2011 10.3.10.2.1 d) then writes no pathTrace, so the
+    // {thisClock} mastership left stays (10.3.12.1.4 i), #87): it must not
+    // fabricate `[GM]`, publish the empty sequence, or retain the preceding
+    // half-identity control, whose degrade handed mastership back.
     adopt_control("TLV-less competition control", 27,
                   0x00D4D4FFFE000008ull, 0,
                   0x00D4D4FFFE000009ull, {}, 7100000);
@@ -2512,45 +2566,188 @@ class GptpEngineHarness {
                                          GM_8 + 7};
     take_and_grade_a_path("#85 eight received entries", 36, GM_8, 7,
                           GM_8 + 7, eight, eight, 7900000);
+    // #87: no TLV, so the {thisClock} the last degrade left stays
     const uint64_t GM_0 = 0x00E9E9FFFE000001ull;
-    take_and_grade_a_path("#85 absent path", 38, GM_0, 0, GM_0, {}, {},
+    take_and_grade_a_path("#85 absent path", 38, GM_0, 0, GM_0, {}, {OUR_CID},
                           8100000);
+    // #88: an empty pathSequence is qualified; d) appends thisClock to it
+    const uint64_t GM_E = 0x00EAEAFFFE000001ull;
+    take_and_grade_a_path("#88 empty path", 46, GM_E, 0, GM_E, {}, {OUR_CID},
+                          8150000, true);
   }
 
   //! One 8n probe: `received` on the wire, `want` the published pathTrace.
+  //! An empty `received` omits the TLV unless `empty_tlv` sends it empty.
   void take_and_grade_a_path(const char *tag, uint16_t seq, uint64_t gm,
                              uint16_t steps, uint64_t src,
                              const std::vector<uint64_t> &received,
-                             const std::vector<uint64_t> &want, uint64_t rx) {
+                             const std::vector<uint64_t> &want, uint64_t rx,
+                             bool empty_tlv = false) {
     char n[112];
     const size_t c0 = commit_snaps.size();
-    send_announce(seq, 1, gm, steps, src, received, rx);
+    send_announce(seq, 1, gm, steps, src, received, rx, empty_tlv);
     snprintf(n, sizeof n, "%s: elected", tag);
     expect(n, dut->pub_gm_id_o, gm);
     snprintf(n, sizeof n, "%s: count", tag);
     expect(n, dut->pub_path_count_o, want.size());
-    // An empty path's tail is the engine's own assertion: a nonzero word
-    // beside count zero stops the simulation before any check could grade it
-    for (unsigned k = 0; k < PATH_TAIL_SLOTS && !want.empty(); k++) {
+    snprintf(n, sizeof n, "%s: head", tag);
+    expect(n, pub_path_head(), want[0]);
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
       snprintf(n, sizeof n, "%s: tail %u", tag, k + 1);
       expect(n, pub_path_tail(k), k + 1 < want.size() ? want[k + 1] : 0);
     }
     const PubSnap *s = first_commit_since(c0);
-    bool carried = s && s->gm == gm;
-    if (carried && want.empty()) {
-      carried = s->count == 0;
-      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++)
-        carried &= s->tail[k] == 0;
-    } else if (carried) {
-      carried = committed_path_is(
-          *s, std::vector<uint64_t>(want.begin() + 1, want.end()));
-    }
     snprintf(n, sizeof n, "%s: its commit names the grandmaster and path", tag);
-    expect(n, carried, 1);
+    expect(n, s && s->gm == gm && committed_path_is(*s, want), 1);
     send_announce(static_cast<uint16_t>(seq + 1), 250, gm, steps, src,
-                  received, rx + 100000);
+                  received, rx + 100000, empty_tlv);
     snprintf(n, sizeof n, "%s: the degraded grandmaster yields", tag);
     expect(n, dut->pub_gm_id_o == OUR_CID && (dut->pub_flags_o & FL_AMGM), 1);
+  }
+
+  // ---- 8o: #88, neither the path count nor its head disqualifies --------
+  //! 802.1AS-2011 10.3.10.2.1 disqualifies an Announce only by its a) to c);
+  //! N = stepsRemoved+1 is a NOTE to 10.5.3.3.4, and d) copies pathSequence
+  //! as received. Every path below has a count other than stepsRemoved+1.
+  //! A better grandmaster is elected and its path published from its
+  //! received head, plus thisClock. a), b) and c) on such paths open phase
+  //! 8c..8m; the issue's two shapes are phase 43.
+  void defer_whatever_the_path_count() {
+    // shorter, then longer, than stepsRemoved+1
+    const uint64_t GM_T = 0x00F2F2FFFE000001ull;
+    const uint64_t T1 = 0x00F2F2FFFE0000B1ull;
+    take_and_grade_a_path("#88 two entries, stepsRemoved 5", 42, GM_T, 5, T1,
+                          {GM_T, T1}, {GM_T, T1, OUR_CID}, 8500000);
+    const uint64_t GM_L = 0x00F3F3FFFE000001ull;
+    const uint64_t L1 = 0x00F3F3FFFE0000B1ull;
+    const uint64_t L2 = 0x00F3F3FFFE0000C2ull;
+    take_and_grade_a_path("#88 three entries, stepsRemoved 0", 44, GM_L, 0,
+                          L2, {GM_L, L1, L2}, {GM_L, L1, L2, OUR_CID},
+                          8700000);
+  }
+
+  //! One phase 43 issue shape: priority1 247 against our 248 from
+  //! mastership. The plane elects the peer, publishes `path` from its
+  //! received head plus thisClock in one commit, and stops its own Announce
+  //! cadence for a whole interval; the degraded grandmaster then hands
+  //! mastership back.
+  void defer_to_a_better_grandmaster(const char *tag, uint16_t seq,
+                                     uint64_t gm, uint16_t steps, uint64_t src,
+                                     const std::vector<uint64_t> &path) {
+    char n[112];
+    const std::vector<uint64_t> want = path_trace_of(path);
+    const size_t c0 = commit_snaps.size();
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    send_announce(seq, 247, gm, steps, src, path, phc() + 100);
+    snprintf(n, sizeof n, "%s: elected", tag);
+    expect(n, dut->pub_gm_id_o, gm);
+    snprintf(n, sizeof n, "%s: parent", tag);
+    expect(n, dut->pub_parent_id_o, src);
+    snprintf(n, sizeof n, "%s: no longer master", tag);
+    expect(n, dut->pub_flags_o & FL_AMGM, 0);
+    snprintf(n, sizeof n, "%s: count", tag);
+    expect(n, dut->pub_path_count_o, want.size());
+    snprintf(n, sizeof n, "%s: entry 0 is the received head", tag);
+    expect(n, pub_path_head(), path[0]);
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+      snprintf(n, sizeof n, "%s: tail %u", tag, k + 1);
+      expect(n, pub_path_tail(k), k + 1 < want.size() ? want[k + 1] : 0);
+    }
+    const PubSnap *s = first_commit_since(c0);
+    snprintf(n, sizeof n, "%s: its commit names the grandmaster and path", tag);
+    expect(n, s && s->gm == gm && committed_path_is(*s, want), 1);
+    snprintf(n, sizeof n, "%s: parser accepts", tag);
+    expect(n, dut->dbg_rx_drop_o, d0);
+    run_svc(20000);                              // drain anything in flight
+    const size_t before = txf.size();
+    // 1.125 s, a whole interval: the parent's usable Sync every 125 ms
+    for (int k = 0; k < 9; k++)
+      s39_interval(SyncShape::usable, 250000, false, 1000, src);
+    int anns = 0;
+    for (size_t i = before; i < txf.size(); i++)
+      if (type_of(txf[i]) == 0xB) anns++;
+    snprintf(n, sizeof n, "%s: no Announce for one interval", tag);
+    expect(n, anns, 0);
+    send_announce(static_cast<uint16_t>(seq + 1), 250, gm, steps, src, path,
+                  phc() + 100);
+    snprintf(n, sizeof n, "%s: the degraded grandmaster yields", tag);
+    expect(n, dut->pub_gm_id_o == OUR_CID && (dut->pub_flags_o & FL_AMGM), 1);
+  }
+
+  // ---- 8p: #87, no TLV leaves pathTrace as it was -----------------------
+  //! 802.1AS-2011 10.3.10.2.1 d) writes pathTrace only from a present path
+  //! trace TLV. From mastership, G1 is elected with its path; a better G2
+  //! without a TLV is elected and G1's path stays, G1 at entry 0. G2's own
+  //! empty TLV then makes pathTrace {thisClock}, its path headed elsewhere
+  //! publishes that head at entry 0, and its TLV-less refresh keeps it. G2
+  //! degrades and the mastership commit carries {thisClock} (10.3.12.1.4 i).
+  void keep_the_previous_path_without_a_tlv() {
+    const uint64_t G1 = 0x00F6F6FFFE000001ull;
+    const uint64_t G1_B = 0x00F6F6FFFE0000B1ull;
+    const uint64_t G1_S = 0x00F6F6FFFE0000C1ull;
+    const uint64_t G2 = 0x00F7F7FFFE000001ull;
+    const uint64_t G2_S = 0x00F7F7FFFE0000C1ull;
+    const uint64_t G2_X = 0x00F7F7FFFE0000A1ull;
+    const std::vector<uint64_t> g1_path = {G1, G1_B, G1_S, OUR_CID};
+    grade_the_published_path("#87 G1 elected", G1, G1_S, g1_path,
+                             [&] { send_announce(54, 10, G1, 2, G1_S,
+                                                 {G1, G1_B, G1_S}, 8800000); });
+    grade_the_published_path("#87 G1 to G2 without a TLV", G2, G2_S, g1_path,
+                             [&] { send_announce(55, 5, G2, 1, G2_S, {},
+                                                 8850000); });
+    grade_the_published_path("#88 empty path from the parent", G2, G2_S,
+                             {OUR_CID},
+                             [&] { send_announce(56, 5, G2, 1, G2_S, {},
+                                                 8900000, true); },
+                             true);
+    const std::vector<uint64_t> x_path = {G2_X, G2_S, OUR_CID};
+    grade_the_published_path("#88 parent path headed elsewhere", G2, G2_S,
+                             x_path,
+                             [&] { send_announce(57, 5, G2, 1, G2_S,
+                                                 {G2_X, G2_S}, 8950000); },
+                             true);
+    grade_the_published_path("#87 parent refresh without a TLV", G2, G2_S,
+                             x_path,
+                             [&] { send_announce(58, 5, G2, 1, G2_S, {},
+                                                 9000000); });
+    send_announce(59, 250, G2, 1, G2_S, {}, 9050000);
+    expect("#87 the degraded G2 yields",
+           dut->pub_gm_id_o == OUR_CID && (dut->pub_flags_o & FL_AMGM), 1);
+    expect("#87 the degraded G2 yields with {thisClock}",
+           dut->pub_path_count_o == 1 && pub_path_head() == OUR_CID, 1);
+  }
+
+  //! One 8p step: `step` sends its Announce, then the plane
+  //! publishes `gm`, `parent` and exactly `path` from entry 0, in a commit
+  //! that carries them together. `parser_canary` also grades no parser drop,
+  //! for the #88 shapes the parser once refused.
+  template <typename Step>
+  void grade_the_published_path(const char *tag, uint64_t gm, uint64_t parent,
+                                const std::vector<uint64_t> &path, Step step,
+                                bool parser_canary = false) {
+    char n[112];
+    const size_t c0 = commit_snaps.size();
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    step();
+    snprintf(n, sizeof n, "%s: elected", tag);
+    expect(n, dut->pub_gm_id_o, gm);
+    snprintf(n, sizeof n, "%s: parent", tag);
+    expect(n, dut->pub_parent_id_o, parent);
+    snprintf(n, sizeof n, "%s: count", tag);
+    expect(n, dut->pub_path_count_o, path.size());
+    snprintf(n, sizeof n, "%s: head", tag);
+    expect(n, pub_path_head(), path[0]);
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+      snprintf(n, sizeof n, "%s: tail %u", tag, k + 1);
+      expect(n, pub_path_tail(k), k + 1 < path.size() ? path[k + 1] : 0);
+    }
+    const PubSnap *s = last_commit_since(c0);
+    snprintf(n, sizeof n, "%s: its commit names the grandmaster and path", tag);
+    expect(n, s && s->gm == gm && committed_path_is(*s, path), 1);
+    if (parser_canary) {
+      snprintf(n, sizeof n, "%s: parser accepts", tag);
+      expect(n, dut->dbg_rx_drop_o, d0);
+    }
   }
 
   // ---- 9: better announce -> adopt, sync stops --------------------------
@@ -2572,6 +2769,7 @@ class GptpEngineHarness {
     expect("adopt keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     expect("gm is theirs", dut->pub_gm_id_o, GMID);
     expect("adopt publishes complete path count", dut->pub_path_count_o, 5);
+    expect("adopt publishes path head", pub_path_head(), GMID);
     expect("adopt publishes path tail 1", pub_path_tail(0), PATH_A1);
     expect("adopt publishes path tail 2", pub_path_tail(1), PATH_A2);
     expect("adopt publishes path tail 3", pub_path_tail(2), PEER_CID);
@@ -2596,12 +2794,13 @@ class GptpEngineHarness {
     expect("worse announce reaches a commit", commits_seen,
            commits_before_worse + 1);
     expect("worse announce retains path A count", dut->pub_path_count_o, 5);
+    expect("worse announce retains path A head", pub_path_head(), GMID);
     expect("worse announce retains path A tail 1", pub_path_tail(0), PATH_A1);
     expect("worse announce retains path A tail 2", pub_path_tail(1), PATH_A2);
     expect("worse announce retains path A tail 3", pub_path_tail(2), PEER_CID);
     expect("worse announce retains path A tail 4", pub_path_tail(3), OUR_CID);
 
-    // The same losing contest with no PathTrace reports raw count zero for the
+    // The same losing contest with no PathTrace reports an absent TLV for the
     // current frame, but never executes BTCA `take`. The common `they_win`
     // COMMIT must therefore republish the complete already-selected nonzero
     // tuple, not stage zero or clear any tail from the unrelated candidate.
@@ -2616,6 +2815,8 @@ class GptpEngineHarness {
            dut->pub_parent_id_o, PEER_CID);
     expect("worse TLV-less announce retains path A count",
            dut->pub_path_count_o, 5);
+    expect("worse TLV-less announce retains path A head",
+           pub_path_head(), GMID);
     expect("worse TLV-less announce retains path A tail 1",
            pub_path_tail(0), PATH_A1);
     expect("worse TLV-less announce retains path A tail 2",
@@ -2643,6 +2844,7 @@ class GptpEngineHarness {
     PATH_DEEP.push_back(PEER_CID);
     send_announce(12, 100, GMID, 11, PEER_CID, PATH_DEEP, 6200000);
     expect("deep parent path clamps to eight", dut->pub_path_count_o, 8);
+    expect("deep path retains its head", pub_path_head(), PATH_DEEP[0]);
     for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
       char n[72]; snprintf(n, sizeof(n), "deep path retains tail %u", k + 1);
       expect(n, pub_path_tail(k), PATH_DEEP[k + 1]);
@@ -2654,6 +2856,7 @@ class GptpEngineHarness {
     const std::vector<uint64_t> PATH_C = {GMID, PATH_C1, PEER_CID};
     send_announce(13, 100, GMID, 2, PEER_CID, PATH_C, 6300000);
     expect("parent refresh publishes path C count", dut->pub_path_count_o, 4);
+    expect("parent refresh publishes path C head", pub_path_head(), GMID);
     expect("parent refresh publishes path C tail 1", pub_path_tail(0), PATH_C1);
     expect("parent refresh publishes path C tail 2", pub_path_tail(1), PEER_CID);
     expect("parent refresh appends thisClock", pub_path_tail(2), OUR_CID);
@@ -2723,11 +2926,14 @@ class GptpEngineHarness {
 
   // The selected-state boundary is the declared PTP message, not whatever
   // bytes happen to follow physically. A fixed Announce without PathTrace is
-  // valid and replaces the current parent's selected raw path with count zero
-  // and zero tails. A declared suffix must instead contain one complete,
-  // identity-aligned PathTrace with N=stepsRemoved+1. Every malformed shape
-  // below targets the current parent, so accepting it would unconditionally
-  // run BTCA `take`; no-commit plus a counted parser refusal are the oracles.
+  // valid; from the current parent it runs BTCA `take`, yet without a TLV
+  // 802.1AS-2011 10.3.10.2.1 d) writes no pathTrace, so the selected path
+  // stays whole (#87). A declared suffix must instead contain complete TLVs,
+  // a PathTrace among them identity-aligned, whose N need not be
+  // stepsRemoved+1 and whose head need not be the grandmaster (#88, phase
+  // 8o). Every malformed shape below targets the current parent, so
+  // accepting it would unconditionally run BTCA `take`; no-commit plus a
+  // counted parser refusal are the oracles.
   void walk_past_an_unknown_tlv_to_a_later_path_trace() {
     // A complete unknown TLV is ignored, but the walker must continue to a
     // later PathTrace. Both shapes target the current parent and therefore bind
@@ -2740,12 +2946,16 @@ class GptpEngineHarness {
       send_frame(a.b, 6330000); run_svc(6000);
       expect("unknown-only current parent: one commit",
              commit_snaps.size(), c0 + 1);
-      expect("unknown-only current parent: raw count zero",
-             dut->pub_path_count_o, 0);
+      // #87: path C, which the parent refresh above published, stays
+      const std::vector<uint64_t> kept = {GMID, PATH_C1, PEER_CID, OUR_CID};
+      expect("unknown-only current parent: keeps the previous count",
+             dut->pub_path_count_o, kept.size());
+      expect("unknown-only current parent: keeps the previous head",
+             pub_path_head(), kept[0]);
       for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
         char n[80]; snprintf(n, sizeof n,
-                             "unknown-only current parent: tail %u zero", k + 1);
-        expect(n, pub_path_tail(k), 0);
+                             "unknown-only current parent: keeps tail %u", k + 1);
+        expect(n, pub_path_tail(k), k + 1 < kept.size() ? kept[k + 1] : 0);
       }
       expect("unknown-only current parent: parser accepts",
              dut->dbg_rx_drop_o, d0);
@@ -2762,6 +2972,8 @@ class GptpEngineHarness {
              commit_snaps.size(), c0 + 1);
       expect("unknown before path current parent: count",
              dut->pub_path_count_o, 4);
+      expect("unknown before path current parent: head",
+             pub_path_head(), GMID);
       expect("unknown before path current parent: tail 1",
              pub_path_tail(0), PATH_U1);
       expect("unknown before path current parent: tail 2",
@@ -2771,19 +2983,38 @@ class GptpEngineHarness {
       expect("unknown before path current parent: parser accepts",
              dut->dbg_rx_drop_o, d0);
     }
-    // Refill every retained slot immediately before the raw-empty transition.
-    // This makes count-zero canonicalization prove all seven tail writes rather
-    // than only the first two left active by the preceding short path.
+    // Refill every retained entry immediately before the TLV-less refresh.
+    // Keeping the previous path then proves all eight entries survive (#87),
+    // not only the first four left active by the preceding short path.
     const std::vector<uint64_t> PATH_FULL = {
         GMID, 0x00F800FFFE000001ull, 0x00F800FFFE000002ull,
         0x00F800FFFE000003ull, 0x00F800FFFE000004ull,
         0x00F800FFFE000005ull, 0x00F800FFFE000006ull, PEER_CID};
     send_announce(0xA0E2, 100, GMID, 7, PEER_CID, PATH_FULL, 6340000);
     expect("full path before raw empty: count eight", dut->pub_path_count_o, 8);
+    expect("full path before raw empty: head", pub_path_head(), PATH_FULL[0]);
     for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
       char n[80]; snprintf(n, sizeof n,
                            "full path before raw empty: tail %u", k + 1);
       expect(n, pub_path_tail(k), PATH_FULL[k + 1]);
+    }
+  }
+
+  //! #87: the eight entries the last PathTrace left, PATH_FULL of
+  //! walk_past_an_unknown_tlv_to_a_later_path_trace, all still published
+  void expect_the_full_path_kept(const char *tag) {
+    const std::vector<uint64_t> full = {
+        GMID, 0x00F800FFFE000001ull, 0x00F800FFFE000002ull,
+        0x00F800FFFE000003ull, 0x00F800FFFE000004ull,
+        0x00F800FFFE000005ull, 0x00F800FFFE000006ull, PEER_CID};
+    char n[96];
+    snprintf(n, sizeof n, "%s: keeps the previous count", tag);
+    expect(n, dut->pub_path_count_o, 8);
+    snprintf(n, sizeof n, "%s: keeps the previous head", tag);
+    expect(n, pub_path_head(), full[0]);
+    for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
+      snprintf(n, sizeof n, "%s: keeps tail %u", tag, k + 1);
+      expect(n, pub_path_tail(k), full[k + 1]);
     }
   }
 
@@ -2796,13 +3027,7 @@ class GptpEngineHarness {
       expect("TLV-less current parent: GM retained", dut->pub_gm_id_o, GMID);
       expect("TLV-less current parent: parent retained", dut->pub_parent_id_o,
              PEER_CID);
-      expect("TLV-less current parent: raw count zero",
-             dut->pub_path_count_o, 0);
-      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
-        char n[80]; snprintf(n, sizeof n,
-                             "TLV-less current parent: tail %u zero", k + 1);
-        expect(n, pub_path_tail(k), 0);
-      }
+      expect_the_full_path_kept("TLV-less current parent");
       expect("TLV-less current parent: parser accepts",
              dut->dbg_rx_drop_o, d0);
     }
@@ -2814,13 +3039,7 @@ class GptpEngineHarness {
       send_frame(a.b, 6360000); run_svc(6000);
       expect("out-of-message fake PathTrace: one commit",
              commit_snaps.size(), c0 + 1);
-      expect("out-of-message fake PathTrace: raw count zero",
-             dut->pub_path_count_o, 0);
-      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
-        char n[80]; snprintf(n, sizeof n,
-                             "out-of-message fake PathTrace: tail %u zero", k + 1);
-        expect(n, pub_path_tail(k), 0);
-      }
+      expect_the_full_path_kept("out-of-message fake PathTrace");
       expect("out-of-message fake PathTrace: parser accepts",
              dut->dbg_rx_drop_o, d0);
     }
@@ -2865,21 +3084,34 @@ class GptpEngineHarness {
       a.u8(0xEE);
       malformed_ann("non-identity-aligned PathTrace", a, 6390000);
     }
-    malformed_ann("PathTrace count differs from stepsRemoved",
-                  ann_wire(0xA105, 2, {GMID, PEER_CID}), 6395000);
   }
 
-  void refuse_a_path_trace_whose_head_is_not_the_announced_gm() {
-    // A nonempty PathTrace must name the announced GM at pathSequence[0].
-    // Replacing a forged first hop with the separate GM output would create a
-    // synthetic sequence that no peer sent, so reject the complete Announce.
-    const uint64_t commits_before_bad_head = commits_seen;
-    send_announce(14, 100, GMID, 2, PEER_CID,
-                  {0x00BAD0FFFE000001ull, PATH_C1, PEER_CID}, 6400000);
-    expect("mismatched path head produces no commit", commits_seen,
-           commits_before_bad_head);
-    expect("mismatched path head retains count", dut->pub_path_count_o, 0);
-    expect("mismatched path head retains zero tail", pub_path_tail(0), 0);
+  void copy_a_path_trace_whose_head_is_not_the_announced_gm() {
+    // #88: pathSequence[0] need not be the announced grandmaster.
+    // 802.1AS-2011 10.3.10.2.1 d) copies the sequence as received, so the
+    // current parent's path headed elsewhere is published from that head,
+    // never with the grandmaster identity put in its place.
+    const uint64_t XHEAD = 0x00BAD0FFFE000001ull;
+    const uint64_t commits_before = commits_seen;
+    const uint16_t d0 = dut->dbg_rx_drop_o;
+    send_announce(14, 100, GMID, 2, PEER_CID, {XHEAD, PATH_C1, PEER_CID},
+                  6400000);
+    expect("#88 current parent's path headed elsewhere: one commit",
+           commits_seen, commits_before + 1);
+    expect("#88 current parent's path headed elsewhere: GM retained",
+           dut->pub_gm_id_o, GMID);
+    expect("#88 current parent's path headed elsewhere: count",
+           dut->pub_path_count_o, 4);
+    expect("#88 current parent's path headed elsewhere: entry 0 is the "
+           "received head", pub_path_head(), XHEAD);
+    expect("#88 current parent's path headed elsewhere: tail 1",
+           pub_path_tail(0), PATH_C1);
+    expect("#88 current parent's path headed elsewhere: tail 2",
+           pub_path_tail(1), PEER_CID);
+    expect("#88 current parent's path headed elsewhere: tail 3",
+           pub_path_tail(2), OUR_CID);
+    expect("#88 current parent's path headed elsewhere: parser accepts",
+           dut->dbg_rx_drop_o, d0);
   }
 
   void enqueue_announce(uint16_t seq, uint8_t p1, uint64_t gm,
@@ -2939,6 +3171,7 @@ class GptpEngineHarness {
       expect("frozen queued A GM coherent", qa.gm, GMID);
       expect("frozen queued A parent coherent", qa.parent, PEER_CID);
       expect("frozen queued A count coherent", qa.count, 5);
+      expect("frozen queued A head coherent", qa.head, GMID);
       expect("frozen queued A tail 1 coherent", qa.tail[0], Q_A1);
       expect("frozen queued A tail 2 coherent", qa.tail[1], Q_A2);
     }
@@ -2949,14 +3182,18 @@ class GptpEngineHarness {
     expect("post-release C GM coherent", dut->pub_gm_id_o, GMID);
     expect("post-release C parent coherent", dut->pub_parent_id_o, PEER_CID);
     expect("post-release C count coherent", dut->pub_path_count_o, 4);
+    expect("post-release C head coherent", pub_path_head(), GMID);
     expect("post-release C tail coherent", pub_path_tail(0), Q_C1);
     expect("post-release C appends thisClock", pub_path_tail(2), OUR_CID);
     expect("post-release C clears inactive A tail", pub_path_tail(3), 0);
     // Repeat the literal EOF/SOF-adjacent stalled-dispatch overload with a
     // fixed no-PathTrace owner A and present-PathTrace chasers. The deferred
-    // zero count must belong to A, hold the frozen context until its handler
-    // ends, clear every tail on COMMIT, and make both chaser drops observable.
+    // absent word 12 must belong to A, hold the frozen context until its
+    // handler ends, keep post-release C's path on COMMIT (#87), and make both
+    // chaser drops observable. Neither chaser's path is C's, so a chaser's
+    // word 12 in A's epoch would publish a path C never had.
     {
+      const uint64_t Q_D1 = 0x00E400FFFE000044ull;
       const uint16_t evd0 = dut->dbg_ev_drop_o;
       const uint16_t rxd0 = dut->dbg_rx_drop_o;
       dut->tx_ready_i = 0;
@@ -2968,7 +3205,7 @@ class GptpEngineHarness {
       enqueue_announce(0x7B7B, 200, WORSE_GM, 1, WORSE_SRC,
                        {WORSE_GM, PATH_B1}, phc() + 800);
       enqueue_announce(0x7B7B, 100, GMID, 2, PEER_CID,
-                       Q_PATH_C, phc() + 900);
+                       {GMID, Q_D1, PEER_CID}, phc() + 900);
       const size_t c0 = commit_snaps.size();
       dut->tx_ready_i = 1;
       run(30000);
@@ -2982,12 +3219,8 @@ class GptpEngineHarness {
         const PubSnap &qa = commit_snaps[c0];
         expect("raw-empty overload: frozen A GM", qa.gm, GMID);
         expect("raw-empty overload: frozen A parent", qa.parent, PEER_CID);
-        expect("raw-empty overload: frozen A count zero", qa.count, 0);
-        for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
-          char n[80]; snprintf(n, sizeof n,
-                               "raw-empty overload: frozen A tail %u zero", k + 1);
-          expect(n, qa.tail[k], 0);
-        }
+        expect("#87 raw-empty overload: frozen A keeps C's path",
+               committed_path_is(qa, {GMID, Q_C1, PEER_CID, OUR_CID}), 1);
       }
       const size_t c1 = commit_snaps.size();
       send_announce(0x7B7B, 100, GMID, 2, PEER_CID,
@@ -4060,6 +4293,8 @@ class GptpEngineHarness {
       run(200);  // reach the PathTrace write and COMMIT after the flags write
       expect("gm is us after the quiet", dut->pub_gm_id_o, OUR_CID);
       expect("own-GM transition publishes count one", dut->pub_path_count_o, 1);
+      expect("own-GM transition publishes thisClock at entry 0",
+             pub_path_head(), OUR_CID);
       for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
         char n[72]; snprintf(n, sizeof(n), "own-GM transition clears tail %u", k);
         expect(n, pub_path_tail(k), 0);
@@ -4406,6 +4641,8 @@ class GptpEngineHarness {
     expect("the cease survives reset and resumes", resumed, 1);
     expect("warm-reset deep-loop setup is capable",
            wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    // #87: after the reset pathTrace is {thisClock} (10.3.12.1.1), and a
+    // better grandmaster without a TLV writes none, so it stays
     const uint64_t WGM = 0x00C028FFFE000001ull;
     const size_t empty_c0 = commit_snaps.size();
     const uint16_t empty_d0 = dut->dbg_rx_drop_o;
@@ -4413,21 +4650,21 @@ class GptpEngineHarness {
     bool empty_selected = false;
     bool empty_mixed = false;
     for (size_t i = empty_c0; i < commit_snaps.size(); i++) {
-      bool tails_zero = true;
-      for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++)
-        tails_zero &= commit_snaps[i].tail[k] == 0;
       if ((commit_snaps[i].gm == WGM) &&
           (commit_snaps[i].parent == PEER_CID)) {
-        if ((commit_snaps[i].count == 0) && tails_zero)
+        if (committed_path_is(commit_snaps[i], {OUR_CID}))
           empty_selected = true;
         else
           empty_mixed = true;
       }
     }
-    expect("post-warm-reset raw-empty selection commits", empty_selected, 1);
-    expect("post-warm-reset raw-empty epoch never mixes tails", empty_mixed, 0);
+    expect("#87 post-warm-reset TLV-less selection commits {thisClock}",
+           empty_selected, 1);
+    expect("#87 post-warm-reset TLV-less epoch never mixes a path",
+           empty_mixed, 0);
     expect("post-warm-reset raw-empty GM", dut->pub_gm_id_o, WGM);
-    expect("post-warm-reset raw-empty count", dut->pub_path_count_o, 0);
+    expect("#87 post-warm-reset TLV-less count", dut->pub_path_count_o, 1);
+    expect("#87 post-warm-reset TLV-less head", pub_path_head(), OUR_CID);
     for (unsigned k = 0; k < PATH_TAIL_SLOTS; k++) {
       char n[80]; snprintf(n, sizeof n,
                            "post-warm-reset raw-empty tail %u zero", k + 1);
@@ -5246,7 +5483,7 @@ class GptpEngineHarness {
     expect("#82 peer wins: its commit names the peer GM",
            won ? won->gm : 0, GMA);
     expect("#82 peer wins: its commit carries the peer path",
-           won && committed_path_is(*won, {HOPA, SRCA, OUR_CID}), 1);
+           won && committed_path_is(*won, {GMA, HOPA, SRCA, OUR_CID}), 1);
 
     const size_t warm0 = commit_snaps.size();
     const uint64_t release = cyc + 8;       // warm_reset holds 8 cycles
@@ -5259,7 +5496,7 @@ class GptpEngineHarness {
     expect("#82 warm reset: it names thisClock, not the elected peer",
            w ? w->gm : 0, OUR_CID);
     expect("#82 warm reset: its path is {thisClock} with a zero tail",
-           w && committed_path_is(*w, {}), 1);
+           w && committed_path_is(*w, {OUR_CID}), 1);
     expect("#82 warm reset: its flags are gmPresent alone",
            w ? w->flags : ~0u, self_present);
 
@@ -5276,7 +5513,7 @@ class GptpEngineHarness {
     expect("#82 warm reset: the live worse peer wins, not the absent A",
            live ? live->gm : 0, GMB);
     expect("#82 warm reset: the live peer carries its own path",
-           live && committed_path_is(*live, {SRCB, OUR_CID}), 1);
+           live && committed_path_is(*live, {GMB, SRCB, OUR_CID}), 1);
 
     const size_t quiet0 = commit_snaps.size();
     wait_flags(FL_AMGM, FL_AMGM, 9000000);    // 3 s receipt timeout
@@ -5287,7 +5524,7 @@ class GptpEngineHarness {
     expect("#82 peer leaves: the mastership commit names thisClock",
            gm ? gm->gm : 0, OUR_CID);
     expect("#82 peer leaves: the mastership commit path is {thisClock}",
-           gm && committed_path_is(*gm, {}), 1);
+           gm && committed_path_is(*gm, {OUR_CID}), 1);
     expect("#82 peer leaves: the mastership commit has gmPresent",
            gm ? gm->flags & FL_PRESENT : ~0u, self_present);
   }
@@ -5349,7 +5586,7 @@ class GptpEngineHarness {
     expect("#82 Pdelay loss: thisClock is committed within 2 ms of the fall",
            fell && self && self->cyc - fell->cyc <= 4000, 1);
     expect("#82 Pdelay loss: that commit carries {thisClock}",
-           self && committed_path_is(*self, {}), 1);
+           self && committed_path_is(*self, {OUR_CID}), 1);
     expect("#82 Pdelay loss: the drop commit's flags are gmPresent alone",
            self ? self->flags : ~0u, self_present);
 
@@ -5388,7 +5625,8 @@ class GptpEngineHarness {
     expect("#82 Pdelay loss: once capable, with no Announce, master in 3 s",
            rose && master && master->cyc - rose->cyc <= 6004000, 1);
     expect("#82 Pdelay loss: that mastership names thisClock, {thisClock}",
-           master && master->gm == OUR_CID && committed_path_is(*master, {}),
+           master && master->gm == OUR_CID &&
+               committed_path_is(*master, {OUR_CID}),
            1);
     expect("#82 Pdelay loss: that mastership commit has gmPresent",
            master ? master->flags & FL_PRESENT : ~0u, self_present);
@@ -5398,7 +5636,7 @@ class GptpEngineHarness {
     const PubSnap *back = last_commit_since(back0);
     expect("#82 Pdelay loss: once capable, a live peer worse than D wins",
            back && back->gm == GME &&
-               committed_path_is(*back, {SRCE, OUR_CID}),
+               committed_path_is(*back, {GME, SRCE, OUR_CID}),
            1);
   }
 
@@ -5710,6 +5948,29 @@ class GptpEngineHarness {
       s39_interval(SyncShape::usable, 250000, k % 8 == 5);
   }
 
+  // ---- 43: #88, after 40: the issue's two shapes defer a whole interval --
+  // 802.1AS-2011 10.3.11 (Figure 10-13 as corrected by Cor1) ages an elected
+  // grandmaster with no Sync within syncReceiptTimeout, so a whole interval
+  // of deferring needs the parent's Sync. The phase runs where phase 40 left
+  // usable Sync flowing, so the link-up pair of phase 10 stays the run's
+  // first. A degraded GMS hands mastership back, then each shape wins from
+  // mastership and its degrade hands it back again
+  void defer_a_whole_interval_to_the_issue_shapes() {
+    send_announce(s39_ann_seq++, 250, GMS, 1, SRCS, {GMS, SRCS}, phc() + 100);
+    // The issue's first shape: stepsRemoved 3 and a one-entry path
+    const uint64_t GM_I = 0x00F1F1FFFE000001ull;
+    const uint64_t SRC_I = 0x00F1F1FFFE0000C3ull;
+    defer_to_a_better_grandmaster("#88 issue shape", 40, GM_I, 3, SRC_I,
+                                  {GM_I});
+    // Its second: a path not headed by the grandmaster. Entry 0 is the
+    // received head, never the grandmaster identity (#88)
+    const uint64_t GM_H = 0x00F5F5FFFE000001ull;
+    const uint64_t HEAD_H = 0x00F5F5FFFE0000A1ull;
+    const uint64_t SRC_H = 0x00F5F5FFFE0000C1ull;
+    defer_to_a_better_grandmaster("#88 head not the grandmaster", 52, GM_H, 1,
+                                  SRC_H, {HEAD_H, SRC_H});
+  }
+
   // ---- 41: #89, sync receipt ageing needs gmPresent (priority1 255 pass) ---
   // gmPresent is TRUE only while the grandmaster's priority1 is below 255
   // (802.1AS-2011 10.2.3.13, 10.3.12.1.4 g), and 10.3.11 ages on a sync
@@ -5799,11 +6060,12 @@ class GptpEngineHarness {
   }
 
   //! #82: every commit of the whole run that names thisClock, whatever
-  //! phase made it, carries exactly {thisClock}: count one, no tail
+  //! phase made it, carries exactly {thisClock}: count one, thisClock at
+  //! entry 0, no tail
   void hold_every_committed_path_coherent() {
     size_t self_bad = 0;
     for (const PubSnap &s : commit_snaps)
-      if (s.gm == OUR_CID && !committed_path_is(s, {})) self_bad++;
+      if (s.gm == OUR_CID && !committed_path_is(s, {OUR_CID})) self_bad++;
     printf("INFO #82 %zu commits graded for the self path\n",
            commit_snaps.size());
     expect("#82 every commit naming thisClock carries {thisClock}",
@@ -5836,19 +6098,20 @@ class GptpEngineHarness {
   }
 
   // ---- 38: #85, thisClock closes every peer path --------------------------
-  //! Graded over every commit of the run that names a peer grandmaster with
-  //! a nonempty path: thisClock is its last entry and appears nowhere else,
-  //! unless eight received entries filled the publication first.
+  //! Graded over every commit of the run that names a peer grandmaster: its
+  //! path, from entry 0, has thisClock as its last entry and nowhere else,
+  //! unless eight received entries filled the publication first. A path
+  //! kept without a TLV ends the same way, {thisClock} included (#87).
   void end_every_peer_path_with_thisclock() {
     size_t graded = 0;
     size_t bad = 0;
     for (const PubSnap &s : commit_snaps) {
-      if (s.gm == OUR_CID || s.count == 0) continue;
+      if (s.gm == OUR_CID) continue;
       graded++;
       size_t seen = 0;
       size_t at = 0;
-      for (unsigned k = 0; k + 1 < s.count && k < PATH_TAIL_SLOTS; k++)
-        if (s.tail[k] == OUR_CID) { seen++; at = k + 1; }
+      for (unsigned k = 0; k < s.count && k <= PATH_TAIL_SLOTS; k++)
+        if ((k == 0 ? s.head : s.tail[k - 1]) == OUR_CID) { seen++; at = k; }
       const bool appended = seen == 1 && at + 1 == s.count;
       const bool filled = seen == 0 && s.count == 8;
       if (!appended && !filled) bad++;

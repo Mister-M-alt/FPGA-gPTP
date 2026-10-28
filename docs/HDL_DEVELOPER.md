@@ -267,11 +267,19 @@ No handler can run before that commit.
 
 Region 3, word 7 stages a taken Announce's path.
 
-That write appends thisClock to a nonempty received path.
+It copies a present path from its received head.
+
+That write appends thisClock, even to an empty path.
 
 The appended entry uses the same image words.
 
 Eight received entries leave it no slot.
+
+Without a path trace TLV, the write changes nothing.
+
+Message word 12 bit 63 marks that TLV present.
+
+Microcode's loop test reads only bits 39 to 8.
 
 ## Out-of-context measurement
 

@@ -59,8 +59,10 @@ MUTATIONS = [
      "a Follow_Up is paired with its Sync by the sequenceId that arrived, "
      "not by a constant"),
     ("announce grandmasterIdentity discarded", "wire/KL_gptp_rx_parser.sv",
-     "gm_r         <= acc_nxt_w;",
-     "gm_r         <= '0;",
+     "                bank_addr_o  <= 5'd9;\n"
+     "                bank_wdata_o <= acc_nxt_w;\n",
+     "                bank_addr_o  <= 5'd9;\n"
+     "                bank_wdata_o <= 64'd0;\n",
      "the grandmasterIdentity an Announce carries is the identity BMCA "
      "compares, so a better master is recognised as one"),
     ("transmit end of frame one byte early", "wire/KL_gptp_tx_slot.sv",
