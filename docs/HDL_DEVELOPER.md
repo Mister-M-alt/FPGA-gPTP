@@ -181,6 +181,8 @@ Data and markers remain stable during stalls.
 
 State advances only after ready acceptance.
 
+A disabled port withdraws a frame before its first acceptance.
+
 [WaveDrom source](diagrams/wavedrom/tx_backpressure.json) defines this timing.
 
 ## Microcode receipt state
@@ -244,6 +246,58 @@ Scratch word 39 adds each matching response's armed sequence.
 A second response therefore leaves no pairable value.
 
 Its exchange counts as lost at the next beat.
+
+## Port enable
+
+`port_en_r` registers `port_enabled_i` once.
+
+Every port gate reads that registered level.
+
+Region 1, word 2 then reads no credit.
+
+`cancel_i` withdraws a frame whose first byte waits.
+
+A SEND issued while disabled is withdrawn the same way.
+
+The serializer masks valid in that same cycle.
+
+A started frame runs on until its last byte.
+
+Both claim-valid bits clear on every disabled cycle.
+
+That write wins over microcode in the same cycle.
+
+`port_ref_r` makes the first sample after release the reference.
+
+Only a later change of level is an edge.
+
+Each edge raises the slot 6 NOTEN event.
+
+NOTEN dispatches ahead of the result and the queue.
+
+It does not wait for an idle serializer.
+
+Its leg must therefore never build or SEND.
+
+A rise also queues a slot 0 beat.
+
+That beat waits behind parser and timer events.
+
+Slot 6 is the NOTEN leg, not a timer.
+
+NOTEN clears the cease, countdown, streak and ladder.
+
+It zeroes `S_RSPSEQ`, so no Follow_Up pairs.
+
+It sets `S_PDGOT`, so the next beat counts no loss.
+
+`S_PDGOT` also refuses a new response arm.
+
+A pair frozen for its t1 finds no claim.
+
+Its tail clears the interval and drops asCapable.
+
+The cease entry now ends in that tail.
 
 ## Publication invariant
 

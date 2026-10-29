@@ -121,7 +121,21 @@ A transfer needs both valid and ready.
 
 Outputs remain stable while ready stays low.
 
+One exception serves a disabled port.
+
+A frame still waiting at its first byte is withdrawn.
+
+Its valid falls with no transfer.
+
+A started frame always runs to its last byte.
+
+The face has no abort signal.
+
+Consume accepted transfers only, never a held valid.
+
 The serializer blocks new event dispatches.
+
+The NOT_ENABLED leg alone skips that wait.
 
 ## Egress timestamp results
 
@@ -188,6 +202,68 @@ Responses and both companions always keep service.
 Low credit also postpones request interval bookkeeping.
 
 Restore credit to resume every normal cadence.
+
+## Port enable
+
+| Signal | Direction | Contract |
+|---|---|---|
+| `port_enabled_i` | Input | Carries 802.1AS-2011 portEnabled |
+
+Drive it as a level synchronous to `clk_i`.
+
+High means MAC_Operational and administrative enable together.
+
+The parent drives its effective link here.
+
+A low port starts no gPTP frame.
+
+Initiating beats see no credit while it stays low.
+
+Every frame still waiting at its first byte is withdrawn.
+
+That includes a frame whose SEND came while low.
+
+A frame already started completes, as the transmit interface states.
+
+Both egress claims read empty while low.
+
+Received frames still dispatch; their replies are dropped.
+
+No Pdelay exchange completes while the port is low.
+
+The first sample after reset is the reference level.
+
+A port high at release raises nothing.
+
+The boot cadence then sends the first request.
+
+A port low at release makes its rise an edge.
+
+Each edge clears asCapable and commits at once.
+
+A stalled transmit path does not delay that commit.
+
+It also ends the multiple-responder cease and its countdown.
+
+That holds for a cease retained across a warm reset.
+
+Milan 4.2.6.2.5 lists this toggle.
+
+Each edge also disarms the outstanding Pdelay exchange.
+
+Its Follow_Up and its late t1 pair nothing.
+
+A rise then sends one Pdelay_Req at once.
+
+That request counts no lost response.
+
+asCapable returns only after two good exchanges.
+
+The five-minute countdown remains the other exit.
+
+A change made while reset is held is not seen.
+
+[Issue #94](https://github.com/Mister-M-alt/FPGA-gPTP/issues/94) records this contract.
 
 ## PHC control
 
@@ -733,6 +809,7 @@ Set `CLK_HZ_P` to the actual engine frequency.
 - Hold result offers until acceptance.
 - Report unmeasured results explicitly.
 - Drive admission credit as a level.
+- Drive portEnabled from the effective link.
 - Apply PHC pulses once.
 - Count each step pulse as one step.
 - Align the slew level with effective rate changes.

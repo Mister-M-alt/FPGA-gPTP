@@ -4,6 +4,30 @@
 """gPTP µcode ROM image generator -- v8, the announce qualification and the
 Pdelay_Resp_Follow_Up pairing rounds.
 
+FPGA-gPTP #94, portEnabled (802.1AS-2011 10.2.4.11: MAC_Operational and the
+port administratively enabled), which the engine now takes as an input:
+
+  * The Milan v1.2 4.2.6.2.5 cease ends on a link or portEnabled toggle as
+    well as on its 5-minute countdown. Each portEnabled change after the
+    first sample since reset raises timer slot 6 (NOTEN), so a port that
+    is disabled at a warm reset's release ends a retained cease at its
+    rise. NOTEN clears the cease, its countdown and streak, the asCapable
+    ladder and asCapable, and commits: Figure 11-8 (Cor1, Cor2) leaves
+    NOT_ENABLED only through INITIAL_SEND_PDELAY_REQ, with lostResponses =
+    0 and asCapable = FALSE. It also disarms the outstanding exchange, so
+    no Follow_Up heard while the port is disabled pairs or publishes.
+  * While the port is disabled the engine reads no transmit credit,
+    withdraws every frame whose first byte is unaccepted, a SEND issued
+    while disabled included, and holds both egress claims invalid, so it
+    starts no frame. NOTEN dispatches ahead of every other event and does
+    not wait for a stalled frame.
+  * On a rise the engine queues the 1 s beat right behind NOTEN, so one
+    Pdelay_Req goes out at once and the cadence runs from it. NOTEN left
+    S_PDGOT set, so that beat counts no lost response.
+  * The countdown exit and every other state are unchanged. The cease entry
+    now ends in NOTEN's tail, which writes the same cells and commits the
+    same flags; NOTEN's disarm adds one word.
+
 FPGA-gPTP #89, #90 and #91, the receipt rules of 802.1AS-2011 as corrected
 by Cor1 and Cor2, the edition Milan v1.2 profiles:
 
@@ -356,7 +380,8 @@ S_CEASECNT = 36                          # cadence beats to resume
 # and stay mutually consistent. There is no partial-reset path that could
 # clear one and not the other. ADDING A SECOND WRITER to either gate
 # breaks this: give the guarded cell an init write again, or write it in
-# the new writer's own block.
+# the new writer's own block. NOTEN (#94) writes gate and guarded cell
+# zero together, so it is no setter.
 S_TXQ_RESP = 41                          # the second egress-timestamp
                                          # claim. Each claim holds the
                                          # {messageType, sequenceId} its
@@ -1501,7 +1526,8 @@ def _tmr_slot_dispatch(p):
     p.emit("BRS", cnd=BRS_Z, label=LB["SRTO"])
     p.emit("CMP", ra=REV, rb=0, fmt=FMT_W, imm=5)
     p.emit("BRS", cnd=BRS_Z, label=LB["FUTO"])
-    p.emit("END")
+    # slot 6 is no timer: the engine raises it on a portEnabled edge (#94)
+    p.emit("BR", label=LB["NOTEN"])
     p.label("slot0")
 
 
@@ -1627,17 +1653,14 @@ def _tmr_cease_rule(p):
     p.emit("WRST", ra=RC, imm=RG_SCR | S_MULTI, fmt=FMT_Q)
     p.emit("CMP", ra=RC, rb=0, fmt=FMT_D, imm=CEASE_N_C)
     p.emit("BRS", cnd=BRS_LT, label="iv_clear")
-    # cease: stop requesting, drop the verdict, load the countdown
-    p.emit("MOVE", rd=RT, ra=0, imm=1)
-    p.emit("WRST", ra=RT, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
+    # cease: stop requesting, load the countdown, then NOTEN's tail clears
+    # the interval and drops the verdict (#94 shares it, word for word).
+    # RB still holds S_IVMULTI, which is 1 exactly here: its writers write
+    # 0 or 1 only, and the compare above took the branch on 1
+    p.emit("WRST", ra=RB, imm=RG_SCR | S_CEASE, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=max(1, RUNTIME["cease_ms"] // 1000))
     p.emit("WRST", ra=RT, imm=RG_SCR | S_CEASECNT, fmt=FMT_Q)
-    p.emit("WRST", ra=0, imm=RG_SCR | S_PDOK, fmt=FMT_Q)
-    e_flags(p, andm=FL_PRESENT_C | FL_AMGM_C | FL_SYNCOK_C)
-    p.emit("COMMIT")
-    p.emit("WRST", ra=0, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
-    p.emit("WRST", ra=0, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
-    p.emit("END")
+    p.emit("BR", label=LB["NOTENTAIL"])
     p.label("iv_clear")
     p.emit("WRST", ra=0, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
     p.emit("WRST", ra=0, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
@@ -2160,6 +2183,42 @@ def prog_leg_resume(base: int) -> Prog:
     return p
 
 
+def prog_leg_noten(base: int) -> Prog:
+    """A portEnabled edge (#94), timer slot 6, which the engine raises.
+
+    802.1AS-2011 Figure 11-8 (Cor1, Cor2) leaves NOT_ENABLED only through
+    INITIAL_SEND_PDELAY_REQ: lostResponses = 0 and asCapable = FALSE. Milan
+    v1.2 4.2.6.2.5 ends the cease on that toggle. So both edges clear the
+    cease, its countdown and streak, and the ladder and asCapable, and
+    commit. The engine sends nothing while the port is disabled. S_PDGOT
+    set makes the next beat's judgement count no loss, so its request goes
+    out with lostResponses = 0. On a rise the engine queues that beat next.
+
+    NOT_ENABLED takes no Pdelay_Resp_Follow_Up, so both edges also disarm
+    the outstanding exchange: S_RSPSEQ zero refuses its Follow_Up in
+    PDPOST, and S_PDGOT set refuses a later response's arm until the next
+    request. A pair already frozen for its t1 cannot complete either: the
+    stamp finds no claim while the port is disabled (KL_gptp_engine.sv),
+    and the next request cancels the pair.
+
+    The engine dispatches this leg ahead of every other event and without
+    waiting for the serializer, so it must never build or SEND.
+
+    NOTENTAIL is the tail the cease entry shares: the interval's identity
+    bookkeeping, then PDPAIR's bad verdict, which clears S_PDOK and
+    asCapable and commits."""
+    p = Prog(base)
+    for s in (S_CEASE, S_CEASECNT, S_MULTI, S_RSPSEQ):
+        p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
+    p.emit("MOVE", rd=RT, ra=0, imm=1)
+    p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)
+    p.label("tail")
+    p.emit("WRST", ra=0, imm=RG_SCR | S_IVMULTI, fmt=FMT_Q)
+    p.emit("WRST", ra=0, imm=RG_SCR | S_RSP1, fmt=FMT_Q)
+    p.emit("BR", label=LB["PDBAD"])
+    return p
+
+
 def prog_leg_srto(base: int) -> Prog:
     """Sync receipt timeout (375 ms, #89): syncReceiptTimeoutTime has
     passed. The port is marked, whatever role the expiry found, and an
@@ -2338,6 +2397,7 @@ LEG_FNS = [
     ("SLEW", prog_leg_slew), ("SVRATE", prog_leg_svrate),
     ("RESUME", prog_leg_resume), ("PDREQ", prog_leg_pdreq),
     ("TXLOST", prog_leg_txlost), ("TXT1OK", prog_leg_txt1ok),
+    ("NOTEN", prog_leg_noten),
 ]
 
 
@@ -2362,7 +2422,7 @@ def build(mac: int, seq_seed: int = 0,
     # pass 1: measure (word counts are independent of branch targets)
     for name, _ in LEG_FNS:
         LB[name] = 0
-    LB["PUBFLAGS"] = 0
+    LB["PUBFLAGS"] = LB["PDBAD"] = LB["NOTENTAIL"] = 0
     fixed_sz = [(b, len(fn(b).words())) for b, fn in fixed]
     leg_sz = [(name, len(fn(0).words())) for name, fn in LEG_FNS]
 
@@ -2395,8 +2455,11 @@ def build(mac: int, seq_seed: int = 0,
                 break
         else:
             raise AssertionError(f"leg {name} ({sz} words) does not fit")
-    # PDPAIR's flags-publishing tail, which SRTO shares (#89)
+    # PDPAIR's flags-publishing tail, which SRTO shares (#89), and its bad
+    # verdict, which NOTEN ends in, as the cease entry does through its tail
     LB["PUBFLAGS"] = prog_leg_pdpair(LB["PDPAIR"]).address("pubflags")
+    LB["PDBAD"] = prog_leg_pdpair(LB["PDPAIR"]).address("bad")
+    LB["NOTENTAIL"] = prog_leg_noten(LB["NOTEN"]).address("tail")
 
     # pass 2: emit with real bases
     rom = [None] * DEPTH

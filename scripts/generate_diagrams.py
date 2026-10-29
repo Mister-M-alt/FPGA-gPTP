@@ -65,7 +65,7 @@ EVIDENCE = {
         "fin_r    <= 1'b1;",
     ),
     "hdl/wire/KL_gptp_tx_slot.sv": (
-        "assign tx_valid_o = ser_run_r;",
+        "assign tx_valid_o = ser_run_r && !ser_drop_w;",
         "assign tx_data_o  = slot_r[ser_addr_r];",
         "assign tx_sof_o   = ser_sof_r;",
         "assign tx_eof_o   = ser_run_r && (ser_left_r == 11'd1);",

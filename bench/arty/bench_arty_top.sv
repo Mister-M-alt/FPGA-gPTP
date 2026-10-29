@@ -290,6 +290,9 @@ module bench_arty_top (
       //! No admission control exists here: nothing downstream of the MII
       //! gasket can refuse a frame, so the initiating legs keep credit.
       .tx_credit_i        (1'b1),
+      //! This bench reads no PHY link status, so its port stays enabled:
+      //! the portEnabled edges (#94) are the engine suite's to exercise.
+      .port_enabled_i     (1'b1),
       .phc_addend_we_o    (phc_add_we_w),
       .phc_addend_o       (phc_add_w),
       .phc_step_we_o      (phc_step_we_w),

@@ -211,6 +211,7 @@ class TsnGenHarness {
     dut->txts_valid_i = 0; dut->txts_ns_i = 0; dut->txts_seq_i = 0;
     dut->txts_type_i = 0; dut->txts_ok_i = 0; dut->txts_gen_i = 0;
     dut->tx_credit_i = 1;
+    dut->port_enabled_i = 1;              // the link is up throughout
     for (int i = 0; i < 8; i++) tick();
     dut->rst_n = 1;
   }
