@@ -220,6 +220,20 @@
 //         and a head that is not the grandmaster) are elected, publish
 //         their path from its received head, and stop our Announce for a
 //         whole interval of the parent's usable Sync
+// 44      #94, after 43: inside a Milan v1.2 4.2.6.2.5 cease the port
+//         falls for 0.5 s (802.1AS-2011 10.2.4.11). Nothing is sent while
+//         it is down; on the rise one Pdelay_Req goes out at once
+//         (INITIAL_SEND_PDELAY_REQ, Figure 11-8), then one per interval.
+//         Unanswered, only the fifth loss after the rise commits asCapable
+//         FALSE; answered, asCapable takes two exchanges (4.2.6.2.4)
+// 45      #94: a capable master's port falls for 6.5 s while the peer
+//         talks. asCapable falls with a commit within 2 ms, nothing is
+//         sent or committed while it is down, and on the rise one request
+//         goes out at once and asCapable takes two exchanges again
+// 46      #94: a Pdelay_Resp built after the fall is not sent, and its
+//         claim does not hold the next request after the rise
+// 47      #94: without a toggle the cease ends after its countdown and
+//         two beats, 5 s from the last request with this 3 s image
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
 // the phases a self publication passes through: boot, mastership, 36..38,
@@ -423,6 +437,10 @@ class GptpEngineHarness {
     age_a_grandmaster_whose_sync_fails();
     age_the_port_whatever_role_the_timeout_finds();
     defer_a_whole_interval_to_the_issue_shapes();
+    end_the_cease_on_a_port_toggle();
+    drop_ascapable_at_a_link_loss();
+    drop_a_frame_built_across_the_fall();
+    keep_the_countdown_exit();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -549,6 +567,9 @@ class GptpEngineHarness {
   uint64_t pd_reqs_sent = 0;
   std::vector<std::vector<uint8_t>> txf;
   std::vector<uint64_t> txns;               // egress ts fed per frame
+  //! the cycle each frame's first byte left, per frame (#94)
+  std::vector<uint64_t> txsof;
+  uint64_t cur_sof = 0;
   std::vector<uint8_t> cur;
   bool in_tx = false;
   bool auto_txts = false;
@@ -720,12 +741,13 @@ class GptpEngineHarness {
     phc_acc += static_cast<unsigned __int128>(
         static_cast<uint64_t>((500ll << 24) + phc_adj));
     if (tx_fire) {
-      if (tx_sof) { cur.clear(); in_tx = true; }
+      if (tx_sof) { cur.clear(); in_tx = true; cur_sof = cyc; }
       if (in_tx) cur.push_back(tx_data);
       if (tx_eof && in_tx) {
         if (type_of(cur) == 0x2) pd_reqs_sent++;
         txf.push_back(cur);
         txns.push_back(0);
+        txsof.push_back(cur_sof);
         if (auto_txts) auto_pend = static_cast<int>(txf.size()) - 1;
         in_tx = false;
       }
@@ -5972,6 +5994,242 @@ class GptpEngineHarness {
     const uint64_t SRC_H = 0x00F5F5FFFE0000C1ull;
     defer_to_a_better_grandmaster("#88 head not the grandmaster", 52, GM_H, 1,
                                   SRC_H, {HEAD_H, SRC_H});
+  }
+
+  // ---- #94: portEnabled (802.1AS-2011 10.2.4.11) -------------------------
+  //! the Pdelay_Req interval, 1 s (Milan v1.2 Table 4.1), in 2 MHz cycles
+  static constexpr uint64_t INTERVAL_CYC = 1000ull * MS_CYC;
+  //! a frame whose SEND preceded the fall may still start this many cycles
+  //! after it: the registered port level and the serializer's first byte
+  static constexpr uint64_t FALL_SLACK_CYC = 16;
+
+  //! frames whose first byte left in cycles [from, to), of `mtype` or of
+  //! any type when it is negative
+  size_t frames_started_between(uint64_t from, uint64_t to, int mtype = -1) {
+    size_t n = 0;
+    for (size_t i = 0; i < txf.size(); i++)
+      if (txsof[i] >= from && txsof[i] < to &&
+          (mtype < 0 || type_of(txf[i]) == mtype))
+        n++;
+    return n;
+  }
+
+  //! the first-byte cycle of the `k`-th Pdelay_Req from frame `mark` on,
+  //! or all ones when there is none
+  uint64_t request_sof(size_t mark, size_t k) {
+    for (size_t i = mark; i < txf.size(); i++)
+      if (type_of(txf[i]) == 0x2 && k-- == 0) return txsof[i];
+    return ~0ull;
+  }
+
+  //! commits sampled in cycles [from, to), and those of them that carry
+  //! asCapable
+  size_t commits_between(uint64_t from, uint64_t to, bool capable = false) {
+    size_t n = 0;
+    for (const PubSnap &s : commit_snaps)
+      if (s.cyc >= from && s.cyc < to && (!capable || (s.flags & FL_ASCAP)))
+        n++;
+    return n;
+  }
+
+  //! the port falls for `span` cycles, the auto-peer serving, and rises.
+  //! Returns the rise cycle; `fall` gets the fall cycle
+  uint64_t toggle_the_port(uint64_t span, uint64_t *fall) {
+    *fall = cyc;
+    dut->port_enabled_i = 0;
+    run_svc(span);
+    dut->port_enabled_i = 1;
+    return cyc;
+  }
+
+  //! Milan v1.2 4.2.6.2.4 after a portEnabled edge: one answered exchange
+  //! leaves asCapable clear and the second raises it
+  void re_earn_in_two_exchanges(const char *tag) {
+    char n[112];
+    pd_mode = PD_NORMAL;
+    const bool one = wait_exchanges(pdm.count + 1, 3 * INTERVAL_CYC);
+    run(4000);
+    snprintf(n, sizeof n, "%s: one exchange after the rise leaves asCapable "
+             "clear", tag);
+    expect(n, one && (dut->pub_flags_o & FL_ASCAP) == 0, 1);
+    const bool two = wait_exchanges(pdm.count + 1, 2 * INTERVAL_CYC);
+    run(4000);
+    snprintf(n, sizeof n, "%s: the second exchange after the rise raises "
+             "asCapable", tag);
+    expect(n, two && (dut->pub_flags_o & FL_ASCAP) == FL_ASCAP, 1);
+  }
+
+  // ---- 44: #94, a portEnabled toggle ends the Milan v1.2 4.2.6.2.5 cease --
+  // Three requests answered by two identities cease Pdelay_Req (phase 27),
+  // and asCapable falls with the cease. 1.3 s into its 3 s countdown the
+  // port falls for 0.5 s. 802.1AS-2011 Figure 11-8 (Cor1, Cor2) leaves
+  // NOT_ENABLED only through INITIAL_SEND_PDELAY_REQ, which sends at once
+  // with lostResponses = 0, and the toggle ends the cease. Nothing leaves
+  // the port while it is down. Unanswered, a request goes out every
+  // interval, and only the fifth loss after the rise commits asCapable
+  // FALSE again (Figure 11-8 RESET). Answered, asCapable takes two
+  // exchanges (Milan v1.2 4.2.6.2.4)
+  void end_the_cease_on_a_port_toggle() {
+    pd_mode = PD_NORMAL;
+    expect("#94 toggle: capable before the storm",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    pd_mode = PD_DUAL;
+    expect("#94 toggle: three multi-answered requests cease",
+           wait_flags(FL_ASCAP, 0, 16000000ull), 1);
+    const uint64_t r0 = pd_reqs_sent;
+    run_svc(1300ull * MS_CYC);
+    expect("#94 toggle: the cease sends no request", pd_reqs_sent, r0);
+    pd_mode = PD_OFF;
+    const size_t mark = txf.size();
+    uint64_t fall = 0;
+    const uint64_t rise = toggle_the_port(500ull * MS_CYC, &fall);
+    expect("#94 toggle: the first request comes within one interval of "
+           "the rise", wait_requests(r0 + 1, INTERVAL_CYC), 1);
+    std::array<uint64_t, 6> s{};
+    s[0] = request_sof(mark, 0);
+    expect("#94 toggle: the first request goes out at once after the rise",
+           s[0] >= rise && s[0] - rise <= 2 * MS_CYC, 1);
+    expect("#94 toggle: nothing is transmitted while the port is disabled",
+           frames_started_between(fall + FALL_SLACK_CYC, rise), 0);
+    wait_requests(r0 + s.size(), s.size() * INTERVAL_CYC);
+    bool steady = true;
+    for (size_t k = 1; k < s.size(); k++) {
+      s[k] = request_sof(mark, k);
+      steady &= s[k] != ~0ull && s[k] - s[k - 1] >= INTERVAL_CYC - MS_CYC &&
+                s[k] - s[k - 1] <= INTERVAL_CYC + MS_CYC;
+    }
+    expect("#94 toggle: then one request every interval", steady, 1);
+    // the beat that sends request k + 1 judges request k first
+    expect("#94 toggle: lostResponses starts at zero: four losses commit "
+           "nothing", steady && commits_between(s[0], s[4] + 1) == 0, 1);
+    expect("#94 toggle: the fifth loss after the rise commits asCapable "
+           "FALSE", steady && commits_between(s[4] + 1, s[5]) == 1 &&
+                        commits_between(s[4] + 1, s[5], true) == 0, 1);
+    re_earn_in_two_exchanges("#94 toggle");
+  }
+
+  // ---- 45: #94, a link loss drops asCapable at once ----------------------
+  // From a capable master the port falls (MAC_Operational FALSE) for 6.5 s
+  // while the peer sends a Pdelay_Req, a better Announce and a Sync pair.
+  // asCapable falls with a commit within 2 ms of the fall, not at the fifth
+  // lost response, 4 s on. The port transmits nothing while it is down:
+  // no Sync, Announce, Pdelay_Req or response (802.1AS-2011 10.2.4.11,
+  // 10.3.1: a DisabledPort). Nothing commits after the fall, and the beats
+  // count no lost response. On the rise one request goes out at once and
+  // asCapable takes two exchanges again
+  void drop_ascapable_at_a_link_loss() {
+    const uint64_t GML = 0x0094A0FFFE000001ull;
+    pd_mode = PD_NORMAL;
+    expect("#94 link loss: a capable master before the loss",
+           wait_flags(FL_AMGM | FL_ASCAP, FL_AMGM | FL_ASCAP, 8000000ull), 1);
+    run_svc(300ull * MS_CYC);                    // Sync and Announce flow
+    const size_t c0 = commit_snaps.size();
+    const uint64_t fall = cyc;
+    dut->port_enabled_i = 0;
+    run_svc(2 * MS_CYC);
+    const PubSnap *f = first_commit_since(c0);
+    expect("#94 link loss: asCapable falls at the falling edge",
+           f != nullptr && (f->flags & FL_ASCAP) == 0 &&
+               f->cyc - fall <= 2 * MS_CYC &&
+               (dut->pub_flags_o & FL_ASCAP) == 0, 1);
+    const uint64_t held_from = cyc;
+    Frame q = ptp(0x2, 0x9451, 0, 0x0000, 20);   // the peer keeps talking
+    q.u64(0); q.u16(0); q.ts(0);
+    send_frame(q.b, phc());
+    send_announce(0x9452, 1, GML, 0, PEER_CID, {}, phc() + 100);
+    sync_pair(0x9453, phc() + 100, phc());
+    const uint64_t r0 = pd_reqs_sent;
+    run_svc(6500ull * MS_CYC);
+    const size_t mark = txf.size();
+    const uint64_t rise = cyc;
+    dut->port_enabled_i = 1;
+    expect("#94 link loss: the publication holds while the port is "
+           "disabled", commits_between(held_from, rise), 0);
+    expect("#94 link loss: the first request goes out at once after the "
+           "rise", wait_requests(r0 + 1, 2 * MS_CYC) &&
+               request_sof(mark, 0) - rise <= 2 * MS_CYC, 1);
+    expect("#94 link loss: nothing is transmitted while the port is "
+           "disabled", frames_started_between(fall + FALL_SLACK_CYC, rise), 0);
+    re_earn_in_two_exchanges("#94 link loss");
+  }
+
+  // ---- 46: #94, a frame built across the fall is dropped unsent ----------
+  // A peer's Pdelay_Req is answered (802.1AS-2011 11.2.16): the response's
+  // first byte leaves a fixed time after the request's last. 1 s later,
+  // when every cadence of this master is in the same phase, the same kind
+  // of request comes and the port falls half-way through that time. The
+  // handler builds the response after the fall, and it is not sent. Its
+  // egress claim is gone too: after the rise the next request is answered
+  // at once, not held behind a stamp the down port never owed
+  void drop_a_frame_built_across_the_fall() {
+    pd_mode = PD_NORMAL;
+    expect("#94 built across the fall: a capable master first",
+           wait_flags(FL_AMGM | FL_ASCAP, FL_AMGM | FL_ASCAP, 8000000ull), 1);
+    // the auto-peer stays silent, so only this master's own cadences,
+    // periodic in 1 s, share the engine with the two requests
+    pd_mode = PD_SKIP;
+    tx_seen = txf.size();
+    wait_tx(0x2, 2 * INTERVAL_CYC);              // away from our own beat
+    run(300ull * MS_CYC);
+    Frame q = ptp(0x2, 0x9461, 0, 0x0000, 20);
+    q.u64(0); q.u16(0); q.ts(0);
+    send_frame(q.b, phc());
+    const uint64_t e1 = cyc;
+    size_t ri = 0;
+    tx_seen = txf.size();
+    const bool answered = !wait_tx(0x3, 4 * MS_CYC, &ri).empty();
+    expect("#94 built across the fall: the request before it is answered",
+           answered, 1);
+    const uint64_t lat = answered ? txsof[ri] - e1 : 0;
+    run(e1 + INTERVAL_CYC - q.b.size() - cyc);   // the same phase, 1 s on
+    q = ptp(0x2, 0x9462, 0, 0x0000, 20);
+    q.u64(0); q.u16(0); q.ts(0);
+    send_frame(q.b, phc());
+    const uint64_t e2 = cyc;
+    run(lat / 2);
+    dut->port_enabled_i = 0;
+    run(200ull * MS_CYC);
+    expect("#94 built across the fall: the response is not sent",
+           answered && frames_started_between(e2, cyc, 0x3) == 0, 1);
+    dut->port_enabled_i = 1;
+    run(10ull * MS_CYC);
+    q = ptp(0x2, 0x9463, 0, 0x0000, 20);
+    q.u64(0); q.u16(0); q.ts(0);
+    send_frame(q.b, phc());
+    tx_seen = txf.size();
+    expect("#94 built across the fall: a request after the rise is "
+           "answered at once", !wait_tx(0x3, 2 * MS_CYC).empty(), 1);
+    pd_mode = PD_NORMAL;
+  }
+
+  // ---- 47: #94, without a toggle the countdown exit is unchanged ---------
+  // Milan v1.2 4.2.6.2.5's 5-minute exit is this image's 3 s (--cease-ms
+  // 3000). The beat that ceases sends nothing, three beats count down, the
+  // last of them resumes, and the next sends. So the first request after
+  // the cease follows the last before it by the countdown and two beats:
+  // 5 s here, 302 s at 5 minutes, as before #94
+  void keep_the_countdown_exit() {
+    pd_mode = PD_NORMAL;
+    expect("#94 countdown: capable before the storm",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    pd_mode = PD_DUAL;
+    const size_t mark = txf.size();
+    expect("#94 countdown: three multi-answered requests cease",
+           wait_flags(FL_ASCAP, 0, 16000000ull), 1);
+    uint64_t last = ~0ull;
+    for (size_t i = mark; i < txf.size(); i++)
+      if (type_of(txf[i]) == 0x2) last = txsof[i];
+    pd_mode = PD_NORMAL;
+    const size_t after = txf.size();
+    const uint64_t r0 = pd_reqs_sent;
+    const bool resumed = wait_requests(r0 + 1, 7 * INTERVAL_CYC);
+    const uint64_t first = request_sof(after, 0);
+    expect("#94 countdown: the first request after the cease follows the "
+           "last by the countdown and two beats",
+           resumed && last != ~0ull && first - last >= 5 * INTERVAL_CYC -
+               MS_CYC && first - last <= 5 * INTERVAL_CYC + MS_CYC, 1);
+    expect("#94 countdown: the ladder re-earns after the cease",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
   }
 
   // ---- 41: #89, sync receipt ageing needs gmPresent (priority1 255 pass) ---

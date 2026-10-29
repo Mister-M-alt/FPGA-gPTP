@@ -74,6 +74,7 @@ from mutation_verdict import TALLY, verdict  # noqa: E402
 
 sys.path.insert(0, str(HERE))
 from receipt_mutants import GENERATOR, RECEIPT_MUTATIONS  # noqa: E402
+from port_mutants import PORT_MUTATIONS  # noqa: E402
 
 #: the RTL the suite builds, in the order the Makefile lists it
 RTL_SOURCES = (
@@ -531,6 +532,7 @@ MUTATIONS = [
      " | #84 every master cycle publishes sync-ok"),
     # ---- #89, #90 and #91: receipt_mutants.py -----------------------------
     *RECEIPT_MUTATIONS,
+    *PORT_MUTATIONS,                                  # #94: port_mutants.py
     ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
      "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
      "                 disp_ready_w && !disp_valid_r;",
@@ -885,11 +887,11 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
             answer = "missed its named check"
         else:
             print(named[0])
-    # #82, #84, #85, #87, #88, #89, #90 and #91 controls must fail every
+    # #82, #84, #85, #87, #88, #89, #90, #91 and #94 controls must fail every
     # check they name, for the same reason: each of those checks needs its
     # own failing defect.
     if breaks.startswith(("#82 ", "#84 ", "#85 ", "#87 ", "#88 ", "#89 ",
-                          "#90 ", "#91 ", P1_PREFIX)) and answer == "caught":
+                          "#90 ", "#91 ", "#94 ", P1_PREFIX)) and answer == "caught":
         failed = [line for line in output.splitlines()
                   if line.startswith("FAIL ")]
         missed = [want for want in breaks.split(" | ")
