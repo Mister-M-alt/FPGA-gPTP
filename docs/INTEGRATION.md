@@ -189,6 +189,48 @@ Low credit also postpones request interval bookkeeping.
 
 Restore credit to resume every normal cadence.
 
+## Port enable
+
+| Signal | Direction | Contract |
+|---|---|---|
+| `port_enabled_i` | Input | Carries 802.1AS-2011 portEnabled |
+
+Drive it as a level synchronous to `clk_i`.
+
+High means MAC_Operational and administrative enable together.
+
+The parent drives its effective link here.
+
+A low port transmits no gPTP frame.
+
+Initiating beats see no credit while it stays low.
+
+Every SEND issued while low is dropped.
+
+Both egress claims read empty while low.
+
+Received frames still dispatch; their replies are dropped.
+
+The first enable after reset raises nothing.
+
+The boot cadence already sends the first request.
+
+Each later edge clears asCapable and commits at once.
+
+It also ends the multiple-responder cease and its countdown.
+
+Milan 4.2.6.2.5 lists this toggle.
+
+A rise then sends one Pdelay_Req at once.
+
+That request counts no lost response.
+
+asCapable returns only after two good exchanges.
+
+The five-minute countdown remains the other exit.
+
+[Issue #94](https://github.com/Mister-M-alt/FPGA-gPTP/issues/94) records this contract.
+
 ## PHC control
 
 | Output | Meaning |
@@ -733,6 +775,7 @@ Set `CLK_HZ_P` to the actual engine frequency.
 - Hold result offers until acceptance.
 - Report unmeasured results explicitly.
 - Drive admission credit as a level.
+- Drive portEnabled from the effective link.
 - Apply PHC pulses once.
 - Count each step pulse as one step.
 - Align the slew level with effective rate changes.

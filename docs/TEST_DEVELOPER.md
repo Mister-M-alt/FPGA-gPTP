@@ -134,6 +134,12 @@ Prefer independent protocol formulas and frame builders.
 - Keeps asCapable through four lost Pdelay responses.
 - Clears asCapable at the fifth, in each loss shape.
 - Resets an exchange answered by duplicate responses.
+- Ends the multiple-responder cease on a port toggle.
+- Sends one request at once after each rise.
+- Clears asCapable at once on link loss.
+- Sends and commits nothing while the port is disabled.
+- Drops a frame built across the fall.
+- Keeps the cease countdown exit unchanged.
 - Clears sync-ok on every handover to a peer.
 - Appends thisClock to direct and multi-hop received paths.
 - Checks the seven-entry, eight-entry, empty and absent path boundaries.

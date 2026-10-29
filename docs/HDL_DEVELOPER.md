@@ -245,6 +245,38 @@ A second response therefore leaves no pairable value.
 
 Its exchange counts as lost at the next beat.
 
+## Port enable
+
+`port_en_r` registers `port_enabled_i` once.
+
+Every port gate reads that registered level.
+
+Region 1, word 2 then reads no credit.
+
+The SEND strobe never reaches a disabled serializer.
+
+Both claim-valid bits clear on every disabled cycle.
+
+That write wins over microcode in the same cycle.
+
+The first enable since reset raises no event.
+
+Each later edge queues a timer event for slot 6.
+
+A rise queues a slot 0 beat behind it.
+
+Both wait behind parser and timer events.
+
+Slot 6 is the NOTEN leg, not a timer.
+
+NOTEN clears the cease, countdown, streak and ladder.
+
+It sets `S_PDGOT`, so the next beat counts no loss.
+
+Its tail clears the interval and drops asCapable.
+
+The cease entry now ends in that tail.
+
 ## Publication invariant
 
 Microcode stages publication values first.
