@@ -15,6 +15,12 @@ S_MULTI write matters only when a second responder's Pdelay_Resp lands
 between the leg and the request beat queued right behind it; the interval
 clear the leg also makes otherwise restarts the streak at that beat.
 
+The second round's controls stand for the three disable paths a review
+found open: a frame stalled on the byte face (withdrawn before its first
+byte, completed after it, and never holding NOT_ENABLED back), an exchange
+still armed or queued at the fall, and a warm reset released with the port
+disabled.
+
 The table lives in its own module so that the arm stays under the parent
 repository's module length ratchet. It is data only.
 """
@@ -25,14 +31,29 @@ from receipt_mutants import GENERATOR
 ENGINE = "top/KL_gptp_engine.sv"
 
 #: the edge test of the portEnabled block
-EDGE = "      if (port_seen_r && (port_enabled_i != port_en_r)) begin\n"
+EDGE = "      if (port_ref_r && (port_enabled_i != port_en_r)) begin\n"
+#: the serializer, whose unstarted frame a disabled port withdraws
+TXSLOT = "wire/KL_gptp_tx_slot.sv"
+DROP = "  assign ser_drop_w = cancel_i && ser_sof_r;\n"
+#: the engine's withdrawal input to it
+CANCEL = "      .cancel_i   (!port_en_r),\n"
+#: NOT_ENABLED's own dispatch, ahead of the result and the queue
+PE_POP = "  assign pe_pop_w   = pe_noten_r && disp_ready_w && !disp_valid_r;\n"
+#: the checks every stalled byte position of phase 49 makes
+STALL_K = (1, 34, 67)
+
+
+def at_each_stall(check: str) -> str:
+    """`check` of phase 49, named at each of its byte positions."""
+    return " | ".join(f"#94 stalled at byte {k}: {check}" for k in STALL_K)
+
 
 #: (name, file under hdl/, pattern, replacement, the checks it must fail)
 PORT_MUTATIONS = [
     # ---- #94: the NOT_ENABLED leg (timer slot 6) ---------------------------
     ("a portEnabled edge keeps the cease", GENERATOR,
-     "    for s in (S_CEASE, S_CEASECNT, S_MULTI):\n",
-     "    for s in (S_CEASECNT, S_MULTI):\n",
+     "    for s in (S_CEASE, S_CEASECNT, S_MULTI, S_RSPSEQ):\n",
+     "    for s in (S_CEASECNT, S_MULTI, S_RSPSEQ):\n",
      "#94 toggle: the first request comes within one interval of the rise"
      " | #94 toggle: the first request goes out at once after the rise"
      " | #94 toggle: then one request every interval"),
@@ -82,7 +103,7 @@ PORT_MUTATIONS = [
     # ---- #94: the engine's portEnabled block --------------------------------
     ("the falling edge raises no event", ENGINE,
      EDGE,
-     "      if (port_seen_r && port_enabled_i && !port_en_r) begin\n",
+     "      if (port_ref_r && port_enabled_i && !port_en_r) begin\n",
      "#94 link loss: asCapable falls at the falling edge"),
     ("a rise sends no request at once", ENGINE,
      "        pe_beat_r  <= port_enabled_i;\n",
@@ -93,17 +114,21 @@ PORT_MUTATIONS = [
      "          st_rd_mux_w = {63'd0, tx_credit_i && port_en_r};\n",
      "          st_rd_mux_w = {63'd0, tx_credit_i};\n",
      "#94 link loss: the publication holds while the port is disabled"),
-    ("a frame built across the fall is sent", ENGINE,
-     "      .send_i     (resp_send_w && port_en_r),\n",
-     "      .send_i     (resp_send_w),\n",
+    # a SEND issued while disabled is withdrawn like a stalled frame, so
+    # this one tie stands for both
+    ("a disabled port starts an unstarted frame", ENGINE,
+     CANCEL,
+     "      .cancel_i   (1'b0),\n",
      "#94 built across the fall: the response is not sent"
-     " | #94 link loss: nothing is transmitted while the port is disabled"),
+     " | #94 link loss: nothing is transmitted while the port is disabled"
+     " | #94 stalled first byte: the frame is withdrawn"
+     " | #94 stalled first byte: no frame starts while the port is"
+     " disabled"),
     # both transmit gates at once: either alone keeps a ceased port silent
-    ("a disabled port keeps its credit and its SEND", ENGINE,
+    ("a disabled port keeps its credit and starts its frames", ENGINE,
      [("          st_rd_mux_w = {63'd0, tx_credit_i && port_en_r};\n",
        "          st_rd_mux_w = {63'd0, tx_credit_i};\n"),
-      ("      .send_i     (resp_send_w && port_en_r),\n",
-       "      .send_i     (resp_send_w),\n")],
+      (CANCEL, "      .cancel_i   (1'b0),\n")],
      None,
      "#94 toggle: nothing is transmitted while the port is disabled"
      " | #94 link loss: nothing is transmitted while the port is disabled"),
@@ -115,6 +140,13 @@ PORT_MUTATIONS = [
      "",
      "#94 built across the fall: a request after the rise is answered at"
      " once"),
+    # the request's own claim alone: a frozen pair's late t1 still finds it
+    ("the request claim survives the fall", ENGINE,
+     "      if (!port_en_r) begin\n"
+     "        tmr_claim_valid_r  <= 1'b0;\n",
+     "      if (!port_en_r) begin\n",
+     "#94 t1 after the fall: nothing commits after NOT_ENABLED"
+     " | #94 t1 after the fall: the delay holds"),
     # the boot cadence serves the first enable since reset, so an edge there
     # adds a commit to the one every reset release makes (#82)
     ("the first enable since reset raises events", ENGINE,
@@ -123,4 +155,59 @@ PORT_MUTATIONS = [
      "#82 cold release: one commit before the first beat"
      " | #82 warm reset: one commit in the first 2 ms"
      " | p1 255 #82 cold release: one commit before the first beat"),
+    # ---- #94, round 2: a frame stalled on the byte face ---------------------
+    # valid stays up for the cycle that withdraws the frame, so a ready
+    # downstream takes one byte of a frame that never ends
+    ("the withdrawn frame stays offered for a cycle", TXSLOT,
+     "  assign tx_valid_o = ser_run_r && !ser_drop_w;\n",
+     "  assign tx_valid_o = ser_run_r;\n",
+     "#94 link loss: nothing is transmitted while the port is disabled"),
+    ("a disabled port tears a started frame", TXSLOT,
+     DROP,
+     "  assign ser_drop_w = cancel_i && ser_run_r;\n",
+     at_each_stall("the started frame keeps its place") + " | "
+     + at_each_stall("the started frame completes whole")),
+    ("NOT_ENABLED waits for the serializer", ENGINE,
+     PE_POP,
+     "  assign pe_pop_w   = pe_noten_r && disp_ready_w && ser_idle_w &&\n"
+     "                      !disp_valid_r;\n",
+     at_each_stall("asCapable falls within 2 ms of the fall")),
+    # both: the frame stays offered and NOT_ENABLED waits for it, the round-1
+    # serializer behaviour
+    ("a stalled frame holds NOT_ENABLED back", ENGINE,
+     [(PE_POP,
+       "  assign pe_pop_w   = pe_noten_r && disp_ready_w && ser_idle_w &&\n"
+       "                      !disp_valid_r;\n"),
+      (CANCEL, "      .cancel_i   (1'b0),\n")],
+     None,
+     "#94 stalled first byte: asCapable falls within 2 ms of the fall"),
+    # ---- #94, round 2: an exchange armed or queued at the fall -------------
+    ("NOT_ENABLED keeps the armed response", GENERATOR,
+     "    for s in (S_CEASE, S_CEASECNT, S_MULTI, S_RSPSEQ):\n",
+     "    for s in (S_CEASE, S_CEASECNT, S_MULTI):\n",
+     "#94 Follow_Up after the fall: nothing commits after NOT_ENABLED"
+     " | #94 Follow_Up after the fall: the delay holds"
+     " | #94 Follow_Up queued before the fall: nothing commits after"
+     " NOT_ENABLED"
+     " | #94 Follow_Up queued before the fall: the delay holds"),
+    # NOT_ENABLED dispatches last, behind the result and the queue
+    ("NOT_ENABLED queues behind earlier events", ENGINE,
+     [(PE_POP,
+       "  assign pe_pop_w   = pe_noten_r && !txts_pend_r && evq_empty_w &&\n"
+       "                      disp_ready_w && !disp_valid_r;\n"),
+      ("  assign txts_pop_w = txts_pend_r && !pe_noten_r && disp_ready_w &&\n",
+       "  assign txts_pop_w = txts_pend_r && disp_ready_w &&\n"),
+      ("  assign pop_w = !txts_pend_r && !pe_noten_r && !evq_empty_w &&\n",
+       "  assign pop_w = !txts_pend_r && !evq_empty_w &&\n")],
+     None,
+     "#94 Follow_Up queued before the fall: the delay holds"),
+    # ---- #94, round 2: a warm reset released with the port disabled ---------
+    # the round-1 rule: only a sample with the port enabled arms the edges
+    ("the first rise after a disabled release raises nothing", ENGINE,
+     "      port_ref_r  <= 1'b1;\n",
+     "      port_ref_r  <= port_ref_r || port_en_r;\n",
+     "#94 disabled warm reset: the first request comes within one interval"
+     " of the rise"
+     " | #94 disabled warm reset: the first request goes out at once after"
+     " the rise"),
 ]

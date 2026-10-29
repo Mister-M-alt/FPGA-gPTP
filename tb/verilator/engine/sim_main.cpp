@@ -234,6 +234,16 @@
 //         claim does not hold the next request after the rise
 // 47      #94: without a toggle the cease ends after its countdown and
 //         two beats, 5 s from the last request with this 3 s image
+// 48      #94: a Follow_Up after the fall, a t1 after it, or a Follow_Up
+//         queued behind a stall before it completes no exchange while
+//         the port is disabled
+// 49      #94: a frame stalled at its first byte is withdrawn at the
+//         fall, asCapable falls within 2 ms, and no frame starts while
+//         the port is disabled
+// 50      #94: a frame stalled after 1, 34 or 67 accepted bytes keeps its
+//         place and completes whole; asCapable still falls within 2 ms
+// 51      #94: a warm reset taken with the port disabled inside a cease:
+//         the first rise sends a request at once
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
 // the phases a self publication passes through: boot, mastership, 36..38,
@@ -441,6 +451,10 @@ class GptpEngineHarness {
     drop_ascapable_at_a_link_loss();
     drop_a_frame_built_across_the_fall();
     keep_the_countdown_exit();
+    complete_no_exchange_across_the_fall();
+    withdraw_a_frame_stalled_at_its_first_byte();
+    finish_a_frame_started_before_the_fall();
+    end_a_retained_cease_at_the_first_rise();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -569,6 +583,9 @@ class GptpEngineHarness {
   std::vector<uint64_t> txns;               // egress ts fed per frame
   //! the cycle each frame's first byte left, per frame (#94)
   std::vector<uint64_t> txsof;
+  //! the cycle of every accepted first byte, a frame that never ended
+  //! included (#94)
+  std::vector<uint64_t> txstarts;
   uint64_t cur_sof = 0;
   std::vector<uint8_t> cur;
   bool in_tx = false;
@@ -741,7 +758,12 @@ class GptpEngineHarness {
     phc_acc += static_cast<unsigned __int128>(
         static_cast<uint64_t>((500ll << 24) + phc_adj));
     if (tx_fire) {
-      if (tx_sof) { cur.clear(); in_tx = true; cur_sof = cyc; }
+      if (tx_sof) {
+        cur.clear();
+        in_tx = true;
+        cur_sof = cyc;
+        txstarts.push_back(cyc);
+      }
       if (in_tx) cur.push_back(tx_data);
       if (tx_eof && in_tx) {
         if (type_of(cur) == 0x2) pd_reqs_sent++;
@@ -6003,13 +6025,17 @@ class GptpEngineHarness {
   //! after it: the registered port level and the serializer's first byte
   static constexpr uint64_t FALL_SLACK_CYC = 16;
 
-  //! frames whose first byte left in cycles [from, to), of `mtype` or of
-  //! any type when it is negative
+  //! frames whose first byte left in cycles [from, to): complete frames of
+  //! `mtype`, or, when it is negative, every accepted first byte, so a
+  //! frame torn after it counts as well
   size_t frames_started_between(uint64_t from, uint64_t to, int mtype = -1) {
     size_t n = 0;
+    if (mtype < 0) {
+      for (const uint64_t c : txstarts) n += c >= from && c < to;
+      return n;
+    }
     for (size_t i = 0; i < txf.size(); i++)
-      if (txsof[i] >= from && txsof[i] < to &&
-          (mtype < 0 || type_of(txf[i]) == mtype))
+      if (txsof[i] >= from && txsof[i] < to && type_of(txf[i]) == mtype)
         n++;
     return n;
   }
@@ -6230,6 +6256,221 @@ class GptpEngineHarness {
                MS_CYC && first - last <= 5 * INTERVAL_CYC + MS_CYC, 1);
     expect("#94 countdown: the ladder re-earns after the cease",
            wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+  }
+
+  //! the first commit since `c0` clears asCapable within 2 ms of `fall`,
+  //! and the published flags carry it clear
+  bool ascap_fell_at_once(size_t c0, uint64_t fall) {
+    const PubSnap *f = first_commit_since(c0);
+    return f != nullptr && (f->flags & FL_ASCAP) == 0 &&
+           f->cyc - fall <= 2 * MS_CYC && (dut->pub_flags_o & FL_ASCAP) == 0;
+  }
+
+  //! the port rises: true when a Pdelay_Req's first byte leaves within 2 ms
+  bool rise_sends_a_request_at_once() {
+    const uint64_t r0 = pd_reqs_sent;
+    const size_t mark = txf.size();
+    const uint64_t rise = cyc;
+    dut->port_enabled_i = 1;
+    return wait_requests(r0 + 1, 2 * MS_CYC) &&
+           request_sof(mark, 0) - rise <= 2 * MS_CYC;
+  }
+
+  //! a peer's Pdelay_Req whose response then waits at its first byte, ready
+  //! held low (phase D5's stall)
+  void stall_a_response_at_its_first_byte(uint16_t rq) {
+    dut->tx_ready_i = 0;
+    send_peer_request(rq, phc() + 1000);
+    for (int j = 0; j < 200000 && !(dut->tx_valid_o && dut->tx_sof_o); j++)
+      tick();
+  }
+
+  // ---- 48: #94, NOT_ENABLED completes no Pdelay exchange -----------------
+  // 802.1AS-2011 Figure 11-8 leaves WAITING_FOR_PDELAY_RESP_FOLLOW_UP for
+  // NOT_ENABLED on the fall, and NOT_ENABLED takes no Follow_Up. A capable
+  // port's request is answered with a Pdelay_Resp before the fall, and
+  //   0: its Follow_Up arrives 2 ms after the fall;
+  //   1: the request's t1 is withheld, so the complete pair waits for it
+  //      (#31), and the t1 is returned 2 ms after the fall;
+  //   2: its Follow_Up arrives before the fall, but waits in the queue
+  //      behind a response of ours stalled after its first byte, which
+  //      completes when ready returns after the fall.
+  // Each pairing would publish a delay 100 ns above the last. None
+  // publishes or commits while the port is disabled, and after each rise
+  // asCapable takes two fresh exchanges
+  void complete_no_exchange_across_the_fall() {
+    refuse_a_pair_across_the_fall(0, "#94 Follow_Up after the fall");
+    refuse_a_pair_across_the_fall(1, "#94 t1 after the fall");
+    refuse_a_pair_across_the_fall(2, "#94 Follow_Up queued before the fall");
+  }
+
+  void refuse_a_pair_across_the_fall(int how, const char *tag) {
+    char n[120];
+    pd_mode = PD_NORMAL;
+    snprintf(n, sizeof n, "%s: a capable port first", tag);
+    expect(n, wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    pd_mode = PD_SKIP;
+    tx_seen = txf.size();
+    size_t ri = 0;
+    const bool got = !wait_tx(0x2, 2 * INTERVAL_CYC, &ri).empty();
+    uint16_t seq = got ? seq_of(txf[ri]) : 0;
+    if (how == 1) {                     // the next request's t1 is withheld
+      seq = static_cast<uint16_t>(seq + 1);
+      withhold(0x2, seq);
+      wait_tx(0x2, 2 * INTERVAL_CYC, &ri);
+    }
+    for (int k = 0; k < 4000 && how != 1 && txns[ri] == 0; k++) tick();
+    const uint64_t t1 = how == 1 ? phc() + 200 : txns[ri];
+    const uint64_t t2 = peer_ns(t1 + 300), t4 = t1 + 21200;
+    const uint64_t t3 = t2 + 19800;
+    send_peer_response(seq, t2, t4);
+    if (how == 1) send_peer_follow_up(seq, t3, t4 + 1000);
+    if (how == 2) {                     // one byte out, then held
+      stall_a_response_at_its_first_byte(0x9450);
+      dut->tx_ready_i = 1;
+      tick();
+      dut->tx_ready_i = 0;
+      send_peer_follow_up(seq, t3, t4 + 1000);
+    }
+    const uint32_t pd0 = dut->pub_pdelay_ns_o;
+    dut->port_enabled_i = 0;
+    run(2 * MS_CYC);
+    const size_t c1 = commit_snaps.size();
+    if (how == 0) send_peer_follow_up(seq, t3, t4 + 1000);
+    if (how == 1) {
+      deliver_result_by_tag(t1, seq, 0x2, true);
+      txns[ri] = t1;                    // so the auto-peer walks past it
+    }
+    dut->tx_ready_i = 1;
+    run(4000);
+    snprintf(n, sizeof n, "%s: nothing commits after NOT_ENABLED", tag);
+    expect(n, commit_snaps.size() - c1, 0);
+    snprintf(n, sizeof n, "%s: the delay holds", tag);
+    expect(n, dut->pub_pdelay_ns_o, pd0);
+    run_svc(500ull * MS_CYC);
+    dut->port_enabled_i = 1;
+    re_earn_in_two_exchanges(tag);
+  }
+
+  // ---- 49: #94, a frame stalled at its first byte is withdrawn ------------
+  // A capable master's next frame waits at its first byte, ready held low,
+  // and the port falls. Disable does not wait for the byte face: asCapable
+  // falls with a commit within 2 ms, and the frame is withdrawn, so when
+  // ready returns with the port still disabled, a beat included, no frame
+  // starts (802.1AS-2011 10.2.4.11). No egress claim is stranded: on the
+  // rise one request goes out at once and asCapable takes two exchanges
+  void withdraw_a_frame_stalled_at_its_first_byte() {
+    pd_mode = PD_NORMAL;
+    expect("#94 stalled first byte: a capable master first",
+           wait_flags(FL_AMGM | FL_ASCAP, FL_AMGM | FL_ASCAP, 8000000ull), 1);
+    pd_mode = PD_SKIP;
+    drain_automatic_results();
+    dut->tx_ready_i = 0;
+    for (uint64_t k = 0; k < 2 * INTERVAL_CYC && !dut->tx_valid_o; k++) tick();
+    expect("#94 stalled first byte: a frame waits at its first byte",
+           dut->tx_valid_o && dut->tx_sof_o, 1);
+    const size_t c0 = commit_snaps.size();
+    const uint64_t fall = cyc;
+    dut->port_enabled_i = 0;
+    run(2 * MS_CYC);
+    expect("#94 stalled first byte: asCapable falls within 2 ms of the fall",
+           ascap_fell_at_once(c0, fall), 1);
+    expect("#94 stalled first byte: the frame is withdrawn", dut->tx_valid_o,
+           0);
+    dut->tx_ready_i = 1;
+    run_svc(1200ull * MS_CYC);
+    expect("#94 stalled first byte: no frame starts while the port is "
+           "disabled", frames_started_between(fall, cyc), 0);
+    expect("#94 stalled first byte: the first request goes out at once after "
+           "the rise", rise_sends_a_request_at_once(), 1);
+    re_earn_in_two_exchanges("#94 stalled first byte");
+  }
+
+  // ---- 50: #94, a frame started before the fall runs to its end ----------
+  // A peer's Pdelay_Req is answered with ready held low. After k accepted
+  // bytes of the 68-byte response, k = 1, 34 and 67, the stall is held
+  // across the fall and a beat. The byte face has no abort, so the started
+  // frame keeps its place and completes whole when ready returns, and
+  // nothing else starts while the port is disabled. NOT_ENABLED does not
+  // wait for it: at every k asCapable falls with a commit within 2 ms of
+  // the fall, and on the rise one request goes out at once
+  void finish_a_frame_started_before_the_fall() {
+    char n[120];
+    uint16_t rq = 0x9491;
+    for (const int k : {1, 34, 67}) {
+      pd_mode = PD_NORMAL;
+      snprintf(n, sizeof n, "#94 stalled at byte %d: a capable port first",
+               k);
+      expect(n, wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+      pd_mode = PD_SKIP;
+      drain_automatic_results();
+      for (int j = 0; j < 40000 && (dut->dbg_busy_o || dut->tx_valid_o); j++)
+        tick();
+      const size_t mark = txf.size();
+      stall_a_response_at_its_first_byte(rq);
+      for (int b = 0; b < k; b++) {
+        dut->tx_ready_i = 1;
+        tick();
+        dut->tx_ready_i = 0;
+      }
+      const size_t c0 = commit_snaps.size();
+      const uint64_t fall = cyc;
+      dut->port_enabled_i = 0;
+      run(2 * MS_CYC);
+      snprintf(n, sizeof n, "#94 stalled at byte %d: asCapable falls within "
+               "2 ms of the fall", k);
+      expect(n, ascap_fell_at_once(c0, fall), 1);
+      snprintf(n, sizeof n, "#94 stalled at byte %d: the started frame keeps "
+               "its place", k);
+      expect(n, dut->tx_valid_o, 1);
+      run_svc(1100ull * MS_CYC);
+      dut->tx_ready_i = 1;
+      run_svc(10ull * MS_CYC);
+      const int resp = find_tx(mark, 0x3, rq);
+      snprintf(n, sizeof n, "#94 stalled at byte %d: the started frame "
+               "completes whole", k);
+      expect(n, resp >= 0 && txf[resp].size() == 68 && txsof[resp] < fall, 1);
+      snprintf(n, sizeof n, "#94 stalled at byte %d: nothing else starts "
+               "while the port is disabled", k);
+      expect(n, frames_started_between(fall, cyc), 0);
+      snprintf(n, sizeof n, "#94 stalled at byte %d: the first request goes "
+               "out at once after the rise", k);
+      expect(n, rise_sends_a_request_at_once(), 1);
+      rq++;
+    }
+  }
+
+  // ---- 51: #94, a warm reset taken with the port disabled ends the cease --
+  // Scratch, and a Milan v1.2 4.2.6.2.5 cease with it, survives a warm reset
+  // (phase 28). 802.1AS-2011 Figure 11-8 enters NOT_ENABLED at BEGIN, and
+  // the port's rise leaves it through INITIAL_SEND_PDELAY_REQ whatever
+  // scratch retained. So 1.3 s into the countdown the port falls with a
+  // warm reset and stays disabled 1.3 s past its release, a boot beat
+  // included. Its first rise sends a request at once instead of waiting
+  // out the countdown, and asCapable takes two fresh exchanges
+  void end_a_retained_cease_at_the_first_rise() {
+    pd_mode = PD_NORMAL;
+    const bool capable = wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull);
+    pd_mode = PD_DUAL;
+    expect("#94 disabled warm reset: three multi-answered requests cease",
+           capable && wait_flags(FL_ASCAP, 0, 16000000ull), 1);
+    run_svc(1300ull * MS_CYC);
+    pd_mode = PD_OFF;
+    dut->port_enabled_i = 0;
+    dut->rst_n = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->rst_n = 1;
+    run_svc(1300ull * MS_CYC);
+    const uint64_t r0 = pd_reqs_sent;
+    const size_t mark = txf.size();
+    const uint64_t rise = cyc;
+    dut->port_enabled_i = 1;
+    expect("#94 disabled warm reset: the first request comes within one "
+           "interval of the rise", wait_requests(r0 + 1, INTERVAL_CYC), 1);
+    const uint64_t s0 = request_sof(mark, 0);
+    expect("#94 disabled warm reset: the first request goes out at once "
+           "after the rise", s0 != ~0ull && s0 - rise <= 2 * MS_CYC, 1);
+    re_earn_in_two_exchanges("#94 disabled warm reset");
   }
 
   // ---- 41: #89, sync receipt ageing needs gmPresent (priority1 255 pass) ---
