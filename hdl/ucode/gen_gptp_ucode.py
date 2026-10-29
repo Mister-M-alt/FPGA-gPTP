@@ -8,13 +8,14 @@ FPGA-gPTP #94, portEnabled (802.1AS-2011 10.2.4.11: MAC_Operational and the
 port administratively enabled), which the engine now takes as an input:
 
   * The Milan v1.2 4.2.6.2.5 cease ends on a link or portEnabled toggle as
-    well as on its 5-minute countdown. Each portEnabled edge after the
-    first enable since reset raises timer slot 6 (NOTEN). It clears the
-    cease, its countdown and streak, the asCapable ladder and asCapable,
-    and commits: Figure 11-8 (Cor1, Cor2) leaves NOT_ENABLED only through
-    INITIAL_SEND_PDELAY_REQ, with lostResponses = 0 and asCapable = FALSE.
-    It also disarms the outstanding exchange, so no Follow_Up heard while
-    the port is disabled pairs or publishes.
+    well as on its 5-minute countdown. Each portEnabled change after the
+    first sample since reset raises timer slot 6 (NOTEN), so a port that
+    is disabled at a warm reset's release ends a retained cease at its
+    rise. NOTEN clears the cease, its countdown and streak, the asCapable
+    ladder and asCapable, and commits: Figure 11-8 (Cor1, Cor2) leaves
+    NOT_ENABLED only through INITIAL_SEND_PDELAY_REQ, with lostResponses =
+    0 and asCapable = FALSE. It also disarms the outstanding exchange, so
+    no Follow_Up heard while the port is disabled pairs or publishes.
   * While the port is disabled the engine reads no transmit credit,
     withdraws every frame whose first byte is unaccepted, a SEND issued
     while disabled included, and holds both egress claims invalid, so it

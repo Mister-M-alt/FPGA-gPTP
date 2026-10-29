@@ -109,7 +109,7 @@ module KL_gptp_engine
     //! administratively enabled, a level synchronous to clk_i. While it is
     //! low the port is NOT_ENABLED (Figure 11-8): it starts no frame, owes
     //! no egress stamp and completes no Pdelay exchange. Each change after
-    //! the first enable since reset clears asCapable and the Milan v1.2
+    //! the first sample since reset clears asCapable and the Milan v1.2
     //! 4.2.6.2.5 cease; a rise also sends a Pdelay_Req at once (#94).
     input  wire         port_enabled_i,
 
@@ -156,14 +156,16 @@ module KL_gptp_engine
   //! #94. port_en_r is the level every gate below reads: the transmit
   //! credit word, the serializer's unstarted frame and the egress claims.
   //! Received frames still raise events; what they would send is withdrawn
-  //! before its first byte. port_seen_r marks the first enable since
-  //! reset, which the boot cadence already serves, so only later edges
-  //! raise events. Each edge owes a slot-6 timer event, the microcode's
-  //! NOT_ENABLED leg, which dispatches ahead of every other event; a rise
-  //! then owes the queue a slot-0 one, the request beat
-  //! (INITIAL_SEND_PDELAY_REQ).
+  //! before its first byte. port_ref_r marks the first sample since reset
+  //! as the reference level, so only a later change is an edge: a port
+  //! enabled at release raises nothing, the boot cadence serving it, and a
+  //! port disabled at release raises both events at its rise (Figure 11-8:
+  //! BEGIN enters NOT_ENABLED whatever scratch retained). Each edge owes a
+  //! slot-6 timer event, the microcode's NOT_ENABLED leg, which dispatches
+  //! ahead of every other event; a rise then owes the queue a slot-0 one,
+  //! the request beat (INITIAL_SEND_PDELAY_REQ).
   localparam logic [2:0] PE_SLOT_C = 3'd6;
-  logic port_en_r, port_seen_r;
+  logic port_en_r, port_ref_r;
   logic pe_noten_r, pe_beat_r, pe_push_w, pe_pop_w;
 
   // ---------------------------------------------------------- RX parser
@@ -1108,20 +1110,21 @@ module KL_gptp_engine
     end
   end
 
-  //! #94: the portEnabled level and the events its edges owe.
-  //! A later edge re-raises NOT_ENABLED; a fall withdraws an owed beat.
+  //! #94: the portEnabled level and the events its edges owe. The first
+  //! sample after release is the reference, whatever its level. A later
+  //! edge re-raises NOT_ENABLED; a fall withdraws an owed beat.
   always_ff @(posedge clk_i) begin : port_enable
     if (!rst_n) begin
       port_en_r   <= 1'b0;
-      port_seen_r <= 1'b0;
+      port_ref_r  <= 1'b0;
       pe_noten_r  <= 1'b0;
       pe_beat_r   <= 1'b0;
     end else begin
       port_en_r   <= port_enabled_i;
-      port_seen_r <= port_seen_r || port_en_r;
+      port_ref_r  <= 1'b1;
       if (pe_pop_w)  pe_noten_r <= 1'b0;
       if (pe_push_w) pe_beat_r  <= 1'b0;
-      if (port_seen_r && (port_enabled_i != port_en_r)) begin
+      if (port_ref_r && (port_enabled_i != port_en_r)) begin
         pe_noten_r <= 1'b1;
         pe_beat_r  <= port_enabled_i;
       end
