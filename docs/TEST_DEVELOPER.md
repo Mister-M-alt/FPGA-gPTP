@@ -140,6 +140,11 @@ Prefer independent protocol formulas and frame builders.
 - Sends and commits nothing while the port is disabled.
 - Drops a frame built across the fall.
 - Keeps the cease countdown exit unchanged.
+- Withdraws a frame stalled at its first byte.
+- Completes a frame stalled after its first byte.
+- Clears asCapable at once behind a stalled byte face.
+- Pairs no Follow_Up or late t1 across the fall.
+- Ends a cease retained across a disabled warm reset.
 - Clears sync-ok on every handover to a peer.
 - Appends thisClock to direct and multi-hop received paths.
 - Checks the seven-entry, eight-entry, empty and absent path boundaries.

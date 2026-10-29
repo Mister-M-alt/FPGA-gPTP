@@ -121,7 +121,21 @@ A transfer needs both valid and ready.
 
 Outputs remain stable while ready stays low.
 
+One exception serves a disabled port.
+
+A frame still waiting at its first byte is withdrawn.
+
+Its valid falls with no transfer.
+
+A started frame always runs to its last byte.
+
+The face has no abort signal.
+
+Consume accepted transfers only, never a held valid.
+
 The serializer blocks new event dispatches.
+
+The NOT_ENABLED leg alone skips that wait.
 
 ## Egress timestamp results
 
@@ -201,25 +215,43 @@ High means MAC_Operational and administrative enable together.
 
 The parent drives its effective link here.
 
-A low port transmits no gPTP frame.
+A low port starts no gPTP frame.
 
 Initiating beats see no credit while it stays low.
 
-Every SEND issued while low is dropped.
+Every frame still waiting at its first byte is withdrawn.
+
+That includes a frame whose SEND came while low.
+
+A frame already started completes, as the transmit interface states.
 
 Both egress claims read empty while low.
 
 Received frames still dispatch; their replies are dropped.
 
-The first enable after reset raises nothing.
+No Pdelay exchange completes while the port is low.
 
-The boot cadence already sends the first request.
+The first sample after reset is the reference level.
 
-Each later edge clears asCapable and commits at once.
+A port high at release raises nothing.
+
+The boot cadence then sends the first request.
+
+A port low at release makes its rise an edge.
+
+Each edge clears asCapable and commits at once.
+
+A stalled transmit path does not delay that commit.
 
 It also ends the multiple-responder cease and its countdown.
 
+That holds for a cease retained across a warm reset.
+
 Milan 4.2.6.2.5 lists this toggle.
+
+Each edge also disarms the outstanding Pdelay exchange.
+
+Its Follow_Up and its late t1 pair nothing.
 
 A rise then sends one Pdelay_Req at once.
 
@@ -228,6 +260,8 @@ That request counts no lost response.
 asCapable returns only after two good exchanges.
 
 The five-minute countdown remains the other exit.
+
+A change made while reset is held is not seen.
 
 [Issue #94](https://github.com/Mister-M-alt/FPGA-gPTP/issues/94) records this contract.
 
