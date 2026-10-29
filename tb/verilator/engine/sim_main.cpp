@@ -447,6 +447,14 @@ class GptpEngineHarness {
     age_a_grandmaster_whose_sync_fails();
     age_the_port_whatever_role_the_timeout_finds();
     defer_a_whole_interval_to_the_issue_shapes();
+    run_the_port_enable_phases();
+    hold_every_committed_path_coherent();
+    keep_sync_ok_in_every_master_cycle();
+    end_every_peer_path_with_thisclock();
+  }
+
+  //! #94, phases 44 to 51: portEnabled, in file order
+  void run_the_port_enable_phases() {
     end_the_cease_on_a_port_toggle();
     drop_ascapable_at_a_link_loss();
     drop_a_frame_built_across_the_fall();
@@ -455,9 +463,6 @@ class GptpEngineHarness {
     withdraw_a_frame_stalled_at_its_first_byte();
     finish_a_frame_started_before_the_fall();
     end_a_retained_cease_at_the_first_rise();
-    hold_every_committed_path_coherent();
-    keep_sync_ok_in_every_master_cycle();
-    end_every_peer_path_with_thisclock();
   }
 
   //! flags bit 0 in a self publication: gmPresent when thisClock is
@@ -6321,7 +6326,8 @@ class GptpEngineHarness {
     }
     for (int k = 0; k < 4000 && how != 1 && txns[ri] == 0; k++) tick();
     const uint64_t t1 = how == 1 ? phc() + 200 : txns[ri];
-    const uint64_t t2 = peer_ns(t1 + 300), t4 = t1 + 21200;
+    const uint64_t t2 = peer_ns(t1 + 300);
+    const uint64_t t4 = t1 + 21200;
     const uint64_t t3 = t2 + 19800;
     send_peer_response(seq, t2, t4);
     if (how == 1) send_peer_follow_up(seq, t3, t4 + 1000);
