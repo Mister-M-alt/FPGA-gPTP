@@ -1309,6 +1309,9 @@ class GptpEngineHarness {
     ts_offer = false;
     drive_result_face();
     dut->tx_credit_i = 1;
+    //! the port is enabled from before reset release, so the boot cadence
+    //! sends the first request and no portEnabled edge is raised (#94)
+    dut->port_enabled_i = 1;
     for (int i = 0; i < 8; i++) tick();
     //! ready is low through reset: a beat the engine would not record must
     //! not look accepted to the producer

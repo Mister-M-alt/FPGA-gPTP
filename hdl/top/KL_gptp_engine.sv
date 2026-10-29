@@ -24,7 +24,9 @@
 //                                            delayed behind another never
 //                                            reads a successor's frame)
 //                  1  timestamp regs    RO  (0 ingress ts, 1 egress ts,
-//                                            2 transmit admission credit)
+//                                            2 transmit admission credit,
+//                                            low while the port is
+//                                            disabled)
 //                  2  scratch RAM       RW  (64 x 64, protocol state)
 //                  3  publish bank      RW  (0 gm id, 1 parent id, 2 flags,
 //                                            3 pdelay ns, 6 path count, 7..14
@@ -101,6 +103,14 @@ module KL_gptp_engine
     //! responses and both Follow_Up companions are never gated.
     input  wire         tx_credit_i,
 
+    //! portEnabled (802.1AS-2011 10.2.4.11): MAC_Operational and the port
+    //! administratively enabled, a level synchronous to clk_i. While it is
+    //! low the port is NOT_ENABLED (Figure 11-8): it transmits nothing and
+    //! owes no egress stamp. Each change after the first enable since
+    //! reset clears asCapable and the Milan v1.2 4.2.6.2.5 cease; a rise
+    //! also sends a Pdelay_Req at once (#94).
+    input  wire         port_enabled_i,
+
     //! PHC face (the parent timestamp_counter's knobs)
     output logic        phc_addend_we_o,
     output logic [31:0] phc_addend_o,
@@ -139,6 +149,18 @@ module KL_gptp_engine
     output logic        dbg_busy_o,
     output logic  [4:0] dbg_status_o
 );
+
+  // -------------------------------------------------------- portEnabled
+  //! #94. port_en_r is the level every gate below reads: the transmit
+  //! credit word, SEND and the egress claims. Received frames still raise
+  //! events; what they would send is dropped at SEND. port_seen_r
+  //! marks the first enable since reset, which the boot cadence already
+  //! serves, so only later edges raise events. Each edge owes the queue
+  //! a slot-6 timer event, the microcode's NOT_ENABLED leg, and a rise
+  //! then a slot-0 one, the request beat (INITIAL_SEND_PDELAY_REQ).
+  localparam logic [2:0] PE_SLOT_C = 3'd6;
+  logic port_en_r, port_seen_r;
+  logic pe_noten_r, pe_beat_r, pe_push_w;
 
   // ---------------------------------------------------------- RX parser
   logic        bank_we_w;
@@ -467,6 +489,7 @@ module KL_gptp_engine
     push_w      = 1'b0;
     push_data_w = '0;
     tev_ready_w = 1'b0;
+    pe_push_w   = 1'b0;
     ann_reject_w = pev_valid_w &&
                    (pev_code_w == EV_RX_ANNOUNCE_C) &&
                    !ann_event_capture_r;
@@ -477,6 +500,12 @@ module KL_gptp_engine
       push_w      = !evq_full_w;
       push_data_w = {EV_TMR_C, 16'd0, 13'd0, tev_slot_w};
       tev_ready_w = !evq_full_w;
+    end else if (pe_noten_r || pe_beat_r) begin
+      //! the portEnabled events (#94), NOT_ENABLED first, in timer form
+      push_w      = !evq_full_w;
+      pe_push_w   = !evq_full_w;
+      push_data_w = {EV_TMR_C, 16'd0, 13'd0,
+                     pe_noten_r ? PE_SLOT_C : 3'd0};
     end
   end
 
@@ -763,10 +792,11 @@ module KL_gptp_engine
       end
       //! word 0 ingress, word 1 egress, word 2 the transmit admission
       //! credit. The credit arm is selected by addr[1] alone, so neither
-      //! timestamp read moves off its original one-bit select.
+      //! timestamp read moves off its original one-bit select. A disabled
+      //! port has no credit, so all three initiating beats skip (#94).
       4'd1: begin
         if (st_addr_w[1])
-          st_rd_mux_w = {63'd0, tx_credit_i};
+          st_rd_mux_w = {63'd0, tx_credit_i && port_en_r};
         else
           st_rd_mux_w = st_addr_w[0] ? txts_r
                                      : rxts_bank_r[disp_bank_r];
@@ -1042,10 +1072,41 @@ module KL_gptp_engine
         endcase
       end
 
+      //! #94: a disabled port owes no egress stamp. Both claims read zero
+      //! while it is disabled and after, until written again, so a stamp
+      //! the down link never returns cannot block a later beat, and a late
+      //! one builds no companion. After the writes above, so it wins.
+      if (!port_en_r) begin
+        tmr_claim_valid_r  <= 1'b0;
+        resp_claim_valid_r <= 1'b0;
+      end
+
       // gather: atomic millisecond snapshot
       gx_valid_r <= gx_req_w && !gx_valid_r;
       if (gx_req_w) begin
         gx_data_r <= {32'd0, ms_now_w};
+      end
+    end
+  end
+
+  //! #94: the portEnabled level and the events its edges owe the queue.
+  //! A later edge re-raises NOT_ENABLED; a fall withdraws an owed beat.
+  always_ff @(posedge clk_i) begin : port_enable
+    if (!rst_n) begin
+      port_en_r   <= 1'b0;
+      port_seen_r <= 1'b0;
+      pe_noten_r  <= 1'b0;
+      pe_beat_r   <= 1'b0;
+    end else begin
+      port_en_r   <= port_enabled_i;
+      port_seen_r <= port_seen_r || port_en_r;
+      if (pe_push_w) begin
+        if (pe_noten_r) pe_noten_r <= 1'b0;
+        else            pe_beat_r  <= 1'b0;
+      end
+      if (port_seen_r && (port_enabled_i != port_en_r)) begin
+        pe_noten_r <= 1'b1;
+        pe_beat_r  <= port_enabled_i;
       end
     end
   end
@@ -1073,7 +1134,8 @@ module KL_gptp_engine
       .rb_wdata_i (rb_wdata_w),
       .rb_wstrb_i (rb_wstrb_w),
       .rb_ready_o (rb_ready_w),
-      .send_i     (resp_send_w),
+      //! #94: a frame built across the port's fall is dropped unsent
+      .send_i     (resp_send_w && port_en_r),
       .send_len_i (resp_len_w),
       .ser_idle_o (ser_idle_w),
       .tx_valid_o (tx_valid_o),
