@@ -13,8 +13,11 @@ port administratively enabled), which the engine now takes as an input:
     cease, its countdown and streak, the asCapable ladder and asCapable,
     and commits: Figure 11-8 (Cor1, Cor2) leaves NOT_ENABLED only through
     INITIAL_SEND_PDELAY_REQ, with lostResponses = 0 and asCapable = FALSE.
-  * While the port is disabled the engine reads no transmit credit, drops
-    every SEND and holds both egress claims invalid, so it sends nothing.
+  * While the port is disabled the engine reads no transmit credit,
+    withdraws every frame whose first byte is unaccepted, a SEND issued
+    while disabled included, and holds both egress claims invalid, so it
+    starts no frame. NOTEN dispatches ahead of every other event and does
+    not wait for a stalled frame.
   * On a rise the engine queues the 1 s beat right behind NOTEN, so one
     Pdelay_Req goes out at once and the cadence runs from it. NOTEN left
     S_PDGOT set, so that beat counts no lost response.
@@ -2187,6 +2190,9 @@ def prog_leg_noten(base: int) -> Prog:
     commit. The engine sends nothing while the port is disabled. S_PDGOT
     set makes the next beat's judgement count no loss, so its request goes
     out with lostResponses = 0. On a rise the engine queues that beat next.
+
+    The engine dispatches this leg ahead of every other event and without
+    waiting for the serializer, so it must never build or SEND.
 
     NOTENTAIL is the tail the cease entry shares: the interval's identity
     bookkeeping, then PDPAIR's bad verdict, which clears S_PDOK and

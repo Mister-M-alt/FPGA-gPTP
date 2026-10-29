@@ -19,6 +19,9 @@
 //                on the TX byte face with sof/eof marks. The engine gates
 //                dispatch of the next event on ser_idle_o, so a µprogram
 //                never builds into a slot that is still on the wire.
+//                cancel_i withdraws a frame no byte of which has been
+//                accepted; a frame already started runs to its last byte,
+//                since the byte face has no abort (#94).
 //---------------------------------------------------------------------------//
 `default_nettype none
 
@@ -40,6 +43,9 @@ module KL_gptp_tx_slot
     //! send request (µCPU OP_SEND_RESP)
     input  wire         send_i,
     input  wire  [10:0] send_len_i,
+    //! the port is disabled (#94): withdraw the frame while its first byte
+    //! is unaccepted, and drop valid in the same cycle
+    input  wire         cancel_i,
     output logic        ser_idle_o,
 
     //! TX byte face
@@ -112,9 +118,15 @@ module KL_gptp_tx_slot
   logic [AW_C-1:0] ser_addr_r;
   logic [10:0]     ser_left_r;
   logic            ser_sof_r;
+  //! a frame not yet started while cancel_i is high: no byte of it has
+  //! been accepted, so withdrawing it leaves the face at a frame boundary.
+  //! ser_sof_r implies ser_run_r: both rise on SEND, and the first
+  //! accepted byte clears ser_sof_r
+  logic            ser_drop_w;
 
+  assign ser_drop_w = cancel_i && ser_sof_r;
   assign ser_idle_o = !ser_run_r;
-  assign tx_valid_o = ser_run_r;
+  assign tx_valid_o = ser_run_r && !ser_drop_w;
   assign tx_data_o  = slot_r[ser_addr_r];
   assign tx_sof_o   = ser_sof_r;
   assign tx_eof_o   = ser_run_r && (ser_left_r == 11'd1);
@@ -133,6 +145,9 @@ module KL_gptp_tx_slot
           ser_left_r <= send_len_i;
           ser_sof_r  <= 1'b1;
         end
+      end else if (ser_drop_w) begin
+        ser_run_r  <= 1'b0;
+        ser_sof_r  <= 1'b0;
       end else if (tx_ready_i) begin
         ser_sof_r  <= 1'b0;
         ser_addr_r <= ser_addr_r + AW_C'(1);
