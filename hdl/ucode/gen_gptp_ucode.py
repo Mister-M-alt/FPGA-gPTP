@@ -13,6 +13,8 @@ port administratively enabled), which the engine now takes as an input:
     cease, its countdown and streak, the asCapable ladder and asCapable,
     and commits: Figure 11-8 (Cor1, Cor2) leaves NOT_ENABLED only through
     INITIAL_SEND_PDELAY_REQ, with lostResponses = 0 and asCapable = FALSE.
+    It also disarms the outstanding exchange, so no Follow_Up heard while
+    the port is disabled pairs or publishes.
   * While the port is disabled the engine reads no transmit credit,
     withdraws every frame whose first byte is unaccepted, a SEND issued
     while disabled included, and holds both egress claims invalid, so it
@@ -23,7 +25,7 @@ port administratively enabled), which the engine now takes as an input:
     S_PDGOT set, so that beat counts no lost response.
   * The countdown exit and every other state are unchanged. The cease entry
     now ends in NOTEN's tail, which writes the same cells and commits the
-    same flags, so the ROM keeps its size.
+    same flags; NOTEN's disarm adds one word.
 
 FPGA-gPTP #89, #90 and #91, the receipt rules of 802.1AS-2011 as corrected
 by Cor1 and Cor2, the edition Milan v1.2 profiles:
@@ -2191,6 +2193,13 @@ def prog_leg_noten(base: int) -> Prog:
     set makes the next beat's judgement count no loss, so its request goes
     out with lostResponses = 0. On a rise the engine queues that beat next.
 
+    NOT_ENABLED takes no Pdelay_Resp_Follow_Up, so both edges also disarm
+    the outstanding exchange: S_RSPSEQ zero refuses its Follow_Up in
+    PDPOST, and S_PDGOT set refuses a later response's arm until the next
+    request. A pair already frozen for its t1 cannot complete either: the
+    stamp finds no claim while the port is disabled (KL_gptp_engine.sv),
+    and the next request cancels the pair.
+
     The engine dispatches this leg ahead of every other event and without
     waiting for the serializer, so it must never build or SEND.
 
@@ -2198,7 +2207,7 @@ def prog_leg_noten(base: int) -> Prog:
     bookkeeping, then PDPAIR's bad verdict, which clears S_PDOK and
     asCapable and commits."""
     p = Prog(base)
-    for s in (S_CEASE, S_CEASECNT, S_MULTI):
+    for s in (S_CEASE, S_CEASECNT, S_MULTI, S_RSPSEQ):
         p.emit("WRST", ra=0, imm=RG_SCR | s, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)

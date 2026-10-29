@@ -107,10 +107,10 @@ module KL_gptp_engine
 
     //! portEnabled (802.1AS-2011 10.2.4.11): MAC_Operational and the port
     //! administratively enabled, a level synchronous to clk_i. While it is
-    //! low the port is NOT_ENABLED (Figure 11-8): it starts no frame and
-    //! owes no egress stamp. Each change after the first enable since
-    //! reset clears asCapable and the Milan v1.2 4.2.6.2.5 cease; a rise
-    //! also sends a Pdelay_Req at once (#94).
+    //! low the port is NOT_ENABLED (Figure 11-8): it starts no frame, owes
+    //! no egress stamp and completes no Pdelay exchange. Each change after
+    //! the first enable since reset clears asCapable and the Milan v1.2
+    //! 4.2.6.2.5 cease; a rise also sends a Pdelay_Req at once (#94).
     input  wire         port_enabled_i,
 
     //! PHC face (the parent timestamp_counter's knobs)
