@@ -15,11 +15,10 @@ S_MULTI write matters only when a second responder's Pdelay_Resp lands
 between the leg and the request beat queued right behind it; the interval
 clear the leg also makes otherwise restarts the streak at that beat.
 
-The second round's controls stand for the three disable paths a review
-found open: a frame stalled on the byte face (withdrawn before its first
-byte, completed after it, and never holding NOT_ENABLED back), an exchange
-still armed or queued at the fall, and a warm reset released with the port
-disabled.
+Three disable paths have controls of their own: a frame stalled on the
+byte face (withdrawn before its first byte, completed after it, and never
+holding NOT_ENABLED back), an exchange still armed or queued at the fall,
+and a warm reset released with the port disabled.
 
 The table lives in its own module so that the arm stays under the parent
 repository's module length ratchet. It is data only.
@@ -155,7 +154,7 @@ PORT_MUTATIONS = [
      "#82 cold release: one commit before the first beat"
      " | #82 warm reset: one commit in the first 2 ms"
      " | p1 255 #82 cold release: one commit before the first beat"),
-    # ---- #94, round 2: a frame stalled on the byte face ---------------------
+    # ---- #94: a frame stalled on the byte face -----------------------------
     # valid stays up for the cycle that withdraws the frame, so a ready
     # downstream takes one byte of a frame that never ends
     ("the withdrawn frame stays offered for a cycle", TXSLOT,
@@ -172,8 +171,8 @@ PORT_MUTATIONS = [
      "  assign pe_pop_w   = pe_noten_r && disp_ready_w && ser_idle_w &&\n"
      "                      !disp_valid_r;\n",
      at_each_stall("asCapable falls within 2 ms of the fall")),
-    # both: the frame stays offered and NOT_ENABLED waits for it, the round-1
-    # serializer behaviour
+    # both: the frame stays offered and NOT_ENABLED waits for it, a
+    # serializer with no withdrawal
     ("a stalled frame holds NOT_ENABLED back", ENGINE,
      [(PE_POP,
        "  assign pe_pop_w   = pe_noten_r && disp_ready_w && ser_idle_w &&\n"
@@ -181,7 +180,7 @@ PORT_MUTATIONS = [
       (CANCEL, "      .cancel_i   (1'b0),\n")],
      None,
      "#94 stalled first byte: asCapable falls within 2 ms of the fall"),
-    # ---- #94, round 2: an exchange armed or queued at the fall -------------
+    # ---- #94: an exchange armed or queued at the fall ----------------------
     ("NOT_ENABLED keeps the armed response", GENERATOR,
      "    for s in (S_CEASE, S_CEASECNT, S_MULTI, S_RSPSEQ):\n",
      "    for s in (S_CEASE, S_CEASECNT, S_MULTI):\n",
@@ -201,8 +200,8 @@ PORT_MUTATIONS = [
        "  assign pop_w = !txts_pend_r && !evq_empty_w &&\n")],
      None,
      "#94 Follow_Up queued before the fall: the delay holds"),
-    # ---- #94, round 2: a warm reset released with the port disabled ---------
-    # the round-1 rule: only a sample with the port enabled arms the edges
+    # ---- #94: a warm reset released with the port disabled -----------------
+    # only a sample with the port enabled arms the edges
     ("the first rise after a disabled release raises nothing", ENGINE,
      "      port_ref_r  <= 1'b1;\n",
      "      port_ref_r  <= port_ref_r || port_en_r;\n",
