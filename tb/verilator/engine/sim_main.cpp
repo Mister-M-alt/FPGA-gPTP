@@ -221,7 +221,7 @@
 //         their path from its received head, and stop our Announce for a
 //         whole interval of the parent's usable Sync
 // 44      #94, after 43: inside a Milan v1.2 4.2.6.2.5 cease the port
-//         falls for 0.5 s (802.1AS-2011 10.2.4.11). Nothing is sent while
+//         falls for 1.2 s (802.1AS-2011 10.2.4.11). Nothing is sent while
 //         it is down; on the rise one Pdelay_Req goes out at once
 //         (INITIAL_SEND_PDELAY_REQ, Figure 11-8), then one per interval.
 //         Unanswered, only the fifth loss after the rise commits asCapable
@@ -6062,27 +6062,27 @@ class GptpEngineHarness {
   // ---- 44: #94, a portEnabled toggle ends the Milan v1.2 4.2.6.2.5 cease --
   // Three requests answered by two identities cease Pdelay_Req (phase 27),
   // and asCapable falls with the cease. 1.3 s into its 3 s countdown the
-  // port falls for 0.5 s. 802.1AS-2011 Figure 11-8 (Cor1, Cor2) leaves
-  // NOT_ENABLED only through INITIAL_SEND_PDELAY_REQ, which sends at once
-  // with lostResponses = 0, and the toggle ends the cease. Nothing leaves
-  // the port while it is down. Unanswered, a request goes out every
+  // port falls for 1.2 s, so one beat lands while it is down and the
+  // countdown has not yet resumed. 802.1AS-2011 Figure 11-8 (Cor1, Cor2)
+  // leaves NOT_ENABLED only through INITIAL_SEND_PDELAY_REQ, which sends
+  // at once with lostResponses = 0, and the toggle ends the cease. Nothing
+  // leaves the port while it is down. Unanswered, a request goes out every
   // interval, and only the fifth loss after the rise commits asCapable
   // FALSE again (Figure 11-8 RESET). Answered, asCapable takes two
   // exchanges (Milan v1.2 4.2.6.2.4)
   void end_the_cease_on_a_port_toggle() {
     pd_mode = PD_NORMAL;
-    expect("#94 toggle: capable before the storm",
-           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    const bool capable = wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull);
     pd_mode = PD_DUAL;
     expect("#94 toggle: three multi-answered requests cease",
-           wait_flags(FL_ASCAP, 0, 16000000ull), 1);
+           capable && wait_flags(FL_ASCAP, 0, 16000000ull), 1);
     const uint64_t r0 = pd_reqs_sent;
     run_svc(1300ull * MS_CYC);
     expect("#94 toggle: the cease sends no request", pd_reqs_sent, r0);
     pd_mode = PD_OFF;
     const size_t mark = txf.size();
     uint64_t fall = 0;
-    const uint64_t rise = toggle_the_port(500ull * MS_CYC, &fall);
+    const uint64_t rise = toggle_the_port(1200ull * MS_CYC, &fall);
     expect("#94 toggle: the first request comes within one interval of "
            "the rise", wait_requests(r0 + 1, INTERVAL_CYC), 1);
     std::array<uint64_t, 6> s{};

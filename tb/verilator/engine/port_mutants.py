@@ -66,6 +66,19 @@ PORT_MUTATIONS = [
      "#94 toggle: the cease sends no request"
      " | #94 countdown: the first request after the cease follows the last by"
      " the countdown and two beats"),
+    # word-neutral: the cease holds, but nothing drops the verdict, and with
+    # no request there is no loss to drop it later
+    ("the cease entry keeps asCapable", GENERATOR,
+     "    p.emit(\"BR\", label=LB[\"NOTENTAIL\"])\n",
+     "    p.emit(\"END\")\n",
+     "#94 toggle: three multi-answered requests cease"
+     " | #94 countdown: three multi-answered requests cease"),
+    # ---- Milan v1.2 4.2.6.2.4, which every #94 rise re-earns ----------------
+    ("the ladder raises asCapable at the first exchange", GENERATOR,
+     "ASCAP_UP_C = 2  ",
+     "ASCAP_UP_C = 1  ",
+     "#94 toggle: one exchange after the rise leaves asCapable clear"
+     " | #94 link loss: one exchange after the rise leaves asCapable clear"),
     # ---- #94: the engine's portEnabled block --------------------------------
     ("the falling edge raises no event", ENGINE,
      EDGE,
@@ -84,6 +97,15 @@ PORT_MUTATIONS = [
      "      .send_i     (resp_send_w && port_en_r),\n",
      "      .send_i     (resp_send_w),\n",
      "#94 built across the fall: the response is not sent"
+     " | #94 link loss: nothing is transmitted while the port is disabled"),
+    # both transmit gates at once: either alone keeps a ceased port silent
+    ("a disabled port keeps its credit and its SEND", ENGINE,
+     [("          st_rd_mux_w = {63'd0, tx_credit_i && port_en_r};\n",
+       "          st_rd_mux_w = {63'd0, tx_credit_i};\n"),
+      ("      .send_i     (resp_send_w && port_en_r),\n",
+       "      .send_i     (resp_send_w),\n")],
+     None,
+     "#94 toggle: nothing is transmitted while the port is disabled"
      " | #94 link loss: nothing is transmitted while the port is disabled"),
     ("egress claims survive the fall", ENGINE,
      "      if (!port_en_r) begin\n"
