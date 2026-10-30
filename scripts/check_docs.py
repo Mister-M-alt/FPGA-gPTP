@@ -109,7 +109,7 @@ GENERATOR = "hdl/ucode/gen_gptp_ucode.py"
 CONSTANTS_PAGE = "docs/INTEGRATION.md"
 CONSTANTS_HEADING = "## Protocol constants"
 # Rows are found by their name cell alone, so a value cell in any other
-# syntax is reported rather than silently skipped.
+# syntax is reported rather than silently skipped (#96).
 CONSTANT_ROW_RE = re.compile(r"^\|\s*`([A-Za-z_][A-Za-z0-9_]*)`\s*\|\s*([^|]*?)\s*\|")
 DECIMAL_RE = re.compile(r"[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+")
 CONSTANTS = (
@@ -119,7 +119,7 @@ CONSTANTS = (
     "DEPTH", "ROM_CID_HI_C", "ROM_GMCAP_BIT_C",
 )
 # A Meaning cell ending ", ms", ", ns" or ", ppm" gives the row's unit; that
-# value spelled with its unit elsewhere is a copy the table cannot correct.
+# value spelled with its unit elsewhere is a copy the table cannot correct (#96).
 UNIT_CELL_RE = re.compile(r",\s*(ms|ns|ppm)\s*$")
 NUMBER_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
 ROM_PAGE = "docs/MANAGER.md"
@@ -391,7 +391,7 @@ def decimal(cell: str) -> int | None:
 
 def load_generator(root: Path = ROOT):
     """Import the microcode generator that owns the protocol constants."""
-    sys.dont_write_bytecode = True  # keep the gate from writing into hdl/
+    sys.dont_write_bytecode = True  # keep the gate from writing into hdl/ (#96)
     spec = importlib.util.spec_from_file_location(
         "gen_gptp_ucode_docs", root / GENERATOR
     )
@@ -709,6 +709,12 @@ def selftest() -> int:
     arms += 1
     if not constant_findings(good.replace("`SYNC_RTO_MS_C`", "SYNC_RTO_MS_C"), generator):
         print("docs selftest: unnamed constant row escaped")
+        return 1
+    arms += 1
+    row = next(line for line in good.splitlines() if "`SYNC_RTO_MS_C`" in line)
+    named = constant_findings(f"{good}{row}\n", generator)
+    if not any("duplicate constant row: SYNC_RTO_MS_C" in finding for finding in named):
+        print("docs selftest: duplicate constant row escaped")
         return 1
     fixture = types.SimpleNamespace(
         SYNC_RTO_MS_C=375, CEASE_MS_C=300_000, STEP_LINKUP_NS_C=20_000, RATE_PPM_C=200
