@@ -851,13 +851,27 @@ This table is the single home of protocol values.
 
 Each row names the generator constant it reads.
 
-`make docs` fails when any value drifts from the generator.
+`make docs` fails when a row drifts from its constant.
 
 It also fails on a missing, duplicate or formatted row.
 
 Other pages name the constant and link its row.
 
-`make docs` rejects a timed value restated with its unit.
+Units come from Meaning cells ending ms, ns or ppm.
+
+Elsewhere on current pages, `make docs` rejects that row value as:
+
+- the integer and its unit symbol, as in `7 ms`;
+- ms in whole seconds, ns in whole microseconds, by symbol;
+- ms as one to ten whole minutes: `2 min`, `two minutes`.
+
+Fenced code and this section are exempt.
+
+Rows without such a unit are not checked for copies.
+
+Decimals and other unit words, such as milliseconds, pass.
+
+Review keeps those forms out.
 
 Clauses without a prefix are IEEE 802.1AS-2011.
 

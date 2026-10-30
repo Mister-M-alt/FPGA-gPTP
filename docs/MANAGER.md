@@ -56,6 +56,8 @@ The generator prints this budget on every run.
 
 `make docs` fails when this table drifts from it.
 
+The seeded row is checked with `--seq-seed 0x200000`.
+
 | Image | Words used | Free |
 |---|---|---:|
 | Shipping | 1,022 of 1,024 | 2 |
