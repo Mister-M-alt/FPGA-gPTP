@@ -107,13 +107,20 @@ STATUS_ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|(?:[^|]*\|){2}\s*([^|]*?)\s*\|\
 GENERATOR = "hdl/ucode/gen_gptp_ucode.py"
 CONSTANTS_PAGE = "docs/INTEGRATION.md"
 CONSTANTS_HEADING = "## Protocol constants"
-CONSTANT_ROW_RE = re.compile(r"^\|\s*`([A-Z][A-Z0-9_]*)`\s*\|\s*([0-9][0-9,]*)\s*\|")
+# Rows are found by their name cell alone, so a value cell in any other
+# syntax is reported rather than silently skipped.
+CONSTANT_ROW_RE = re.compile(r"^\|\s*`([A-Za-z_][A-Za-z0-9_]*)`\s*\|\s*([^|]*?)\s*\|")
+DECIMAL_RE = re.compile(r"[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+")
+CONSTANTS = (
+    "P1_C", "ASCAP_UP_C", "LOST_N_C", "LOST_CLEARS_AT_C", "NPD_HI_C",
+    "NPD_LO_C", "SYNC_RTO_MS_C", "FU_RTO_MS_C", "CEASE_N_C", "CEASE_MS_C",
+    "STEP_LINKUP_NS_C", "STEP_LOCKED_NS_C", "SLEW_SETTLED_NS_C", "RATE_PPM_C",
+    "DEPTH", "ROM_CID_HI_C", "ROM_GMCAP_BIT_C",
+)
 ROM_PAGE = "docs/MANAGER.md"
 ROM_HEADING = "## Current ROM budget"
-ROM_ROW_RE = re.compile(
-    r"^\|\s*(Shipping|Seeded regression)\s*\|\s*([0-9,]+) of ([0-9,]+)\s*\|"
-    r"\s*([0-9,]+)\s*\|\s*$"
-)
+ROM_ROW_RE = re.compile(r"^\|\s*(Shipping|Seeded regression)\s*\|([^|]*)\|([^|]*)\|\s*$")
+ROM_USED_RE = re.compile(r"\s*([0-9,]+) of ([0-9,]+)\s*")
 SEEDED_SEQ_SEED = 0x200000
 
 TEXT_SUFFIXES = {
@@ -369,8 +376,17 @@ def status_findings(root: Path = ROOT, text: str | None = None) -> list[str]:
     return findings
 
 
+def decimal(cell: str) -> int | None:
+    """Return a plain or comma-grouped decimal cell, else None."""
+    cell = cell.strip()
+    if DECIMAL_RE.fullmatch(cell) is None:
+        return None
+    return int(cell.replace(",", ""))
+
+
 def load_generator(root: Path = ROOT):
     """Import the microcode generator that owns the protocol constants."""
+    sys.dont_write_bytecode = True  # keep the gate from writing into hdl/
     spec = importlib.util.spec_from_file_location(
         "gen_gptp_ucode_docs", root / GENERATOR
     )
@@ -394,14 +410,24 @@ def constant_findings(text: str, generator) -> list[str]:
             findings.append(f"{CONSTANTS_PAGE}: duplicate constant row: {name}")
         seen.add(name)
         actual = getattr(generator, name, None)
+        value = decimal(cell)
         if not isinstance(actual, int):
             findings.append(f"{CONSTANTS_PAGE}: {name} is not a generator constant")
-        elif int(cell.replace(",", "")) != actual:
+        elif value is None:
+            findings.append(
+                f"{CONSTANTS_PAGE}: {name} value {cell!r} is not a plain decimal"
+            )
+        elif value != actual:
             findings.append(
                 f"{CONSTANTS_PAGE}: {name} is {cell}, generator has {actual}"
             )
     if not seen:
         findings.append(f"{CONSTANTS_PAGE}: no protocol constant rows")
+    findings.extend(
+        f"{CONSTANTS_PAGE}: no protocol constant row for {name}"
+        for name in CONSTANTS
+        if name not in seen
+    )
     return findings
 
 
@@ -427,9 +453,22 @@ def rom_findings(text: str, usage: dict[str, tuple[int, int]]) -> list[str]:
         match = ROM_ROW_RE.match(line.strip())
         if match is None:
             continue
-        image = match.group(1)
-        used, depth, free = (int(value.replace(",", "")) for value in match.groups()[1:])
+        image, used_cell, free_cell = match.groups()
+        if image in seen:
+            findings.append(f"{ROM_PAGE}: duplicate ROM budget row: {image}")
         seen.add(image)
+        counts = ROM_USED_RE.fullmatch(used_cell)
+        free = decimal(free_cell)
+        if counts is None or free is None:
+            findings.append(
+                f"{ROM_PAGE}: {image} row {used_cell.strip()!r} | "
+                f"{free_cell.strip()!r} is not plain 'N of M' | N"
+            )
+            continue
+        used, depth = (decimal(value) for value in counts.groups())
+        if used is None or depth is None:
+            findings.append(f"{ROM_PAGE}: {image} counts are not plain decimals")
+            continue
         real_used, real_depth = usage[image]
         if (used, depth, free) != (real_used, real_depth, real_depth - real_used):
             findings.append(
@@ -572,14 +611,17 @@ def selftest() -> int:
             print("docs selftest: duplicate status row escaped")
             return 1
     generator = load_generator(ROOT)
-    good = f"{CONSTANTS_HEADING}\n\n| `SYNC_RTO_MS_C` | {generator.SYNC_RTO_MS_C} | ms |\n"
+    good = f"{CONSTANTS_HEADING}\n\n| Constant | Value |\n|---|---:|\n" + "".join(
+        f"| `{name}` | {getattr(generator, name):,} |\n" for name in CONSTANTS
+    )
+    sync = f"| {generator.SYNC_RTO_MS_C} |"
+    stale = generator.SYNC_RTO_MS_C + 1
     arms += 1
     if constant_findings(good, generator):
-        print("docs selftest: true constant failed")
+        print("docs selftest: true constants table failed")
         return 1
     arms += 1
-    if not constant_findings(good.replace(f"| {generator.SYNC_RTO_MS_C} |",
-                                          f"| {generator.SYNC_RTO_MS_C + 1} |"), generator):
+    if not constant_findings(good.replace(sync, f"| {stale} |"), generator):
         print("docs selftest: drifted constant escaped")
         return 1
     arms += 1
@@ -589,6 +631,22 @@ def selftest() -> int:
     arms += 1
     if not constant_findings(f"{CONSTANTS_HEADING}\n\nNo table.\n", generator):
         print("docs selftest: empty constants table escaped")
+        return 1
+    for label, cell in (("bold", f"**{stale}**"), ("negative", "-1"),
+                        ("unit-bearing", f"{stale} ms"), ("bold true", f"**{stale - 1}**")):
+        arms += 1
+        named = constant_findings(good.replace(sync, f"| {cell} |"), generator)
+        if not any("SYNC_RTO_MS_C" in finding for finding in named):
+            print(f"docs selftest: {label} constant cell escaped")
+            return 1
+    arms += 1
+    deleted = "".join(line + "\n" for line in good.splitlines() if "SYNC_RTO_MS_C" not in line)
+    if not constant_findings(deleted, generator):
+        print("docs selftest: deleted constant row escaped")
+        return 1
+    arms += 1
+    if not constant_findings(good.replace("`SYNC_RTO_MS_C`", "SYNC_RTO_MS_C"), generator):
+        print("docs selftest: unnamed constant row escaped")
         return 1
     usage = {"Shipping": (1000, 1024), "Seeded regression": (1001, 1024)}
     rom = (f"{ROM_HEADING}\n\n| Image | Words used | Free |\n|---|---|---:|\n"
@@ -609,6 +667,14 @@ def selftest() -> int:
     arms += 1
     if not rom_findings(rom.replace("| Seeded regression |", "| Seeded |"), usage):
         print("docs selftest: missing ROM row escaped")
+        return 1
+    arms += 1
+    if not rom_findings(rom.replace("1,000 of", "**999** of"), usage):
+        print("docs selftest: formatted ROM count escaped")
+        return 1
+    arms += 1
+    if not rom_findings(rom + "| Shipping | **999 of 1,024** | 25 |\n", usage):
+        print("docs selftest: duplicate ROM row escaped")
         return 1
     arms += 1
     if vocabulary_findings(ROOT):
