@@ -516,9 +516,11 @@ Discard every measurement window overlapping the level's high interval.
 
 A partly overlapping window remains affected after deassertion.
 
-The parent must carry this level through `KL_gptp_shadow`.
+The parent carries this level through [`KL_gptp_shadow`](https://github.com/kebag-logic/milan-fpga/blob/1e80128f0a467b58bf884b7d9bf62e013a2fb141/hdl/ieee8021as/gptp_plane/KL_gptp_shadow.sv#L150).
 
-That consumer connection belongs to [parent #545](https://github.com/kebag-logic/milan-fpga/issues/545).
+[Parent #545](https://github.com/kebag-logic/milan-fpga/issues/545), now closed, connected its media-clock servo.
+
+Its [servo input](https://github.com/kebag-logic/milan-fpga/blob/1e80128f0a467b58bf884b7d9bf62e013a2fb141/hdl/milan/milan_datapath.sv#L7329) pins parent `dev` at `1e80128f`.
 
 #### Publication during a slew
 
