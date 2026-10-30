@@ -198,6 +198,8 @@ A disabled port withdraws a frame before its first acceptance.
 
 ## Microcode receipt state
 
+Values here come from the [protocol constants](INTEGRATION.md#protocol-constants).
+
 Timer slot 4 is the 375 ms Sync receipt watch.
 
 Every usable Sync pair restarts it, in either role.

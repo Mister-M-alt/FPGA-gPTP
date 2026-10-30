@@ -218,6 +218,8 @@ Restore credit to resume every normal cadence.
 
 ## Port enable
 
+Values here come from the [protocol constants](#protocol-constants).
+
 | Signal | Direction | Contract |
 |---|---|---|
 | `port_enabled_i` | Input | Carries 802.1AS-2011 portEnabled (10.2.4.11) |
@@ -348,6 +350,8 @@ The parent integration test checks media and public counters.
 Count step pulses to count phase steps.
 
 ### Step versus slew policy
+
+Values here come from the [protocol constants](#protocol-constants).
 
 [Issue #68](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68) records this policy.
 
@@ -694,6 +698,8 @@ A better peer wins through normal selection.
 
 ### Departure of the elected peer
 
+Values here come from the [protocol constants](#protocol-constants).
+
 Three departures each return thisClock and {thisClock}.
 
 Announce silence for 3 s ages the peer out.
@@ -777,6 +783,8 @@ Restored capability lets the best live peer win.
 Without Announces, mastership follows within one receipt interval.
 
 ### Lost Pdelay responses
+
+Values here come from the [protocol constants](#protocol-constants).
 
 802.1AS-2011 Figure 11-8 counts lost responses.
 

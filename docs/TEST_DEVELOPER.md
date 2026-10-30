@@ -119,6 +119,8 @@ Prefer independent protocol formulas and frame builders.
 
 ### Engine suite
 
+Values here come from the [protocol constants](INTEGRATION.md#protocol-constants).
+
 - Models a scripted protocol peer.
 - Runs shipping and seeded ROM images.
 - Checks Pdelay, Announce, Sync, and servo behavior.
