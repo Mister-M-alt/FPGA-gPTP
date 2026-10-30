@@ -29,7 +29,7 @@ Memory LUTs remain 466; BRAM and DSP usage stay unchanged.
 
 WNS moves from +2.249 ns; timing remains met.
 
-The parent commit [`4999d8d6`](https://github.com/kebag-logic/milan-fpga/commit/4999d8d6344e373e0204995cb36c93cf616e8f9e) records the reports.
+The parent tree at `4999d8d6` holds the [measurement reports](https://github.com/kebag-logic/milan-fpga/tree/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author).
 
 ## Timer storage in distributed RAM
 
