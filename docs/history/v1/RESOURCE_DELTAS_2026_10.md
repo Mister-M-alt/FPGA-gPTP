@@ -29,7 +29,12 @@ Memory LUTs remain 466; BRAM and DSP usage stay unchanged.
 
 WNS moves from +2.249 ns; timing remains met.
 
-The parent tree at `4999d8d6` holds the [measurement reports](https://github.com/kebag-logic/milan-fpga/tree/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author).
+The measurement reports are at parent commit `4999d8d6`:
+
+- [baseline utilization](https://github.com/kebag-logic/milan-fpga/blob/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author/baseline-engine_util.rpt)
+- [candidate utilization](https://github.com/kebag-logic/milan-fpga/blob/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author/candidate-engine_util.rpt)
+- [baseline timing](https://github.com/kebag-logic/milan-fpga/blob/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author/baseline-engine_timing.rpt)
+- [candidate timing](https://github.com/kebag-logic/milan-fpga/blob/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author/candidate-engine_timing.rpt)
 
 ## Timer storage in distributed RAM
 
