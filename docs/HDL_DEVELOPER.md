@@ -9,7 +9,7 @@ This guide explains structure, timing, and invariants.
 - Microcode decides protocol policy; RTL moves bytes and time.
 - The microCPU reaches engine state through six address regions.
 - Scratch survives warm reset; validity bits do not.
-- Consumers sample publication on `pub_commit_o`; staging moves outputs earlier.
+- Sample on `pub_commit_o`; staging writes change outputs first.
 - Synthesis figures here are dated measurements.
 
 Terms are defined in the [glossary](GLOSSARY.md).

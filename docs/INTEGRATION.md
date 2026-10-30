@@ -564,7 +564,7 @@ Microcode writes the fields over several instructions.
 
 Between pulses the outputs can show a partial tuple.
 
-Only the commit cycle presents one complete tuple.
+The commit cycle always presents a complete tuple.
 
 | Output group | Contents |
 |---|---|
