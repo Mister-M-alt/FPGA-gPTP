@@ -118,9 +118,10 @@ CONSTANTS = (
     "STEP_LINKUP_NS_C", "STEP_LOCKED_NS_C", "SLEW_SETTLED_NS_C", "RATE_PPM_C",
     "DEPTH", "ROM_CID_HI_C", "ROM_GMCAP_BIT_C",
 )
-# A Meaning cell ending ", ms", ", ns" or ", ppm" gives the row's unit; that
-# value spelled with its unit elsewhere is a copy the table cannot correct (#96).
-UNIT_CELL_RE = re.compile(r",\s*(ms|ns|ppm)\s*$")
+# A Meaning cell ending in ms, ns or ppm gives the row's unit; that value
+# spelled with its unit elsewhere is a copy the table cannot correct (#96).
+UNIT_CELL_RE = re.compile(r"(?:,\s*|\s+|\()(ms|ns|ppm)\)?\s*$")
+FENCE_MARKERS = ("```", "~~~")
 NUMBER_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
 ROM_PAGE = "docs/MANAGER.md"
 ROM_HEADING = "## Current ROM budget"
@@ -451,7 +452,10 @@ def value_spellings(value: int, unit: str) -> list[str]:
     minutes = value // 60000 if unit == "ms" and value % 60000 == 0 else 0
     if 1 <= minutes <= len(NUMBER_WORDS):
         word = NUMBER_WORDS[minutes - 1]
-        patterns += [rf"\b{minutes}[\s-]min", rf"\b{word}[\s-]minutes?\b"]
+        patterns += [
+            rf"(?<![\d.,])\b{minutes}[\s-]?min(?:ute)?s?\b",
+            rf"(?<![\w-]){word}[\s-]min(?:ute)?s?\b",
+        ]
     return patterns
 
 
@@ -470,14 +474,15 @@ def copy_findings(texts: dict[str, str], constants_text: str, generator) -> list
             )
     findings: list[str] = []
     for relative, text in texts.items():
-        fenced = home = False
+        fence, home = "", False
         for number, line in enumerate(text.splitlines(), start=1):
-            if line.lstrip().startswith("```"):
-                fenced = not fenced
+            marker = line.lstrip()[:3]
+            if marker in FENCE_MARKERS and fence in ("", marker):
+                fence = "" if fence else marker
                 continue
             if line.startswith("## "):
                 home = relative == CONSTANTS_PAGE and line.strip() == CONSTANTS_HEADING
-            if fenced or home:
+            if fence or home:
                 continue
             findings.extend(
                 f"{relative}:{number}: {found.group(0)!r} restates {name}; "
@@ -751,7 +756,35 @@ def selftest() -> int:
         if not copy_findings({CONSTANTS_PAGE: copy}, table, fixture):
             print(f"docs selftest: {label} constant copy escaped")
             return 1
-    usage = {"Shipping": (1000, 1024), "Seeded regression": (1001, 1024)}
+    for label, text in (
+        ("decimal minutes", "A 2.5 min hold."),
+        ("decimal minute word", "Wait 0.5 minutes."),
+        ("larger number word", "A twenty-five minutes soak."),
+        ("word starting min", "At least 5 minimum samples."),
+        ("tilde fence", "~~~\nsleep 375 ms\n~~~\n"),
+    ):
+        arms += 1
+        if copy_findings({"docs/GUIDE.md": text}, table, fixture):
+            print(f"docs selftest: {label} failed")
+            return 1
+    for label, copy, name in (
+        ("unspaced minutes", "A 5min countdown.", "CEASE_MS_C"),
+        ("number word and min", "A five min countdown.", "CEASE_MS_C"),
+        ("copy after a tilde fence", "~~~\n```\n~~~\nA 375 ms watch.\n", "SYNC_RTO_MS_C"),
+    ):
+        arms += 1
+        if not any(f"restates {name}" in finding
+                   for finding in copy_findings({"docs/GUIDE.md": copy}, table, fixture)):
+            print(f"docs selftest: {label} constant copy escaped")
+            return 1
+    for cell in ("syncReceiptTimeout ms", "syncReceiptTimeout in ms", "syncReceiptTimeout (ms)"):
+        arms += 1
+        unit = table.replace("syncReceiptTimeout, ms", cell)
+        if not any("restates SYNC_RTO_MS_C" in finding
+                   for finding in copy_findings({"docs/GUIDE.md": "A 375 ms watch."}, unit, fixture)):
+            print(f"docs selftest: copy of a row whose Meaning ends {cell!r} escaped")
+            return 1
+    usage ={"Shipping": (1000, 1024), "Seeded regression": (1001, 1024)}
     rom = (f"{ROM_HEADING}\n\n| Image | Words used | Free |\n|---|---|---:|\n"
            "| Shipping | 1,000 of 1,024 | 24 |\n"
            "| Seeded regression | 1,001 of 1,024 | 23 |\n")
