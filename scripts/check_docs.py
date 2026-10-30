@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -95,6 +97,24 @@ REQUIRED_CURRENT = {
         "Issue #35",
     ),
 }
+
+STATUS_PAGE = "docs/README.md"
+STATUS_HEADING = "## Document status"
+STATUS_VALUES = ("Current", "Historical")
+HISTORY_ROW = "docs/history/v1/"
+STATUS_ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|(?:[^|]*\|){2}\s*([^|]*?)\s*\|\s*$")
+
+GENERATOR = "hdl/ucode/gen_gptp_ucode.py"
+CONSTANTS_PAGE = "docs/INTEGRATION.md"
+CONSTANTS_HEADING = "## Protocol constants"
+CONSTANT_ROW_RE = re.compile(r"^\|\s*`([A-Z][A-Z0-9_]*)`\s*\|\s*([0-9][0-9,]*)\s*\|")
+ROM_PAGE = "docs/MANAGER.md"
+ROM_HEADING = "## Current ROM budget"
+ROM_ROW_RE = re.compile(
+    r"^\|\s*(Shipping|Seeded regression)\s*\|\s*([0-9,]+) of ([0-9,]+)\s*\|"
+    r"\s*([0-9,]+)\s*\|\s*$"
+)
+SEEDED_SEQ_SEED = 0x200000
 
 TEXT_SUFFIXES = {
     ".md", ".py", ".sv", ".cpp", ".h", ".sh", ".tcl", ".xdc", ".yml", ".yaml",
@@ -303,6 +323,141 @@ def required_current_findings(root: Path = ROOT) -> list[str]:
     return findings
 
 
+def section_lines(text: str, heading: str) -> list[str]:
+    """Return the lines under one second-level heading."""
+    lines: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            inside = line.strip() == heading
+            continue
+        if inside:
+            lines.append(line)
+    return lines
+
+
+def status_findings(root: Path = ROOT, text: str | None = None) -> list[str]:
+    """Require one status row for every maintained Markdown page."""
+    if text is None:
+        text = (root / STATUS_PAGE).read_text(encoding="utf-8")
+    findings: list[str] = []
+    seen: dict[str, str] = {}
+    for line in section_lines(text, STATUS_HEADING):
+        match = STATUS_ROW_RE.match(line.strip())
+        if match is None:
+            continue
+        page, status = match.groups()
+        if page in seen:
+            findings.append(f"{STATUS_PAGE}: duplicate status row: {page}")
+        seen[page] = status
+        expected = "Historical" if page == HISTORY_ROW else "Current"
+        if status != expected:
+            findings.append(
+                f"{STATUS_PAGE}: {page}: status {status!r}, expected {expected!r}"
+            )
+        target = root / page
+        if not (target.is_dir() if page == HISTORY_ROW else target.is_file()):
+            findings.append(f"{STATUS_PAGE}: status row names a missing page: {page}")
+    if not seen:
+        findings.append(f"{STATUS_PAGE}: no document status rows")
+    if HISTORY_ROW not in seen:
+        findings.append(f"{STATUS_PAGE}: no status row for {HISTORY_ROW}")
+    for path in current_markdown(root):
+        relative = path.relative_to(root).as_posix()
+        if relative not in seen:
+            findings.append(f"{STATUS_PAGE}: no status row for {relative}")
+    return findings
+
+
+def load_generator(root: Path = ROOT):
+    """Import the microcode generator that owns the protocol constants."""
+    spec = importlib.util.spec_from_file_location(
+        "gen_gptp_ucode_docs", root / GENERATOR
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {GENERATOR}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def constant_findings(text: str, generator) -> list[str]:
+    """Bind each constants-table value to the generator constant it names."""
+    findings: list[str] = []
+    seen: set[str] = set()
+    for line in section_lines(text, CONSTANTS_HEADING):
+        match = CONSTANT_ROW_RE.match(line.strip())
+        if match is None:
+            continue
+        name, cell = match.groups()
+        if name in seen:
+            findings.append(f"{CONSTANTS_PAGE}: duplicate constant row: {name}")
+        seen.add(name)
+        actual = getattr(generator, name, None)
+        if not isinstance(actual, int):
+            findings.append(f"{CONSTANTS_PAGE}: {name} is not a generator constant")
+        elif int(cell.replace(",", "")) != actual:
+            findings.append(
+                f"{CONSTANTS_PAGE}: {name} is {cell}, generator has {actual}"
+            )
+    if not seen:
+        findings.append(f"{CONSTANTS_PAGE}: no protocol constant rows")
+    return findings
+
+
+def rom_usage(root: Path = ROOT, *extra: str) -> tuple[int, int]:
+    """Run the generator as shipped and return (real words, depth)."""
+    with tempfile.TemporaryDirectory() as directory:
+        result = subprocess.run(
+            [sys.executable, str(root / GENERATOR), *extra,
+             "-o", str(Path(directory) / "gptp_ucode.hex")],
+            check=True, capture_output=True, text=True,
+        )
+    match = re.search(r": (\d+) words, (\d+) real ", result.stdout)
+    if match is None:
+        raise ValueError(f"unexpected generator report: {result.stdout!r}")
+    return int(match.group(2)), int(match.group(1))
+
+
+def rom_findings(text: str, usage: dict[str, tuple[int, int]]) -> list[str]:
+    """Bind the ROM budget table to the generator's own word count."""
+    findings: list[str] = []
+    seen: set[str] = set()
+    for line in section_lines(text, ROM_HEADING):
+        match = ROM_ROW_RE.match(line.strip())
+        if match is None:
+            continue
+        image = match.group(1)
+        used, depth, free = (int(value.replace(",", "")) for value in match.groups()[1:])
+        seen.add(image)
+        real_used, real_depth = usage[image]
+        if (used, depth, free) != (real_used, real_depth, real_depth - real_used):
+            findings.append(
+                f"{ROM_PAGE}: {image} image reads {used} of {depth} with {free} free; "
+                f"generator builds {real_used} of {real_depth}"
+            )
+    findings.extend(
+        f"{ROM_PAGE}: no ROM budget row for the {image} image"
+        for image in usage
+        if image not in seen
+    )
+    return findings
+
+
+def freshness_findings(root: Path = ROOT) -> list[str]:
+    """Tie the constants and ROM budget tables to the generator."""
+    generator = load_generator(root)
+    findings = constant_findings(
+        (root / CONSTANTS_PAGE).read_text(encoding="utf-8"), generator
+    )
+    usage = {
+        "Shipping": rom_usage(root),
+        "Seeded regression": rom_usage(root, "--seq-seed", hex(SEEDED_SEQ_SEED)),
+    }
+    findings.extend(rom_findings((root / ROM_PAGE).read_text(encoding="utf-8"), usage))
+    return findings
+
+
 def check(root: Path = ROOT) -> list[str]:
     """Run every documentation rule."""
     findings: list[str] = []
@@ -317,6 +472,8 @@ def check(root: Path = ROOT) -> list[str]:
     findings.extend(local_link_findings(root))
     findings.extend(archive_metadata_findings(root))
     findings.extend(required_current_findings(root))
+    findings.extend(status_findings(root))
+    findings.extend(freshness_findings(root))
     return findings
 
 
@@ -374,6 +531,84 @@ def selftest() -> int:
     arms += 1
     if not any(victim in finding for finding in required_current_findings(Path("/nonexistent"))):
         print("docs selftest: missing audience page escaped")
+        return 1
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "docs" / "history" / "v1").mkdir(parents=True)
+        (root / "README.md").write_text("# Root\n", encoding="utf-8")
+        (root / "docs" / "README.md").write_text("# Map\n", encoding="utf-8")
+        rows = {
+            "README.md": "Current",
+            STATUS_PAGE: "Current",
+            HISTORY_ROW: "Historical",
+        }
+
+        def table(entries: dict[str, str]) -> str:
+            """Render a status section holding one row per entry."""
+            body = "".join(
+                f"| `{page}` | Reader | Topic | {status} |\n"
+                for page, status in entries.items()
+            )
+            return f"{STATUS_HEADING}\n\n| Page | Audience | Describes | Status |\n|---|---|---|---|\n{body}"
+
+        arms += 1
+        if status_findings(root, table(rows)):
+            print("docs selftest: complete status table failed")
+            return 1
+        arms += 1
+        if not status_findings(root, table({k: v for k, v in rows.items() if k != "README.md"})):
+            print("docs selftest: unlisted page escaped")
+            return 1
+        arms += 1
+        if not status_findings(root, table({**rows, "docs/GONE.md": "Current"})):
+            print("docs selftest: status row for a missing page escaped")
+            return 1
+        arms += 1
+        if not status_findings(root, table({**rows, "README.md": "Stale"})):
+            print("docs selftest: wrong status escaped")
+            return 1
+        arms += 1
+        if not status_findings(root, table(rows) + "| `README.md` | Reader | Topic | Current |\n"):
+            print("docs selftest: duplicate status row escaped")
+            return 1
+    generator = load_generator(ROOT)
+    good = f"{CONSTANTS_HEADING}\n\n| `SYNC_RTO_MS_C` | {generator.SYNC_RTO_MS_C} | ms |\n"
+    arms += 1
+    if constant_findings(good, generator):
+        print("docs selftest: true constant failed")
+        return 1
+    arms += 1
+    if not constant_findings(good.replace(f"| {generator.SYNC_RTO_MS_C} |",
+                                          f"| {generator.SYNC_RTO_MS_C + 1} |"), generator):
+        print("docs selftest: drifted constant escaped")
+        return 1
+    arms += 1
+    if not constant_findings(good.replace("SYNC_RTO_MS_C", "NO_SUCH_C"), generator):
+        print("docs selftest: unknown constant escaped")
+        return 1
+    arms += 1
+    if not constant_findings(f"{CONSTANTS_HEADING}\n\nNo table.\n", generator):
+        print("docs selftest: empty constants table escaped")
+        return 1
+    usage = {"Shipping": (1000, 1024), "Seeded regression": (1001, 1024)}
+    rom = (f"{ROM_HEADING}\n\n| Image | Words used | Free |\n|---|---|---:|\n"
+           "| Shipping | 1,000 of 1,024 | 24 |\n"
+           "| Seeded regression | 1,001 of 1,024 | 23 |\n")
+    arms += 1
+    if rom_findings(rom, usage):
+        print("docs selftest: true ROM budget failed")
+        return 1
+    arms += 1
+    if not rom_findings(rom.replace("1,000 of", "999 of"), usage):
+        print("docs selftest: drifted ROM count escaped")
+        return 1
+    arms += 1
+    if not rom_findings(rom.replace("| 24 |", "| 25 |"), usage):
+        print("docs selftest: drifted free count escaped")
+        return 1
+    arms += 1
+    if not rom_findings(rom.replace("| Seeded regression |", "| Seeded |"), usage):
+        print("docs selftest: missing ROM row escaped")
         return 1
     arms += 1
     if vocabulary_findings(ROOT):
