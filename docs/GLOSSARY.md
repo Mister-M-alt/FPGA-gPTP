@@ -33,7 +33,7 @@ Milan means the Milan v1.2 specification, chapter 4.
 |---|---|---|
 | Claim | Scratch record of an egress timestamp still owed | [HDL guide](HDL_DEVELOPER.md#egress-result-ownership) |
 | Cold start | FPGA configuration, which also clears scratch | [Integration guide](INTEGRATION.md#clock-and-reset) |
-| Commit | `pub_commit_o` pulse exposing one staged publication | [Integration guide](INTEGRATION.md#publication) |
+| Commit | `pub_commit_o` pulse marking one complete staged publication | [Integration guide](INTEGRATION.md#publication) |
 | Credit | `tx_credit_i` level permitting initiating transmissions | [Integration guide](INTEGRATION.md#transmit-admission-credit) |
 | Image | Generated microcode ROM file for one configuration | [Integration guide](INTEGRATION.md#microcode-configuration) |
 | Initiating beat | A Pdelay_Req, Sync or Announce transmission | [Integration guide](INTEGRATION.md#transmit-admission-credit) |

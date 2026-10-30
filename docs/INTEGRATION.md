@@ -9,9 +9,11 @@ This guide defines the external engine contract.
 - Receive takes validated gPTP bytes; it never backpressures.
 - Transmit honors byte-level ready; started frames always finish.
 - Egress timestamps return on a valid-ready result face.
-- `tx_credit_i` and `port_enabled_i` gate initiating transmissions.
-- PHC outputs are one-cycle step and rate pulses.
-- Publication outputs change together on `pub_commit_o`.
+- `tx_credit_i` gates initiating transmissions.
+- A low `port_enabled_i` starts no frame.
+- PHC step and rate writes are one-cycle pulses.
+- `phc_slew_active_o` is a level.
+- Sample publication outputs on `pub_commit_o`; they change while staging.
 - [Protocol constants](#protocol-constants) is the home of protocol values.
 
 Terms are defined in the [glossary](GLOSSARY.md).
@@ -550,6 +552,16 @@ The engine publishes protocol state as wires.
 
 Sample outputs when `pub_commit_o` rises.
 
+Each output follows its staging register directly.
+
+No register holds the outputs at commit.
+
+Microcode writes the fields over several instructions.
+
+Between pulses the outputs can show a partial tuple.
+
+Only the commit cycle presents one complete tuple.
+
 | Output group | Contents |
 |---|---|
 | Identity | Grandmaster and parent identities |
@@ -604,7 +616,7 @@ The previous path therefore stays published.
 
 After reset or mastership, that is thisClock alone.
 
-The grandmaster and its path change in one commit.
+The grandmaster and its path complete in one commit.
 
 GET_AS_PATH can serve these entries unchanged.
 

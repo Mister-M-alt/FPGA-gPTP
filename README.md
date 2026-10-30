@@ -57,7 +57,7 @@ Read in this order:
 - RTL owns parsing, queues, timers, and serialization.
 - Egress timestamp results arrive on accepted beats.
 - Admission credit postpones only initiating transmissions.
-- Publication outputs expose committed protocol state.
+- Publication outputs are valid when `pub_commit_o` pulses.
 
 Parent evidence is pinned at `ac2c5e77`.
 

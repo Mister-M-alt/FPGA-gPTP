@@ -17,7 +17,7 @@ Terms are defined in the [glossary](GLOSSARY.md).
 
 - Timing control stays inside programmable logic.
 - Protocol work shares one deterministic clock domain.
-- Parent systems receive direct committed status.
+- Parent systems capture status on each commit pulse.
 - Microcode supports rapid protocol-policy changes.
 - Dedicated RTL handles predictable byte movement.
 
@@ -31,7 +31,7 @@ Terms are defined in the [glossary](GLOSSARY.md).
 | Receive path | Implemented and regression-tested | [HDL guide](HDL_DEVELOPER.md#receive-path) |
 | Transmit path | Backpressure-tested | [TX timing](HDL_DEVELOPER.md#transmit-timing) |
 | PHC control | Addend, step, and slew-level outputs implemented | [Integration guide](INTEGRATION.md#phc-control) |
-| Publication | Atomic commit pulse implemented | [Integration guide](INTEGRATION.md#publication) |
+| Publication | Commit pulse marks each complete publication | [Integration guide](INTEGRATION.md#publication) |
 | Bench evidence | Historical silicon campaigns available | [History](history/v1/README.md) |
 
 Parent ownership references pin `dev` at `ac2c5e77`.
@@ -42,7 +42,7 @@ No certification claim is made.
 
 ## Latest measured snapshot
 
-The [HDL guide](HDL_DEVELOPER.md#out-of-context-measurement) holds the current synthesis figures.
+The [HDL guide](HDL_DEVELOPER.md#out-of-context-measurement) holds the latest dated synthesis figures.
 
 They come from main `5dce647a`, measured on 2026-10-11.
 

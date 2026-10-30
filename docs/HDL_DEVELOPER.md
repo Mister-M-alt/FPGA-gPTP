@@ -9,7 +9,7 @@ This guide explains structure, timing, and invariants.
 - Microcode decides protocol policy; RTL moves bytes and time.
 - The microCPU reaches engine state through six address regions.
 - Scratch survives warm reset; validity bits do not.
-- Publication changes only through one commit.
+- Consumers sample publication on `pub_commit_o`; staging moves outputs earlier.
 - Synthesis figures here are dated measurements.
 
 Terms are defined in the [glossary](GLOSSARY.md).
@@ -316,7 +316,9 @@ The cease entry now ends in that tail.
 
 Microcode stages publication values first.
 
-`OP_COMMIT` exposes the complete staged tuple.
+`OP_COMMIT` marks the staged tuple complete.
+
+Staging writes reach the `pub_*_o` outputs at once.
 
 Consumers sample only during `pub_commit_o`.
 
