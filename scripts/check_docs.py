@@ -698,7 +698,7 @@ def selftest() -> int:
                         ("unit-bearing", f"{stale} ms"), ("bold true", f"**{stale - 1}**")):
         arms += 1
         named = constant_findings(good.replace(sync, f"| {cell} |"), generator)
-        if not any("SYNC_RTO_MS_C" in finding for finding in named):
+        if not any("SYNC_RTO_MS_C value" in finding for finding in named):
             print(f"docs selftest: {label} constant cell escaped")
             return 1
     arms += 1
@@ -770,7 +770,7 @@ def selftest() -> int:
         print("docs selftest: formatted ROM count escaped")
         return 1
     arms += 1
-    if not rom_findings(rom + "| Shipping | **999 of 1,024** | 25 |\n", usage):
+    if not rom_findings(rom + "| Shipping | 1,000 of 1,024 | 24 |\n", usage):
         print("docs selftest: duplicate ROM row escaped")
         return 1
     arms += 1
