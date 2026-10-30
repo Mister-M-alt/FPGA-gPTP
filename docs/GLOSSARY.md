@@ -16,7 +16,7 @@ Milan means the Milan v1.2 specification, chapter 4.
 | asCapable | Port verdict that peer-delay exchanges with the neighbour work | 10.2.4.1, 11.2.2 |
 | BTCA | Best master selection over received priority vectors | 10.3, Milan 4.2.6.1 |
 | Cease | Pdelay_Req pause after repeated multiple responders | Milan 4.2.6.2.5 |
-| Follow_Up companion | Two-step message carrying the precise transmit time | 11.4.3 |
+| Follow_Up companion | Two-step timestamp message: Follow_Up or Pdelay_Resp_Follow_Up | 11.4.4, 11.4.7 |
 | gmPresent | True when the grandmaster's priority1 is below 255 | 10.3.12.1.4 g) |
 | Grandmaster | Clock whose time the whole domain follows | 10.3 |
 | pathTrace | Clock identities from grandmaster to this system | 10.3.8.21 |
