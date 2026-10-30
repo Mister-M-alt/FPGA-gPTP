@@ -3,6 +3,15 @@
 
 This guide explains every verification layer.
 
+## Summary
+
+- `make` runs every local gate and returns nonzero on failure.
+- Six simulation suites cover arithmetic, parsing, protocol and transport.
+- Mutation arms plant defects that the suites must catch.
+- Documentation gates check style, links, status and generated values.
+
+Terms are defined in the [glossary](GLOSSARY.md).
+
 ## Language layers
 
 | Layer | Files | Purpose |
@@ -10,6 +19,9 @@ This guide explains every verification layer.
 | Python | `hdl/ucode/gen_gptp_ucode.py` | Generates configuration-specific ROM images |
 | Python | `tb/check_phc_contract.py` | Guards the PHC and result boundaries |
 | Python | `tb/verilator/*/mutants.py` | Plants defects that suites must catch |
+| Python | `tb/mutation_verdict.py` | Reads each mutant's verdict from suite output |
+| Python | `tb/tsngen/run_tsngen.py` | Cross-checks frames against independent protocol decoders |
+| Python | `scripts/check_docs.py` | Checks documentation rules and generated values |
 | C | None | No first-party C harness exists |
 | C++ | `tb/verilator/*/sim_main.cpp` | Drives and checks Verilated RTL |
 | C++ | `bench/arty/bench_mii_tx_tag_test.cpp` | Checks timestamp-tag transport |
@@ -33,9 +45,14 @@ No handwritten C harness exists.
 | `make -C tb/verilator/engine` | Whole-plane protocol behavior |
 | `make -C tb/verilator/engine mutants` | Engine mutation controls |
 | `make -C tb/verilator/parser mutants` | Parser receive-error and PathTrace mutation controls |
+| `make -C tb/verilator/gaskets` | Bench MII gasket loopback and its mutation controls |
+| `make -C tb/tsngen` | Independent frame decode; skips without its checkout |
 | `make -C bench/arty test` | MII timestamp-tag transport |
 | `make lint` | Engine and bench lint |
+| `make docs` | Documentation, status, constants and diagram gates |
 | `make` | Every required local gate |
+
+Bare `make` in parser, engine, gaskets and tsngen adds mutants.
 
 Clean runs return zero.
 
@@ -102,12 +119,14 @@ Prefer independent protocol formulas and frame builders.
 
 ### Engine suite
 
+Values here come from the [protocol constants](INTEGRATION.md#protocol-constants).
+
 - Models a scripted protocol peer.
 - Runs shipping and seeded ROM images.
 - Checks Pdelay, Announce, Sync, and servo behavior.
 - Proves the link-up and locked step thresholds.
 - Keeps the lock across timeouts, failovers and mastership.
-- Keeps every written addend inside 200 ppm.
+- Keeps every written addend inside [`RATE_PPM_C`](INTEGRATION.md#protocol-constants).
 - Checks slew decisions, completion, and held intervals.
 - Checks reset, lost capability, missing Sync, steps, and mastership.
 - Grades every cycle from cold release to the first beat.
@@ -121,18 +140,19 @@ Prefer independent protocol formulas and frame builders.
 - Publishes sync-ok in every master cycle.
 - Keeps it through a receipt timeout queued behind mastership.
 - Ages a grandmaster when its Sync stops or turns unusable.
-- Times each takeover against the 375 ms Sync watch.
+- Times each takeover against the [`SYNC_RTO_MS_C`](INTEGRATION.md#protocol-constants) Sync watch.
 - Ages a grandmaster that never sends usable Sync.
 - Holds mastership while the aged peer keeps announcing.
 - Re-elects that peer once, after its Sync recovers.
-- Keeps 250 ms Sync and 60 ms Follow_Ups in use.
+- Drives Sync every 250 ms, Follow_Up 60 ms after.
+- Proves those stimulus pairs stay usable.
 - Ages again when Sync lapses after one master-heard pair.
 - Ages on expiries found in the master role.
 - Keeps a pending Sync's Follow_Up watch across the takeover.
 - Never ages a priority1 255 grandmaster on Sync.
 - Clears sync-ok when that grandmaster's Sync stops.
-- Keeps asCapable through four lost Pdelay responses.
-- Clears asCapable at the fifth, in each loss shape.
+- Keeps asCapable through losses short of [`LOST_CLEARS_AT_C`](INTEGRATION.md#protocol-constants).
+- Clears asCapable at that loss, in each loss shape.
 - Resets an exchange answered by duplicate responses.
 - Ends the multiple-responder cease on a port toggle.
 - Sends one request at once after each rise.

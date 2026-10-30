@@ -3,6 +3,21 @@
 
 This guide defines the external engine contract.
 
+## Summary
+
+- One clock, one synchronous active-low reset.
+- Receive takes validated gPTP bytes; it never backpressures.
+- Transmit honors byte-level ready; started frames always finish.
+- Egress timestamps return on a valid-ready result face.
+- `tx_credit_i` gates initiating transmissions.
+- A low `port_enabled_i` starts no frame.
+- PHC step and rate writes are one-cycle pulses.
+- `phc_slew_active_o` is a level.
+- Sample publication outputs on `pub_commit_o`; they change while staging.
+- [Protocol constants](#protocol-constants) is the home of protocol values.
+
+Terms are defined in the [glossary](GLOSSARY.md).
+
 ![FPGA-gPTP architecture](diagrams/gptp_architecture.png)
 
 ## Parent ownership
@@ -205,9 +220,11 @@ Restore credit to resume every normal cadence.
 
 ## Port enable
 
+Values here come from the [protocol constants](#protocol-constants).
+
 | Signal | Direction | Contract |
 |---|---|---|
-| `port_enabled_i` | Input | Carries 802.1AS-2011 portEnabled |
+| `port_enabled_i` | Input | Carries 802.1AS-2011 portEnabled (10.2.4.11) |
 
 Drive it as a level synchronous to `clk_i`.
 
@@ -257,9 +274,9 @@ A rise then sends one Pdelay_Req at once.
 
 That request counts no lost response.
 
-asCapable returns only after two good exchanges.
+asCapable returns only after [`ASCAP_UP_C`](#protocol-constants) good exchanges.
 
-The five-minute countdown remains the other exit.
+The [`CEASE_MS_C`](#protocol-constants) countdown remains the other exit.
 
 A change made while reset is held is not seen.
 
@@ -319,14 +336,14 @@ Its mixed-epoch timestamps cannot replace the retained delay.
 Ordinary missing-response and multiple-responder accounting remains active.
 The next request resumes measurement normally.
 
-These references are from IEEE 802.1AS-2020.
+These references are from IEEE 802.1AS-2011 with Cor1.
 
 | Clause | Responsibility |
 |---|---|
 | 11.2.2 | Capability through peer delay |
-| 11.2.19.3.3 | Neighbour rate estimation |
-| 11.2.19.3.4 | Link-delay calculation |
-| 11.2.20 | Responder timestamp pair |
+| 11.2.15.2.3 | Neighbour rate estimation |
+| 11.2.15.2.4 | Link-delay calculation |
+| 11.2.16 | Responder timestamp pair |
 
 Parent issue #621 exercises both signed 10 ms steps.
 Its real-counter regression uses an independent peer LocalClock.
@@ -336,6 +353,8 @@ Count step pulses to count phase steps.
 
 ### Step versus slew policy
 
+Values here come from the [protocol constants](#protocol-constants).
+
 [Issue #68](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68) records this policy.
 
 [The owner's decision](https://github.com/Mister-M-alt/FPGA-gPTP/issues/68#issuecomment-5794731372) sets both thresholds.
@@ -344,10 +363,12 @@ Count step pulses to count phase steps.
 
 The offset is local time minus grandmaster time.
 
-| Servo state | Slews up to | Steps above |
-|---|---|---|
-| Link-up | 20 us | 20 us |
-| Locked | 100 us | 100 us |
+| Servo state | Step threshold |
+|---|---|
+| Link-up | [`STEP_LINKUP_NS_C`](#protocol-constants) |
+| Locked | [`STEP_LOCKED_NS_C`](#protocol-constants) |
+
+Offsets up to the threshold slew; larger offsets step.
 
 An offset of exactly the threshold slews.
 
@@ -361,7 +382,7 @@ A link-up pair is the first after asCapable rises.
 
 Every reset clears asCapable, so every reset re-arms link-up.
 
-Nothing else re-arms the 20 us threshold.
+Nothing else re-arms the link-up threshold.
 
 #### Locked
 
@@ -374,7 +395,7 @@ These events clear the synchronization verdict and keep the lock:
 - A grandmaster identity change.
 - This plane returning from grandmaster duty.
 
-A 375 ms Sync receipt timeout ages the grandmaster instead.
+A [`SYNC_RTO_MS_C`](#protocol-constants) Sync receipt timeout ages the grandmaster instead.
 
 This plane then becomes grandmaster, which sets the verdict.
 
@@ -386,7 +407,7 @@ Becoming grandmaster keeps the lock.
 
 A grandmaster failover through a Sync lapse stays locked.
 
-So the next pair uses the 100 us threshold.
+So the next pair uses the locked threshold.
 
 A new parent under the same grandmaster changes nothing.
 
@@ -394,17 +415,19 @@ A new parent under the same grandmaster changes nothing.
 
 The trim sums a proportional and an integral term.
 
-That whole trim never exceeds 200 ppm in magnitude.
+That whole trim never exceeds [`RATE_PPM_C`](#protocol-constants) in magnitude.
 
 The integrator is clamped to the same bound.
 
 In addend units the bound is this integer expression:
 
 ```text
-(200 * 2^24 * 1000 + clk_hz / 2) / clk_hz
+(RATE_PPM_C * 2^24 * 1000 + clk_hz / 2) / clk_hz
 ```
 
 Here `clk_hz` is the generator's `--clk-hz` value.
+
+`RATE_PPM_C` is the rate bound, in ppm.
 
 The division truncates, so the bound rounds half up.
 
@@ -416,17 +439,17 @@ When consumption stops, the last trim stays applied.
 
 That held trim is inside the bound too.
 
-A 100 us slew needs at least 0.5 s.
+A locked-threshold slew needs at least `STEP_LOCKED_NS_C / RATE_PPM_C` ms.
 
-The master's own rate offset shares the 200 ppm bound.
+The master's own rate offset shares that bound.
 
 So a real slew can take much longer.
 
 A slew can overshoot while its trim rides the bound.
 
-A master over 200 ppm apart outruns the trim.
+A master further apart than the bound outruns the trim.
 
-Its offset then grows past 100 us and steps.
+Its offset then grows past the locked threshold and steps.
 
 #### Slew-active level
 
@@ -438,7 +461,7 @@ It marks transient offset correction through the rate path.
 
 The policy distinguishes correction from ordinary frequency tracking.
 
-Its tracking band is inclusive: -100 ns through +100 ns.
+Its inclusive tracking band is ±[`SLEW_SETTLED_NS_C`](#protocol-constants) around zero.
 
 This tolerance does not change either step threshold.
 
@@ -475,9 +498,9 @@ Neither the synchronization flag nor addend magnitude determines it.
 | Synchronous reset | Clear level and qualification immediately |
 | Warm reset | Retained scratch cannot revive the level |
 | asCapable loss | Hold level and applied rate; restart completion qualification |
-| Missing Sync; 375 ms receipt timeout | Ages the grandmaster; becoming grandmaster applies |
+| Missing Sync; [`SYNC_RTO_MS_C`](#protocol-constants) receipt timeout | Ages the grandmaster; becoming grandmaster applies |
 | The same timeout under priority1 255 | Hold level and rate; clear the verdict |
-| Missing Follow_Up; 125 ms timeout | Discard pending pair; retain level and rate |
+| Missing Follow_Up; [`FU_RTO_MS_C`](#protocol-constants) timeout | Discard pending pair; retain level and rate |
 | Grandmaster identity change | Hold level and rate; restart qualification |
 | Replacement step | Hold through step; clear with its integral-only addend |
 | Becoming grandmaster | Replace active correction with integral-only rate; clear together |
@@ -489,7 +512,7 @@ Loss of capability alone cannot remove an applied correction.
 
 A held slew can therefore remain active indefinitely.
 
-There is no elapsed-time completion or 0.5 s watchdog.
+There is no elapsed-time completion or slew watchdog.
 
 Completion follows the measured policy verdict above.
 
@@ -503,9 +526,11 @@ Discard every measurement window overlapping the level's high interval.
 
 A partly overlapping window remains affected after deassertion.
 
-The parent must carry this level through `KL_gptp_shadow`.
+The parent carries this level through [`KL_gptp_shadow`](https://github.com/kebag-logic/milan-fpga/blob/1e80128f0a467b58bf884b7d9bf62e013a2fb141/hdl/ieee8021as/gptp_plane/KL_gptp_shadow.sv#L150).
 
-That consumer connection belongs to [parent #545](https://github.com/kebag-logic/milan-fpga/issues/545).
+[Parent #545](https://github.com/kebag-logic/milan-fpga/issues/545), now closed, connected its media-clock servo.
+
+Its [servo input](https://github.com/kebag-logic/milan-fpga/blob/1e80128f0a467b58bf884b7d9bf62e013a2fb141/hdl/milan/milan_datapath.sv#L7329) pins parent `dev` at `1e80128f`.
 
 #### Publication during a slew
 
@@ -515,7 +540,7 @@ Every consumed pair raises it, stepping or slewing.
 
 So a slew may still be in progress.
 
-Its remaining offset is at most 100 us.
+Its remaining offset is within the applicable step threshold.
 
 `pub_offset_o` carries each pair's offset before correction.
 
@@ -530,6 +555,16 @@ Such a pair always steps.
 The engine publishes protocol state as wires.
 
 Sample outputs when `pub_commit_o` rises.
+
+Each output follows its staging register directly.
+
+No register holds the outputs at commit.
+
+Microcode writes the fields over several instructions.
+
+Between pulses the outputs can show a partial tuple.
+
+The commit cycle always presents a complete tuple.
 
 | Output group | Contents |
 |---|---|
@@ -585,7 +620,7 @@ The previous path therefore stays published.
 
 After reset or mastership, that is thisClock alone.
 
-The grandmaster and its path change in one commit.
+The grandmaster and its path complete in one commit.
 
 GET_AS_PATH can serve these entries unchanged.
 
@@ -593,7 +628,7 @@ GET_AS_PATH can serve these entries unchanged.
 
 [Issue #82](https://github.com/Mister-M-alt/FPGA-gPTP/issues/82) defines this self publication.
 
-802.1AS-2020 clause 10.3.13.2.4 requires it.
+802.1AS-2011 10.3.12.1.4 i) requires it.
 
 Every reset leaves no port vector.
 
@@ -623,7 +658,7 @@ The engine reads it there at configuration.
 
 Flags bit 0 publishes gmPresent.
 
-802.1AS-2020 10.3.13.2.4 g) defines it.
+802.1AS-2011 10.3.12.1.4 g) defines it.
 
 A priority1 below 255 makes thisClock grandmaster-capable.
 
@@ -653,7 +688,7 @@ Its tu therefore clears during mastership.
 
 Taking mastership from a peer changes the published grandmaster.
 
-That change arms the parent's Annex B.1.1 holdover.
+That arms the parent's Milan Annex B.1.1 holdover.
 
 Handing mastership to a peer clears bit 3.
 
@@ -679,19 +714,21 @@ A better peer wins through normal selection.
 
 ### Departure of the elected peer
 
+Values here come from the [protocol constants](#protocol-constants).
+
 Three departures each return thisClock and {thisClock}.
 
-Announce silence for 3 s ages the peer out.
+Announce silence for announceReceiptTimeout ages the peer out.
 
-So do 375 ms without a usable Sync pair.
+So does [`SYNC_RTO_MS_C`](#protocol-constants) without a usable Sync pair.
 
 That needs a grandmaster priority1 below 255.
 
 A usable pair is a Sync with its own Follow_Up.
 
-802.1AS-2011 10.3.11 states that rule.
+Figure 11-6 of 802.1AS-2011 states that rule.
 
-Cor1 corrects its Figure 10-13.
+Ageing follows 10.3.11, whose Figure 10-13 Cor1 corrects.
 
 It holds while the peer keeps announcing.
 
@@ -701,7 +738,7 @@ Nor is one naming another sequenceId.
 
 An asCapable port then becomes grandmaster.
 
-Adopting a new grandmaster starts its 375 ms Sync watch.
+Adopting a new grandmaster starts its [`SYNC_RTO_MS_C`](#protocol-constants) Sync watch.
 
 A grandmaster never sending usable Sync is aged too.
 
@@ -725,7 +762,7 @@ The next Announce after it elects the peer again, once.
 
 That pair restarts the watch, so lapsing Sync ages again.
 
-A Sync pending at takeover keeps its 125 ms watch.
+A Sync pending at takeover keeps its [`FU_RTO_MS_C`](#protocol-constants) watch.
 
 A later Follow_Up pairs with nothing in either role.
 
@@ -763,11 +800,13 @@ Without Announces, mastership follows within one receipt interval.
 
 ### Lost Pdelay responses
 
+Values here come from the [protocol constants](#protocol-constants).
+
 802.1AS-2011 Figure 11-8 counts lost responses.
 
 Cor1 and Cor2 correct that figure.
 
-Each 1 s interval without a completed exchange counts one.
+Each Pdelay_Req interval without a completed exchange counts one.
 
 That includes a Pdelay_Resp whose Follow_Up never comes.
 
@@ -775,9 +814,9 @@ A second Pdelay_Resp for the outstanding request resets the exchange.
 
 That reset also counts one, from either responder.
 
-Four consecutive losses keep asCapable.
+Fewer consecutive losses than [`LOST_CLEARS_AT_C`](#protocol-constants) keep asCapable.
 
-The fifth consecutive loss clears it.
+The loss that reaches it clears asCapable.
 
 A completed exchange restarts the count.
 
@@ -787,17 +826,69 @@ Generate one image for each hardware configuration.
 
 ```sh
 python3 hdl/ucode/gen_gptp_ucode.py \
-  --mac 02:a1:b2:c3:d4:e5 \
-  --p1 248 \
+  --mac 0x02A1B2C3D4E5 \
   --clk-hz 100000000 \
-  -o /tmp/gptp_ucode.hex
+  -o gptp_ucode.hex
 ```
+
+`--mac` takes one integer, such as `0x02A1B2C3D4E5`.
+
+Colon-separated addresses are refused.
+
+`--p1` sets priority1; [`P1_C`](#protocol-constants) is its default.
+
+The generator prints its word count and leg placement.
 
 Set `UCODE_HEX_P` to that generated image.
 
 The engine also reads thisClock from that image.
 
 Set `CLK_HZ_P` to the actual engine frequency.
+
+## Protocol constants
+
+This table is the single home of protocol values.
+
+Each row names the generator constant it reads.
+
+Other pages name the constant and link its row.
+
+`make docs` rules are `scripts/check_docs.py`; its [`selftest()`](../scripts/check_docs.py) cases are the specification.
+
+Clauses without a prefix are IEEE 802.1AS-2011.
+
+| Constant | Value | Meaning | Reference |
+|---|---:|---|---|
+| `P1_C` | 248 | Default announced priority1 | Milan 4.2.6.2.1 |
+| `ASCAP_UP_C` | 2 | Good exchanges before asCapable rises | Milan 4.2.6.2.4 |
+| `LOST_N_C` | 3 | allowedLostResponses | 11.5.3 |
+| `LOST_CLEARS_AT_C` | 5 | Consecutive lost response that clears asCapable | 11.2.15, Figure 11-8 |
+| `NPD_HI_C` | 800 | neighborPropDelayThresh, ns | Milan 4.2.6.1.1 |
+| `NPD_LO_C` | 80 | Largest tolerated negative delay magnitude, ns | Milan 4.2.6.2.7 |
+| `SYNC_RTO_MS_C` | 375 | syncReceiptTimeout, ms | Milan 4.2.6.2.3, Table 4.2 |
+| `FU_RTO_MS_C` | 125 | followUpReceiptTimeout, ms | Milan 4.2.6.2.3, Table 4.2 |
+| `CEASE_N_C` | 3 | Successive multi-answered requests before the cease | Milan 4.2.6.2.5 |
+| `CEASE_MS_C` | 300,000 | Default cease countdown, ms | Milan 4.2.6.2.5 |
+| `STEP_LINKUP_NS_C` | 20,000 | Link-up step threshold, ns | Issue #68 |
+| `STEP_LOCKED_NS_C` | 100,000 | Locked step threshold, ns | Issue #68 |
+| `SLEW_SETTLED_NS_C` | 100 | Tracking band half-width, ns | Issue #75 |
+| `RATE_PPM_C` | 200 | Rate trim and integrator bound, ppm | Issue #68 |
+| `DEPTH` | 1,024 | Microcode ROM words | [ROM budget](MANAGER.md#current-rom-budget) |
+| `ROM_CID_HI_C` | 1,022 | ROM word holding thisClock's high half | Issue #82 |
+| `ROM_GMCAP_BIT_C` | 32 | Grandmaster-capable bit in that word | Issue #82 |
+
+`--cease-ms` overrides the cease countdown per image.
+
+The engine suite uses 3,000 ms to stay fast.
+
+These cadences are literals inside generator legs.
+
+| Cadence | Value | Timer slot | Reference |
+|---|---:|---:|---|
+| Pdelay_Req interval | 1 s | 0 | Milan 4.2.6.2.2, Table 4.1 |
+| Sync interval | 125 ms | 1 | Milan 4.2.6.2.2, Table 4.1 |
+| announceReceiptTimeout | 3 s | 2 | Milan 4.2.6.2.3, Table 4.2 |
+| Announce interval | 1 s | 3 | Milan 4.2.6.2.2, Table 4.1 |
 
 ## Integration checklist
 

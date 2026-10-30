@@ -3,6 +3,10 @@
 
 Use current guides before historical records.
 
+New readers start at the [repository README](../README.md#start-here).
+
+The [glossary](GLOSSARY.md) defines every recurring term.
+
 ## Reader guides
 
 | Perspective | Guide | Focus |
@@ -36,6 +40,34 @@ Issues record unresolved behavior.
 PNG previews embed their editable-source SHA-256.
 
 The manifest also pins every committed diagram asset.
+
+## Document status
+
+Every Markdown page outside the archive has one row.
+
+`make docs` rules are `scripts/check_docs.py`; its [`selftest()`](../scripts/check_docs.py) cases are the specification.
+
+Current means checked against the source and clauses.
+
+Historical pages carry their own archive banners.
+
+| Page | Audience | Describes | Status |
+|---|---|---|---|
+| `README.md` | Every reader | Start here: scope, layout, reading order | Current |
+| `docs/README.md` | Every reader | Documentation map and document status | Current |
+| `docs/GLOSSARY.md` | Every reader | Defined terms and their clauses | Current |
+| `docs/MANAGER.md` | Manager | Readiness, ROM budget, open risks | Current |
+| `docs/INTEGRATION.md` | System integrator | Engine ports, policy, protocol constants | Current |
+| `docs/HDL_DEVELOPER.md` | HDL contributor | `hdl/` modules, state regions, synthesis figures | Current |
+| `docs/TEST_DEVELOPER.md` | Test developer | `tb/` and `bench/` suites, gates, mutation arms | Current |
+| `docs/SOURCE_EVIDENCE.md` | Reviewer | Claims bound to source line anchors | Current |
+| `docs/diagrams/README.md` | Maintainer | Diagram sources, rendering and checks | Current |
+| `tb/verilator/engine/README.md` | Test developer | Engine suite entry point | Current |
+| `tb/verilator/parser/README.md` | Test developer | Parser suite entry point | Current |
+| `tb/verilator/ucpu/README.md` | Test developer | MicroCPU suite entry point | Current |
+| `tb/verilator/gaskets/README.md` | Test developer | Bench gasket suite entry point | Current |
+| `tb/tsngen/README.md` | Test developer | Independent decode suite entry point | Current |
+| `docs/history/v1/` | Maintainer | Dated campaigns, listed in the history index | Historical |
 
 ## History
 
