@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 
@@ -117,6 +118,10 @@ CONSTANTS = (
     "STEP_LINKUP_NS_C", "STEP_LOCKED_NS_C", "SLEW_SETTLED_NS_C", "RATE_PPM_C",
     "DEPTH", "ROM_CID_HI_C", "ROM_GMCAP_BIT_C",
 )
+# A Meaning cell ending ", ms", ", ns" or ", ppm" gives the row's unit; that
+# value spelled with its unit elsewhere is a copy the table cannot correct.
+UNIT_CELL_RE = re.compile(r",\s*(ms|ns|ppm)\s*$")
+NUMBER_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
 ROM_PAGE = "docs/MANAGER.md"
 ROM_HEADING = "## Current ROM budget"
 ROM_ROW_RE = re.compile(r"^\|\s*(Shipping|Seeded regression)\s*\|([^|]*)\|([^|]*)\|\s*$")
@@ -431,6 +436,59 @@ def constant_findings(text: str, generator) -> list[str]:
     return findings
 
 
+def value_spellings(value: int, unit: str) -> list[str]:
+    """Return the patterns that restate `value` in `unit` or a larger unit."""
+    numbers = [(value, unit)]
+    if unit == "ms" and value % 1000 == 0:
+        numbers.append((value // 1000, "s"))
+    if unit == "ns" and value % 1000 == 0:
+        numbers.append((value // 1000, "(?:us|\u00b5s|\u03bcs)"))
+    patterns = [
+        rf"(?<![\d.,]){re.escape(text)}[\s-]?{suffix}\b"
+        for number, suffix in numbers
+        for text in {str(number), f"{number:,}"}
+    ]
+    minutes = value // 60000 if unit == "ms" and value % 60000 == 0 else 0
+    if 1 <= minutes <= len(NUMBER_WORDS):
+        word = NUMBER_WORDS[minutes - 1]
+        patterns += [rf"\b{minutes}[\s-]min", rf"\b{word}[\s-]minutes?\b"]
+    return patterns
+
+
+def copy_findings(texts: dict[str, str], constants_text: str, generator) -> list[str]:
+    """Reject a unit-bearing constant restated outside its constants row."""
+    spellings: list[tuple[str, re.Pattern[str]]] = []
+    for line in section_lines(constants_text, CONSTANTS_HEADING):
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        match = CONSTANT_ROW_RE.match(line.strip())
+        unit = UNIT_CELL_RE.search(cells[2]) if match and len(cells) > 2 else None
+        actual = getattr(generator, match.group(1), None) if match else None
+        if unit is not None and isinstance(actual, int):
+            spellings.extend(
+                (match.group(1), re.compile(pattern, re.IGNORECASE))
+                for pattern in value_spellings(actual, unit.group(1))
+            )
+    findings: list[str] = []
+    for relative, text in texts.items():
+        fenced = home = False
+        for number, line in enumerate(text.splitlines(), start=1):
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+                continue
+            if line.startswith("## "):
+                home = relative == CONSTANTS_PAGE and line.strip() == CONSTANTS_HEADING
+            if fenced or home:
+                continue
+            findings.extend(
+                f"{relative}:{number}: {found.group(0)!r} restates {name}; "
+                "link its constants row"
+                for name, pattern in spellings
+                for found in [pattern.search(line)]
+                if found
+            )
+    return findings
+
+
 def rom_usage(root: Path = ROOT, *extra: str) -> tuple[int, int]:
     """Run the generator as shipped and return (real words, depth)."""
     with tempfile.TemporaryDirectory() as directory:
@@ -486,9 +544,13 @@ def rom_findings(text: str, usage: dict[str, tuple[int, int]]) -> list[str]:
 def freshness_findings(root: Path = ROOT) -> list[str]:
     """Tie the constants and ROM budget tables to the generator."""
     generator = load_generator(root)
-    findings = constant_findings(
-        (root / CONSTANTS_PAGE).read_text(encoding="utf-8"), generator
-    )
+    constants_text = (root / CONSTANTS_PAGE).read_text(encoding="utf-8")
+    findings = constant_findings(constants_text, generator)
+    pages = {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in current_markdown(root)
+    }
+    findings.extend(copy_findings(pages, constants_text, generator))
     usage = {
         "Shipping": rom_usage(root),
         "Seeded regression": rom_usage(root, "--seq-seed", hex(SEEDED_SEQ_SEED)),
@@ -648,6 +710,41 @@ def selftest() -> int:
     if not constant_findings(good.replace("`SYNC_RTO_MS_C`", "SYNC_RTO_MS_C"), generator):
         print("docs selftest: unnamed constant row escaped")
         return 1
+    fixture = types.SimpleNamespace(
+        SYNC_RTO_MS_C=375, CEASE_MS_C=300_000, STEP_LINKUP_NS_C=20_000, RATE_PPM_C=200
+    )
+    table = (f"{CONSTANTS_HEADING}\n\n| Constant | Value | Meaning |\n|---|---:|---|\n"
+             "| `SYNC_RTO_MS_C` | 375 | syncReceiptTimeout, ms |\n"
+             "| `CEASE_MS_C` | 300,000 | Cease countdown, ms |\n"
+             "| `STEP_LINKUP_NS_C` | 20,000 | Step threshold, ns |\n"
+             "| `RATE_PPM_C` | 200 | Rate bound, ppm |\n"
+             "| Sync interval | 375 ms | Literal kept in the home |\n")
+    linked = "The [`SYNC_RTO_MS_C`](INTEGRATION.md#protocol-constants) Sync watch.\n"
+    arms += 1
+    if copy_findings({"docs/GUIDE.md": linked, CONSTANTS_PAGE: table}, table, fixture):
+        print("docs selftest: linked constant or its home row failed")
+        return 1
+    arms += 1
+    if copy_findings({"docs/GUIDE.md": "```\nsleep 375 ms\n```\n"}, table, fixture):
+        print("docs selftest: fenced command failed")
+        return 1
+    arms += 1
+    if copy_findings({"docs/GUIDE.md": "A 1.375 ms gap and 3,750 ms.\n"}, table, fixture):
+        print("docs selftest: unrelated number failed")
+        return 1
+    for label, copy in (
+        ("plain", "A 375 ms Sync watch."),
+        ("grouped", "A 300,000 ms countdown."),
+        ("converted", "A 20 us threshold."),
+        ("second-converted", "A 300 s countdown."),
+        ("spelled", "The five-minute countdown."),
+        ("rate", "Inside 200 ppm."),
+        ("outside the home", f"{table}\n## Next\n\nA 375 ms watch.\n"),
+    ):
+        arms += 1
+        if not copy_findings({CONSTANTS_PAGE: copy}, table, fixture):
+            print(f"docs selftest: {label} constant copy escaped")
+            return 1
     usage = {"Shipping": (1000, 1024), "Seeded regression": (1001, 1024)}
     rom = (f"{ROM_HEADING}\n\n| Image | Words used | Free |\n|---|---|---:|\n"
            "| Shipping | 1,000 of 1,024 | 24 |\n"
