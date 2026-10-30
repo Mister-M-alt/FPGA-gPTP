@@ -44,9 +44,9 @@ No certification claim is made.
 
 The [HDL guide](HDL_DEVELOPER.md#out-of-context-measurement) holds the latest dated synthesis figures.
 
-They come from main `5dce647a`, measured on 2026-10-11.
+That table records their commit, date and timing.
 
-Both measured tops met timing at 100 MHz.
+Later RTL has landed since that measurement.
 
 Earlier deltas live in the [resource-delta archive](history/v1/RESOURCE_DELTAS_2026_10.md).
 
@@ -61,7 +61,9 @@ The generator prints this budget on every run.
 | Shipping | 1,022 of 1,024 | 2 |
 | Seeded regression | 1,023 of 1,024 | 1 |
 
-Used words include thisClock's data words 1022 and 1023.
+Used words include thisClock's two data words.
+
+Those words start at [`ROM_CID_HI_C`](INTEGRATION.md#protocol-constants).
 
 Free words lie scattered across packing gaps.
 

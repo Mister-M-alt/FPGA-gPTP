@@ -126,7 +126,7 @@ Values here come from the [protocol constants](INTEGRATION.md#protocol-constants
 - Checks Pdelay, Announce, Sync, and servo behavior.
 - Proves the link-up and locked step thresholds.
 - Keeps the lock across timeouts, failovers and mastership.
-- Keeps every written addend inside 200 ppm.
+- Keeps every written addend inside [`RATE_PPM_C`](INTEGRATION.md#protocol-constants).
 - Checks slew decisions, completion, and held intervals.
 - Checks reset, lost capability, missing Sync, steps, and mastership.
 - Grades every cycle from cold release to the first beat.
@@ -140,18 +140,19 @@ Values here come from the [protocol constants](INTEGRATION.md#protocol-constants
 - Publishes sync-ok in every master cycle.
 - Keeps it through a receipt timeout queued behind mastership.
 - Ages a grandmaster when its Sync stops or turns unusable.
-- Times each takeover against the 375 ms Sync watch.
+- Times each takeover against the [`SYNC_RTO_MS_C`](INTEGRATION.md#protocol-constants) Sync watch.
 - Ages a grandmaster that never sends usable Sync.
 - Holds mastership while the aged peer keeps announcing.
 - Re-elects that peer once, after its Sync recovers.
-- Keeps 250 ms Sync and 60 ms Follow_Ups in use.
+- Drives Sync every 250 ms, Follow_Up 60 ms after.
+- Proves those stimulus pairs stay usable.
 - Ages again when Sync lapses after one master-heard pair.
 - Ages on expiries found in the master role.
 - Keeps a pending Sync's Follow_Up watch across the takeover.
 - Never ages a priority1 255 grandmaster on Sync.
 - Clears sync-ok when that grandmaster's Sync stops.
-- Keeps asCapable through four lost Pdelay responses.
-- Clears asCapable at the fifth, in each loss shape.
+- Keeps asCapable through losses short of [`LOST_CLEARS_AT_C`](INTEGRATION.md#protocol-constants).
+- Clears asCapable at that loss, in each loss shape.
 - Resets an exchange answered by duplicate responses.
 - Ends the multiple-responder cease on a port toggle.
 - Sends one request at once after each rise.

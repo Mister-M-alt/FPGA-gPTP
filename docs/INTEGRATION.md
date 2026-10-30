@@ -274,9 +274,9 @@ A rise then sends one Pdelay_Req at once.
 
 That request counts no lost response.
 
-asCapable returns only after two good exchanges.
+asCapable returns only after [`ASCAP_UP_C`](#protocol-constants) good exchanges.
 
-The five-minute countdown remains the other exit.
+The [`CEASE_MS_C`](#protocol-constants) countdown remains the other exit.
 
 A change made while reset is held is not seen.
 
@@ -363,10 +363,12 @@ Values here come from the [protocol constants](#protocol-constants).
 
 The offset is local time minus grandmaster time.
 
-| Servo state | Slews up to | Steps above |
-|---|---|---|
-| Link-up | 20 us | 20 us |
-| Locked | 100 us | 100 us |
+| Servo state | Step threshold |
+|---|---|
+| Link-up | [`STEP_LINKUP_NS_C`](#protocol-constants) |
+| Locked | [`STEP_LOCKED_NS_C`](#protocol-constants) |
+
+Offsets up to the threshold slew; larger offsets step.
 
 An offset of exactly the threshold slews.
 
@@ -380,7 +382,7 @@ A link-up pair is the first after asCapable rises.
 
 Every reset clears asCapable, so every reset re-arms link-up.
 
-Nothing else re-arms the 20 us threshold.
+Nothing else re-arms the link-up threshold.
 
 #### Locked
 
@@ -393,7 +395,7 @@ These events clear the synchronization verdict and keep the lock:
 - A grandmaster identity change.
 - This plane returning from grandmaster duty.
 
-A 375 ms Sync receipt timeout ages the grandmaster instead.
+A [`SYNC_RTO_MS_C`](#protocol-constants) Sync receipt timeout ages the grandmaster instead.
 
 This plane then becomes grandmaster, which sets the verdict.
 
@@ -405,7 +407,7 @@ Becoming grandmaster keeps the lock.
 
 A grandmaster failover through a Sync lapse stays locked.
 
-So the next pair uses the 100 us threshold.
+So the next pair uses the locked threshold.
 
 A new parent under the same grandmaster changes nothing.
 
@@ -413,17 +415,19 @@ A new parent under the same grandmaster changes nothing.
 
 The trim sums a proportional and an integral term.
 
-That whole trim never exceeds 200 ppm in magnitude.
+That whole trim never exceeds [`RATE_PPM_C`](#protocol-constants) in magnitude.
 
 The integrator is clamped to the same bound.
 
 In addend units the bound is this integer expression:
 
 ```text
-(200 * 2^24 * 1000 + clk_hz / 2) / clk_hz
+(RATE_PPM_C * 2^24 * 1000 + clk_hz / 2) / clk_hz
 ```
 
 Here `clk_hz` is the generator's `--clk-hz` value.
+
+`RATE_PPM_C` is the rate bound, in ppm.
 
 The division truncates, so the bound rounds half up.
 
@@ -435,17 +439,17 @@ When consumption stops, the last trim stays applied.
 
 That held trim is inside the bound too.
 
-A 100 us slew needs at least 0.5 s.
+A locked-threshold slew needs at least `STEP_LOCKED_NS_C / RATE_PPM_C` ms.
 
-The master's own rate offset shares the 200 ppm bound.
+The master's own rate offset shares that bound.
 
 So a real slew can take much longer.
 
 A slew can overshoot while its trim rides the bound.
 
-A master over 200 ppm apart outruns the trim.
+A master further apart than the bound outruns the trim.
 
-Its offset then grows past 100 us and steps.
+Its offset then grows past the locked threshold and steps.
 
 #### Slew-active level
 
@@ -457,7 +461,7 @@ It marks transient offset correction through the rate path.
 
 The policy distinguishes correction from ordinary frequency tracking.
 
-Its tracking band is inclusive: -100 ns through +100 ns.
+Its inclusive tracking band is ±[`SLEW_SETTLED_NS_C`](#protocol-constants) around zero.
 
 This tolerance does not change either step threshold.
 
@@ -494,9 +498,9 @@ Neither the synchronization flag nor addend magnitude determines it.
 | Synchronous reset | Clear level and qualification immediately |
 | Warm reset | Retained scratch cannot revive the level |
 | asCapable loss | Hold level and applied rate; restart completion qualification |
-| Missing Sync; 375 ms receipt timeout | Ages the grandmaster; becoming grandmaster applies |
+| Missing Sync; [`SYNC_RTO_MS_C`](#protocol-constants) receipt timeout | Ages the grandmaster; becoming grandmaster applies |
 | The same timeout under priority1 255 | Hold level and rate; clear the verdict |
-| Missing Follow_Up; 125 ms timeout | Discard pending pair; retain level and rate |
+| Missing Follow_Up; [`FU_RTO_MS_C`](#protocol-constants) timeout | Discard pending pair; retain level and rate |
 | Grandmaster identity change | Hold level and rate; restart qualification |
 | Replacement step | Hold through step; clear with its integral-only addend |
 | Becoming grandmaster | Replace active correction with integral-only rate; clear together |
@@ -508,7 +512,7 @@ Loss of capability alone cannot remove an applied correction.
 
 A held slew can therefore remain active indefinitely.
 
-There is no elapsed-time completion or 0.5 s watchdog.
+There is no elapsed-time completion or slew watchdog.
 
 Completion follows the measured policy verdict above.
 
@@ -536,7 +540,7 @@ Every consumed pair raises it, stepping or slewing.
 
 So a slew may still be in progress.
 
-Its remaining offset is at most 100 us.
+Its remaining offset is within the applicable step threshold.
 
 `pub_offset_o` carries each pair's offset before correction.
 
@@ -714,9 +718,9 @@ Values here come from the [protocol constants](#protocol-constants).
 
 Three departures each return thisClock and {thisClock}.
 
-Announce silence for 3 s ages the peer out.
+Announce silence for announceReceiptTimeout ages the peer out.
 
-So do 375 ms without a usable Sync pair.
+So does [`SYNC_RTO_MS_C`](#protocol-constants) without a usable Sync pair.
 
 That needs a grandmaster priority1 below 255.
 
@@ -734,7 +738,7 @@ Nor is one naming another sequenceId.
 
 An asCapable port then becomes grandmaster.
 
-Adopting a new grandmaster starts its 375 ms Sync watch.
+Adopting a new grandmaster starts its [`SYNC_RTO_MS_C`](#protocol-constants) Sync watch.
 
 A grandmaster never sending usable Sync is aged too.
 
@@ -758,7 +762,7 @@ The next Announce after it elects the peer again, once.
 
 That pair restarts the watch, so lapsing Sync ages again.
 
-A Sync pending at takeover keeps its 125 ms watch.
+A Sync pending at takeover keeps its [`FU_RTO_MS_C`](#protocol-constants) watch.
 
 A later Follow_Up pairs with nothing in either role.
 
@@ -802,7 +806,7 @@ Values here come from the [protocol constants](#protocol-constants).
 
 Cor1 and Cor2 correct that figure.
 
-Each 1 s interval without a completed exchange counts one.
+Each Pdelay_Req interval without a completed exchange counts one.
 
 That includes a Pdelay_Resp whose Follow_Up never comes.
 
@@ -810,9 +814,9 @@ A second Pdelay_Resp for the outstanding request resets the exchange.
 
 That reset also counts one, from either responder.
 
-Four consecutive losses keep asCapable.
+Fewer consecutive losses than [`LOST_CLEARS_AT_C`](#protocol-constants) keep asCapable.
 
-The fifth consecutive loss clears it.
+The loss that reaches it clears asCapable.
 
 A completed exchange restarts the count.
 
@@ -823,7 +827,6 @@ Generate one image for each hardware configuration.
 ```sh
 python3 hdl/ucode/gen_gptp_ucode.py \
   --mac 0x02A1B2C3D4E5 \
-  --p1 248 \
   --clk-hz 100000000 \
   -o gptp_ucode.hex
 ```
@@ -831,6 +834,8 @@ python3 hdl/ucode/gen_gptp_ucode.py \
 `--mac` takes one integer, such as `0x02A1B2C3D4E5`.
 
 Colon-separated addresses are refused.
+
+`--p1` sets priority1; [`P1_C`](#protocol-constants) is its default.
 
 The generator prints its word count and leg placement.
 

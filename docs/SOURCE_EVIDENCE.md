@@ -23,7 +23,7 @@ Line numbers describe the current branch layout.
 | Six state regions | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L20) | Engine suite |
 | Stable stalled transmission | [`KL_gptp_tx_slot`](../hdl/wire/KL_gptp_tx_slot.sv#L129) | Engine suite |
 | Committed publication | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L140) | Engine suite |
-| 1,024-word microcode ROM | [`KL_gptp_ucpu`](../hdl/ucpu/KL_gptp_ucpu.sv#L105) | MicroCPU suite |
+| Microcode ROM depth | [`KL_gptp_ucpu`](../hdl/ucpu/KL_gptp_ucpu.sv#L105) | MicroCPU suite |
 | Sixteen registers | [`KL_gptp_ucpu`](../hdl/ucpu/KL_gptp_ucpu.sv#L113) | MicroCPU suite |
 | Python image generation | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
 | Media-dependent transmit flags | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine and tsngen suites |
@@ -39,7 +39,7 @@ Line numbers describe the current branch layout.
 | Sync ageing needs gmPresent | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite and named mutation controls |
 | Unaged Sync timeout clears sync-ok | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite and named mutation controls |
 | Mastership keeps both Sync watches | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite and named mutation controls |
-| Fifth lost response clears asCapable | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite and named mutation controls |
+| Lost-response limit clears asCapable | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite and named mutation controls |
 | Duplicate response resets the exchange | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite and named mutation controls |
 | Port enable ends the cease | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite and named mutation controls |
 | Disabled port sends nothing | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv) | Engine suite and named mutation controls |
