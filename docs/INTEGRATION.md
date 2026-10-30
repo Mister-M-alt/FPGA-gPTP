@@ -853,6 +853,12 @@ Each row names the generator constant it reads.
 
 `make docs` fails when any value drifts from the generator.
 
+It also fails on a missing, duplicate or formatted row.
+
+Other pages name the constant and link its row.
+
+`make docs` rejects a timed value restated with its unit.
+
 Clauses without a prefix are IEEE 802.1AS-2011.
 
 | Constant | Value | Meaning | Reference |
