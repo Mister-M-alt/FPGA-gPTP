@@ -7,6 +7,35 @@ Fabric-native time synchronization for Milan FPGA systems.
 
 The engine keeps protocol work inside programmable logic.
 
+## Start here
+
+FPGA-gPTP is an IEEE 802.1AS-2011 time-synchronization engine.
+
+It follows the Milan v1.2 chapter 4 profile.
+
+That profile adds 802.1AS-2011 Cor1 and Cor2.
+
+The parent end station instantiates it as `KL_gptp_engine`.
+
+Read in this order:
+
+1. This page, for scope and layout.
+2. The [glossary](docs/GLOSSARY.md), for defined terms.
+3. The guide for your role, below.
+4. The [source evidence](docs/SOURCE_EVIDENCE.md), to check claims.
+5. The [document status](docs/README.md#document-status) table.
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `hdl/` | Engine RTL and the microcode generator |
+| `tb/` | Simulation suites, mutation arms, contract check |
+| `bench/` | Bench-only board top, MII gaskets, capture verdict |
+| `syn/ooc/` | Out-of-context synthesis scripts and clock check |
+| `scripts/` | Documentation and diagram gates |
+| `docs/` | Guides, glossary, evidence, diagrams, history |
+
 ## Choose your view
 
 | Reader | Start here | Main questions |

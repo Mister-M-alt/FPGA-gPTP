@@ -3,6 +3,15 @@
 
 This guide explains every verification layer.
 
+## Summary
+
+- `make` runs every local gate and returns nonzero on failure.
+- Six simulation suites cover arithmetic, parsing, protocol and transport.
+- Mutation arms plant defects that the suites must catch.
+- Documentation gates check style, links, status and generated values.
+
+Terms are defined in the [glossary](GLOSSARY.md).
+
 ## Language layers
 
 | Layer | Files | Purpose |
@@ -10,6 +19,9 @@ This guide explains every verification layer.
 | Python | `hdl/ucode/gen_gptp_ucode.py` | Generates configuration-specific ROM images |
 | Python | `tb/check_phc_contract.py` | Guards the PHC and result boundaries |
 | Python | `tb/verilator/*/mutants.py` | Plants defects that suites must catch |
+| Python | `tb/mutation_verdict.py` | Reads each mutant's verdict from suite output |
+| Python | `tb/tsngen/run_tsngen.py` | Cross-checks frames against independent protocol decoders |
+| Python | `scripts/check_docs.py` | Checks documentation rules and generated values |
 | C | None | No first-party C harness exists |
 | C++ | `tb/verilator/*/sim_main.cpp` | Drives and checks Verilated RTL |
 | C++ | `bench/arty/bench_mii_tx_tag_test.cpp` | Checks timestamp-tag transport |
@@ -33,9 +45,14 @@ No handwritten C harness exists.
 | `make -C tb/verilator/engine` | Whole-plane protocol behavior |
 | `make -C tb/verilator/engine mutants` | Engine mutation controls |
 | `make -C tb/verilator/parser mutants` | Parser receive-error and PathTrace mutation controls |
+| `make -C tb/verilator/gaskets` | Bench MII gasket loopback and its mutation controls |
+| `make -C tb/tsngen` | Independent frame decode; skips without its checkout |
 | `make -C bench/arty test` | MII timestamp-tag transport |
 | `make lint` | Engine and bench lint |
+| `make docs` | Documentation, status, constants and diagram gates |
 | `make` | Every required local gate |
+
+Bare `make` in parser, engine, gaskets and tsngen adds mutants.
 
 Clean runs return zero.
 

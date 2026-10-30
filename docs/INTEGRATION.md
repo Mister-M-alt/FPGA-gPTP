@@ -3,6 +3,19 @@
 
 This guide defines the external engine contract.
 
+## Summary
+
+- One clock, one synchronous active-low reset.
+- Receive takes validated gPTP bytes; it never backpressures.
+- Transmit honors byte-level ready; started frames always finish.
+- Egress timestamps return on a valid-ready result face.
+- `tx_credit_i` and `port_enabled_i` gate initiating transmissions.
+- PHC outputs are one-cycle step and rate pulses.
+- Publication outputs change together on `pub_commit_o`.
+- [Protocol constants](#protocol-constants) is the home of protocol values.
+
+Terms are defined in the [glossary](GLOSSARY.md).
+
 ![FPGA-gPTP architecture](diagrams/gptp_architecture.png)
 
 ## Parent ownership
@@ -207,7 +220,7 @@ Restore credit to resume every normal cadence.
 
 | Signal | Direction | Contract |
 |---|---|---|
-| `port_enabled_i` | Input | Carries 802.1AS-2011 portEnabled |
+| `port_enabled_i` | Input | Carries 802.1AS-2011 portEnabled (10.2.4.11) |
 
 Drive it as a level synchronous to `clk_i`.
 
@@ -319,14 +332,14 @@ Its mixed-epoch timestamps cannot replace the retained delay.
 Ordinary missing-response and multiple-responder accounting remains active.
 The next request resumes measurement normally.
 
-These references are from IEEE 802.1AS-2020.
+These references are from IEEE 802.1AS-2011 with Cor1.
 
 | Clause | Responsibility |
 |---|---|
 | 11.2.2 | Capability through peer delay |
-| 11.2.19.3.3 | Neighbour rate estimation |
-| 11.2.19.3.4 | Link-delay calculation |
-| 11.2.20 | Responder timestamp pair |
+| 11.2.15.2.3 | Neighbour rate estimation |
+| 11.2.15.2.4 | Link-delay calculation |
+| 11.2.16 | Responder timestamp pair |
 
 Parent issue #621 exercises both signed 10 ms steps.
 Its real-counter regression uses an independent peer LocalClock.
@@ -593,7 +606,7 @@ GET_AS_PATH can serve these entries unchanged.
 
 [Issue #82](https://github.com/Mister-M-alt/FPGA-gPTP/issues/82) defines this self publication.
 
-802.1AS-2020 clause 10.3.13.2.4 requires it.
+802.1AS-2011 10.3.12.1.4 i) requires it.
 
 Every reset leaves no port vector.
 
@@ -623,7 +636,7 @@ The engine reads it there at configuration.
 
 Flags bit 0 publishes gmPresent.
 
-802.1AS-2020 10.3.13.2.4 g) defines it.
+802.1AS-2011 10.3.12.1.4 g) defines it.
 
 A priority1 below 255 makes thisClock grandmaster-capable.
 
@@ -653,7 +666,7 @@ Its tu therefore clears during mastership.
 
 Taking mastership from a peer changes the published grandmaster.
 
-That change arms the parent's Annex B.1.1 holdover.
+That arms the parent's Milan Annex B.1.1 holdover.
 
 Handing mastership to a peer clears bit 3.
 
@@ -689,9 +702,9 @@ That needs a grandmaster priority1 below 255.
 
 A usable pair is a Sync with its own Follow_Up.
 
-802.1AS-2011 10.3.11 states that rule.
+Figure 11-6 of 802.1AS-2011 states that rule.
 
-Cor1 corrects its Figure 10-13.
+Ageing follows 10.3.11, whose Figure 10-13 Cor1 corrects.
 
 It holds while the peer keeps announcing.
 
@@ -787,17 +800,68 @@ Generate one image for each hardware configuration.
 
 ```sh
 python3 hdl/ucode/gen_gptp_ucode.py \
-  --mac 02:a1:b2:c3:d4:e5 \
+  --mac 0x02A1B2C3D4E5 \
   --p1 248 \
   --clk-hz 100000000 \
-  -o /tmp/gptp_ucode.hex
+  -o gptp_ucode.hex
 ```
+
+`--mac` takes one integer, such as `0x02A1B2C3D4E5`.
+
+Colon-separated addresses are refused.
+
+The generator prints its word count and leg placement.
 
 Set `UCODE_HEX_P` to that generated image.
 
 The engine also reads thisClock from that image.
 
 Set `CLK_HZ_P` to the actual engine frequency.
+
+## Protocol constants
+
+This table is the single home of protocol values.
+
+Each row names the generator constant it reads.
+
+`make docs` fails when any value drifts from the generator.
+
+Clauses without a prefix are IEEE 802.1AS-2011.
+
+| Constant | Value | Meaning | Reference |
+|---|---:|---|---|
+| `P1_C` | 248 | Default announced priority1 | Milan 4.2.6.2.1 |
+| `ASCAP_UP_C` | 2 | Good exchanges before asCapable rises | Milan 4.2.6.2.4 |
+| `LOST_N_C` | 3 | allowedLostResponses | 11.5.3 |
+| `LOST_CLEARS_AT_C` | 5 | Consecutive lost response that clears asCapable | 11.2.15, Figure 11-8 |
+| `NPD_HI_C` | 800 | neighborPropDelayThresh, ns | Milan 4.2.6.1.1 |
+| `NPD_LO_C` | 80 | Largest tolerated negative delay magnitude, ns | Milan 4.2.6.2.7 |
+| `SYNC_RTO_MS_C` | 375 | syncReceiptTimeout, ms | Milan 4.2.6.2.3, Table 4.2 |
+| `FU_RTO_MS_C` | 125 | followUpReceiptTimeout, ms | Milan 4.2.6.2.3, Table 4.2 |
+| `CEASE_N_C` | 3 | Successive multi-answered requests before the cease | Milan 4.2.6.2.5 |
+| `CEASE_MS_C` | 300,000 | Default cease countdown, ms | Milan 4.2.6.2.5 |
+| `STEP_LINKUP_NS_C` | 20,000 | Link-up step threshold, ns | Issue #68 |
+| `STEP_LOCKED_NS_C` | 100,000 | Locked step threshold, ns | Issue #68 |
+| `SLEW_SETTLED_NS_C` | 100 | Tracking band half-width, ns | Issue #75 |
+| `RATE_PPM_C` | 200 | Rate trim and integrator bound, ppm | Issue #68 |
+| `DEPTH` | 1,024 | Microcode ROM words | [ROM budget](MANAGER.md#current-rom-budget) |
+| `ROM_CID_HI_C` | 1,022 | ROM word holding thisClock's high half | Issue #82 |
+| `ROM_GMCAP_BIT_C` | 32 | Grandmaster-capable bit in that word | Issue #82 |
+
+`--cease-ms` overrides the cease countdown per image.
+
+The engine suite uses 3,000 ms to stay fast.
+
+These cadences are literals inside generator legs.
+
+`make docs` does not check them.
+
+| Cadence | Value | Timer slot | Reference |
+|---|---:|---:|---|
+| Pdelay_Req interval | 1 s | 0 | Milan 4.2.6.2.2, Table 4.1 |
+| Sync interval | 125 ms | 1 | Milan 4.2.6.2.2, Table 4.1 |
+| announceReceiptTimeout | 3 s | 2 | Milan 4.2.6.2.3, Table 4.2 |
+| Announce interval | 1 s | 3 | Milan 4.2.6.2.2, Table 4.1 |
 
 ## Integration checklist
 

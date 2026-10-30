@@ -3,6 +3,17 @@
 
 This guide explains structure, timing, and invariants.
 
+## Summary
+
+- Five RTL modules share one clock under `KL_gptp_engine`.
+- Microcode decides protocol policy; RTL moves bytes and time.
+- The microCPU reaches engine state through six address regions.
+- Scratch survives warm reset; validity bits do not.
+- Publication changes only through one commit.
+- Synthesis figures here are dated measurements.
+
+Terms are defined in the [glossary](GLOSSARY.md).
+
 ![FPGA-gPTP architecture](diagrams/gptp_architecture.png)
 
 The editable source remains [available](diagrams/gptp_architecture.drawio).

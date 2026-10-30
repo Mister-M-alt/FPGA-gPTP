@@ -3,6 +3,16 @@
 
 This page summarizes value, readiness, evidence, and risk.
 
+## Summary
+
+- Fabric gPTP owns product time in the parent.
+- Interfaces and protocol behavior are regression-tested in simulation.
+- Physical acceptance and timestamp calibration remain open.
+- The microcode ROM is nearly full.
+- No certification claim is made.
+
+Terms are defined in the [glossary](GLOSSARY.md).
+
 ## Product value
 
 - Timing control stays inside programmable logic.
@@ -32,81 +42,28 @@ No certification claim is made.
 
 ## Latest measured snapshot
 
-Measurements used Vivado 2026.1 out-of-context synthesis.
+The [HDL guide](HDL_DEVELOPER.md#out-of-context-measurement) holds the current synthesis figures.
 
-The target was `xc7a100tfgg484-2` at 100 MHz.
+They come from main `5dce647a`, measured on 2026-10-11.
 
-Both flows measured main `5dce647a` on 2026-10-11.
+Both measured tops met timing at 100 MHz.
 
-| Block | Flow | LUTs | Registers | BRAM tiles | DSPs | WNS |
-|---|---|---:|---:|---:|---:|---:|
-| Complete engine | Constrained | 4,852 | 3,652 | 1.5 | 4 | +1.773 ns |
-| Complete engine | Unconstrained | 4,853 | 3,652 | 1.5 | 4 | +1.773 ns |
-| Standalone microCPU | Constrained | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
-| Standalone microCPU | Unconstrained | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
-
-The constrained flow reads the clock before synthesis.
-
-The unconstrained flow created the clock after synthesis.
-
-Only constrained WNS reflects a synthesis timing target.
-
-Constraining the clock removed one engine LUT; nothing else moved.
-
-The [HDL guide](HDL_DEVELOPER.md#out-of-context-measurement) describes both flows.
-
-PR #76 measurements finished on 2026-09-24.
-
-They used the unconstrained flow.
-
-PR #76 adds 80 LUTs and six registers.
-
-The baseline used 4,773 LUTs and 3,646 registers.
-
-Memory LUTs remain 466; BRAM and DSP usage stay unchanged.
-
-WNS moves from +2.249 ns; timing remains met.
-
-The [PR measurement reports](https://github.com/kebag-logic/milan-fpga/tree/4999d8d6344e373e0204995cb36c93cf616e8f9e/review-evidence/gptp75-r1/author) record the comparison.
-
-### M7 timer-storage measurement
-
-Measurements finished on 2026-10-10 for milan-fpga #640, lane M7.
-
-| Block | LUTs | Registers | BRAM tiles | DSPs | WNS |
-|---|---:|---:|---:|---:|---:|
-| Complete engine | 4,748 | 3,396 | 1.5 | 4 | +2.249 ns |
-| Standalone microCPU | 1,643 | 733 | 1.5 | 4 | +1.941 ns |
-
-These figures used the then-unconstrained `make ooc` flow.
-
-They describe timer storage at lane head `18dd997b`.
-
-The timer's deadlines move from registers to distributed RAM.
-
-The engine sheds 105 LUTs since PR #76.
-
-It also sheds 256 registers.
-
-Memory LUTs rise from 466 to 490.
-
-BRAM and DSP usage stay unchanged.
-
-WNS moves from +1.773 ns; timing remains met.
-
-The standalone microCPU repeats the PR #76 figures exactly.
-
-See the [historical resource record](history/v1/RESOURCE_VALIDATION.md).
+Earlier deltas live in the [resource-delta archive](history/v1/RESOURCE_DELTAS_2026_10.md).
 
 ## Current ROM budget
 
-Shipping usage: 1,021 of 1,024 words (99.7%).
+The generator prints this budget on every run.
 
-That count includes thisClock's two data words at 1022..1023.
+`make docs` fails when this table drifts from it.
 
-Only three words remain free, spread across packing gaps.
+| Image | Words used | Free |
+|---|---|---:|
+| Shipping | 1,022 of 1,024 | 2 |
+| Seeded regression | 1,023 of 1,024 | 1 |
 
-Each seeded regression image uses one more word.
+Used words include thisClock's data words 1022 and 1023.
+
+Free words lie scattered across packing gaps.
 
 Shared legs may occupy the formerly reserved prefix.
 
