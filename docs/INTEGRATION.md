@@ -851,27 +851,9 @@ This table is the single home of protocol values.
 
 Each row names the generator constant it reads.
 
-`make docs` fails when a row drifts from its constant.
-
-It also fails on a missing, duplicate or formatted row.
-
 Other pages name the constant and link its row.
 
-Units come from Meaning cells ending ms, ns or ppm.
-
-Elsewhere on current pages, `make docs` rejects that row value as:
-
-- the integer and its unit symbol, as in `7 ms`;
-- ms in whole seconds, ns in whole microseconds, by symbol;
-- ms as one to ten whole minutes: `2 min`, `two minutes`.
-
-Fenced code and this section are exempt.
-
-Rows without such a unit are not checked for copies.
-
-Decimals and other unit words, such as milliseconds, pass.
-
-Review keeps those forms out.
+`make docs` rules are `scripts/check_docs.py`; its [`selftest()`](../scripts/check_docs.py) cases are the specification.
 
 Clauses without a prefix are IEEE 802.1AS-2011.
 
@@ -900,8 +882,6 @@ Clauses without a prefix are IEEE 802.1AS-2011.
 The engine suite uses 3,000 ms to stay fast.
 
 These cadences are literals inside generator legs.
-
-`make docs` does not check them.
 
 | Cadence | Value | Timer slot | Reference |
 |---|---:|---:|---|

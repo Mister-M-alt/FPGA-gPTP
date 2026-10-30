@@ -45,7 +45,7 @@ The manifest also pins every committed diagram asset.
 
 Every Markdown page outside the archive has one row.
 
-`make docs` fails when a page lacks its row.
+`make docs` rules are `scripts/check_docs.py`; its [`selftest()`](../scripts/check_docs.py) cases are the specification.
 
 Current means checked against the source and clauses.
 

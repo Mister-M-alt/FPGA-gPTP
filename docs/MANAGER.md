@@ -54,9 +54,9 @@ Earlier deltas live in the [resource-delta archive](history/v1/RESOURCE_DELTAS_2
 
 The generator prints this budget on every run.
 
-`make docs` fails when this table drifts from it.
+The seeded row counts the `--seq-seed 0x200000` image.
 
-The seeded row is checked with `--seq-seed 0x200000`.
+`make docs` rules are `scripts/check_docs.py`; its [`selftest()`](../scripts/check_docs.py) cases are the specification.
 
 | Image | Words used | Free |
 |---|---|---:|
