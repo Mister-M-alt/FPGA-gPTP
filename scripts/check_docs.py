@@ -28,6 +28,9 @@ WORD_RE = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*")
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 TABLE_RULE_RE = re.compile(r"^\s*\|?(?:\s*:?-+:?\s*\|)+\s*$")
 LIST_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+")
+LIST_ITEM_RE = re.compile(r"(?:[-+*]|\d{1,9}[.)])( +|$)")
+FENCE_OPEN_RE = re.compile(r"(`{3,})[^`]*$|(~{3,})")
+FENCE_CLOSE_RE = re.compile(r"(`{3,}|~{3,})[ \t]*$")
 
 RETIRED_TERMS = (
     "lin" + "ux",
@@ -121,7 +124,9 @@ CONSTANTS = (
 # A Meaning cell ending in ms, ns or ppm gives the row's unit; that value
 # spelled with its unit elsewhere is a copy the table cannot correct (#96).
 UNIT_CELL_RE = re.compile(r"(?:,\s*|\s+|\()(ms|ns|ppm)\)?\s*$")
-FENCE_MARKERS = ("```", "~~~")
+# Emphasis, strong and code-span delimiters. An underscore between word
+# characters delimits nothing in CommonMark 0.31.2, so it stays (#96).
+INLINE_MARKUP_RE = re.compile(r"[*`]+|(?<!\w)_+|_+(?!\w)")
 NUMBER_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
 ROM_PAGE = "docs/MANAGER.md"
 ROM_HEADING = "## Current ROM budget"
@@ -161,18 +166,53 @@ def textual_files(root: Path = ROOT) -> list[Path]:
     return sorted(files)
 
 
+def unfenced_lines(text: str) -> list[tuple[int, str]]:
+    """Return numbered lines outside code fences, per CommonMark 0.31.2 4.5.
+
+    A fence opens on three or more of one character. A backtick fence's info
+    string holds no backtick. It closes on a run of that character at least as
+    long with only spaces or tabs after it, or where its list item ends. Any
+    other line inside is content. A fence marker in an HTML comment opens
+    nothing; the comment's own lines are returned (#96).
+    """
+    lines: list[tuple[int, str]] = []
+    fence, comment = "", False
+    items: list[int] = []
+    for number, raw in enumerate(re.split(r"\r\n?|\n", text), start=1):
+        line = raw.expandtabs(4)
+        column = len(line) - len(line.lstrip(" "))
+        while items and line.strip() and column < items[-1]:
+            items.pop()
+            fence = ""
+        base = items[-1] if items else 0
+        if fence:
+            run = FENCE_CLOSE_RE.match(line, column)
+            if (column - base <= 3 and run and run.group(1)[0] == fence[0]
+                    and len(run.group(1)) >= len(fence)):
+                fence = ""
+            continue
+        while column - base <= 3:
+            item = LIST_ITEM_RE.match(line, column)
+            if item is None:
+                break
+            base = max(item.end(), item.start(1) + 1)
+            items.append(base)
+            column = item.end()
+        if comment or (column - base <= 3 and line.startswith("<!--", column)):
+            comment = "-->" not in line
+            lines.append((number, raw))
+            continue
+        run = FENCE_OPEN_RE.match(line, column)
+        if column - base <= 3 and run:
+            fence = run.group(1) or run.group(2)
+            continue
+        lines.append((number, raw))
+    return lines
+
+
 def without_fences(text: str) -> str:
     """Remove fenced code and HTML comments."""
-    text = HTML_COMMENT_RE.sub("", text)
-    output: list[str] = []
-    fenced = False
-    for line in text.splitlines():
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
-            continue
-        if not fenced:
-            output.append(line)
-    return "\n".join(output)
+    return "\n".join(line for _, line in unfenced_lines(HTML_COMMENT_RE.sub("", text)))
 
 
 def clean_prose(text: str) -> str:
@@ -459,6 +499,14 @@ def value_spellings(value: int, unit: str) -> list[str]:
     return patterns
 
 
+def without_markup(line: str) -> tuple[str, str]:
+    """Return a line with inline delimiters spaced out, then closed up (#96)."""
+    spaced, joined = (
+        " ".join(INLINE_MARKUP_RE.sub(gap, line).split()) for gap in (" ", "")
+    )
+    return spaced, joined
+
+
 def copy_findings(texts: dict[str, str], constants_text: str, generator) -> list[str]:
     """Reject a unit-bearing constant restated outside its constants row."""
     spellings: list[tuple[str, re.Pattern[str]]] = []
@@ -474,21 +522,18 @@ def copy_findings(texts: dict[str, str], constants_text: str, generator) -> list
             )
     findings: list[str] = []
     for relative, text in texts.items():
-        fence, home = "", False
-        for number, line in enumerate(text.splitlines(), start=1):
-            marker = line.lstrip()[:3]
-            if marker in FENCE_MARKERS and fence in ("", marker):
-                fence = "" if fence else marker
-                continue
+        home = False
+        for number, line in unfenced_lines(text):
             if line.startswith("## "):
                 home = relative == CONSTANTS_PAGE and line.strip() == CONSTANTS_HEADING
-            if fence or home:
+            if home:
                 continue
+            spaced, joined = without_markup(line)
             findings.extend(
                 f"{relative}:{number}: {found.group(0)!r} restates {name}; "
                 "link its constants row"
                 for name, pattern in spellings
-                for found in [pattern.search(line)]
+                for found in [pattern.search(spaced) or pattern.search(joined)]
                 if found
             )
     return findings
@@ -722,10 +767,12 @@ def selftest() -> int:
         print("docs selftest: duplicate constant row escaped")
         return 1
     fixture = types.SimpleNamespace(
-        SYNC_RTO_MS_C=375, CEASE_MS_C=300_000, STEP_LINKUP_NS_C=20_000, RATE_PPM_C=200
+        SYNC_RTO_MS_C=375, FU_RTO_MS_C=125, CEASE_MS_C=300_000,
+        STEP_LINKUP_NS_C=20_000, RATE_PPM_C=200,
     )
     table = (f"{CONSTANTS_HEADING}\n\n| Constant | Value | Meaning |\n|---|---:|---|\n"
              "| `SYNC_RTO_MS_C` | 375 | syncReceiptTimeout, ms |\n"
+             "| `FU_RTO_MS_C` | 125 | Follow_Up receipt timeout, ms |\n"
              "| `CEASE_MS_C` | 300,000 | Cease countdown, ms |\n"
              "| `STEP_LINKUP_NS_C` | 20,000 | Step threshold, ns |\n"
              "| `RATE_PPM_C` | 200 | Rate bound, ppm |\n"
@@ -762,15 +809,79 @@ def selftest() -> int:
         ("larger number word", "A twenty-five minutes soak."),
         ("word starting min", "At least 5 minimum samples."),
         ("tilde fence", "~~~\nsleep 375 ms\n~~~\n"),
+        ("unit-word prefix", "A 375 msec gap."),
+        ("larger number", "A 1375 ms gap."),
+        ("underscores between word characters", "snake_5_min"),
+        ("underscores between word characters in code", "`snake_5_min`"),
+        ("content of a longer tilde fence", "~~~~\n~~~\nA 375 ms watch.\n~~~~\n"),
+        ("content of a longer backtick fence", "````\n```\nA 375 ms watch.\n````\n"),
+        ("backtick line in a tilde fence", "~~~\n```\nA 375 ms watch.\n~~~\n"),
+        ("tilde line in a backtick fence", "```\n~~~\nA 375 ms watch.\n```\n"),
+        ("close marker with text", "~~~\n~~~ x\nA 375 ms watch.\n~~~\n"),
+        ("close marker before a form feed", "~~~\n~~~\x0c\nA 375 ms watch.\n~~~\n"),
+        ("close marker indented four", "~~~\n    ~~~\nA 375 ms watch.\n~~~\n"),
+        ("tilde info string holding markers", "~~~ a`b~\nA 375 ms watch.\n~~~\n"),
+        ("fence inside a list item", "1.  Item.\n\n    ```\n    A 375 ms watch.\n    ```\n"),
+        ("fence on a list marker", "- ```\n  A 375 ms watch.\n  ```\n"),
+        ("fence on a nested list marker", "- - ```\n    A 375 ms watch.\n    ```\n"),
+        ("tab-indented fence in a list item", "1.  Item.\n\n\t```\n\tA 375 ms watch.\n\t```\n"),
+        ("blank line in a list-item fence", "- ```\n  x\n\n  A 375 ms watch.\n  ```\n"),
+        ("fence after an empty list item", "-\n ```\nA 375 ms watch.\n```\n"),
+        ("fence after an HTML comment", "<!-- x -->\n```\nA 375 ms watch.\n```\n"),
+        ("fence after an indented comment marker", "    <!--\n```\nA 375 ms watch.\n```\n"),
+        ("unindented line in an indented fence", "  ```\nA 375 ms watch.\n  ```\n"),
     ):
         arms += 1
         if copy_findings({"docs/GUIDE.md": text}, table, fixture):
             print(f"docs selftest: {label} failed")
             return 1
+    rto, follow_up, cease = "SYNC_RTO_MS_C", "FU_RTO_MS_C", "CEASE_MS_C"
     for label, copy, name in (
-        ("unspaced minutes", "A 5min countdown.", "CEASE_MS_C"),
-        ("number word and min", "A five min countdown.", "CEASE_MS_C"),
-        ("copy after a tilde fence", "~~~\n```\n~~~\nA 375 ms watch.\n", "SYNC_RTO_MS_C"),
+        ("unspaced minutes", "A 5min countdown.", cease),
+        ("number word and min", "A five min countdown.", cease),
+        ("copy after a tilde fence", "~~~\n```\n~~~\nA 375 ms watch.\n", rto),
+        ("copy after a longer tilde fence", "~~~~\n~~~\n~~~~\nThe Sync watch is 375 ms.\n", rto),
+        ("copy after a tilde close with text",
+         "~~~text\nliteral\n~~~ not a close\nmore\n~~~\nThe Sync watch is 375 ms.\n", rto),
+        ("copy after a longer backtick fence", "````\n```\n````\nThe Sync watch is 375 ms.\n", rto),
+        ("copy after a backtick close with text", "```\n``` x\n```\nA 375 ms watch.\n", rto),
+        ("copy after an inner info-string tilde", "~~~sh\n~~~ x\n~~~\nA 375 ms watch.\n", rto),
+        ("second copy after a longer tilde fence",
+         "~~~~text\n~~~\n~~~~\n\nThe Sync receipt timeout is 125 ms.\n", follow_up),
+        ("second copy after an inner tilde info",
+         "~~~\n~~~example\n~~~\n\nThe Sync receipt timeout is 125 ms.\n", follow_up),
+        ("copy after a close with trailing blanks", "~~~\n~~~  \t\nA 375 ms watch.\n", rto),
+        ("copy after a close indented three", "~~~\n   ~~~\nA 375 ms watch.\n", rto),
+        ("copy after a marker indented four", "    ~~~\nA 375 ms watch.\n", rto),
+        ("copy after a marker tab-indented", "\t~~~\nA 375 ms watch.\n", rto),
+        ("copy after a two-character run", "~~\nA 375 ms watch.\n", rto),
+        ("copy after a backtick info with a backtick", "``` a`b\nA 375 ms watch.\n", rto),
+        ("copy after a fence on a list marker", "- ```\n  x\n  ```\nA 375 ms watch.\n", rto),
+        ("copy after a list item ended its fence", "- Item.\n  ```\n  x\n\nA 375 ms watch.\n", rto),
+        ("copy after a marker in an HTML comment", "<!--\n```\n-->\nA 375 ms watch.\n", rto),
+        ("copy after a comment on a list marker", "- <!--\n  ```\n  -->\nA 375 ms watch.\n", rto),
+        ("copy under a list marker indented four", "    - ```\n      A 375 ms watch.\n", rto),
+        ("copy after a list-item fence",
+         "1.  Item.\n\n    ```\n    x\n    ```\n    A 375 ms watch.\n", rto),
+        ("underscore unit copy", "The Sync watch is _375 ms_.", rto),
+        ("underscore digit minutes", "After _5 minutes_ it ceases.", cease),
+        ("underscore word minutes", "After _five minutes_ it ceases.", cease),
+        ("underscore second copy", "The Sync receipt timeout is _125 ms_.", follow_up),
+        ("underscore digit minutes opening", "A _5 minutes_ countdown.", cease),
+        ("underscore word minutes opening", "A _five minutes_ countdown.", cease),
+        ("asterisk second copy", "The Sync receipt timeout is *125 ms*.", follow_up),
+        ("strong underscore", "A __375 ms__ watch.", rto),
+        ("nested markup", "A _**375 ms**_ watch.", rto),
+        ("code span", "A `375 ms` watch.", rto),
+        ("markup on the value alone", "A **375** ms watch.", rto),
+        ("underscore on the value alone", "A _375_ ms watch.", rto),
+        ("code span on the value alone", "A `375` ms watch.", rto),
+        ("markup on the unit alone", "A 375 *ms* watch.", rto),
+        ("markup on digit minutes before a hyphen", "A **5**-minute countdown.", cease),
+        ("markup on the minute word after a hyphen", "A 5-*minute* countdown.", cease),
+        ("markup inside the value", "A 37*5* ms watch.", rto),
+        ("code span against the value", "`hold`five minutes", cease),
+        ("two spaces before the unit", "A 375  ms watch.", rto),
     ):
         arms += 1
         if not any(f"restates {name}" in finding
@@ -784,7 +895,25 @@ def selftest() -> int:
                    for finding in copy_findings({"docs/GUIDE.md": "A 375 ms watch."}, unit, fixture)):
             print(f"docs selftest: copy of a row whose Meaning ends {cell!r} escaped")
             return 1
-    usage ={"Shipping": (1000, 1024), "Seeded regression": (1001, 1024)}
+    arms += 1
+    planted = f"{CONSTANTS_HEADING}\n\n```\n## Next\n```\nA 375 ms watch.\n"
+    if copy_findings({CONSTANTS_PAGE: planted}, table, fixture):
+        print("docs selftest: heading inside a fence closed the home section")
+        return 1
+    arms += 1
+    planted = "```\n## Protocol constants\n```\nA 375 ms watch.\n"
+    if not copy_findings({CONSTANTS_PAGE: planted}, table, fixture):
+        print("docs selftest: heading inside a fence opened the home section")
+        return 1
+    arms += 1
+    if not style_findings(Path("fixture.md"), f"````\n```\n````\n{long}\n"):
+        print("docs selftest: long sentence after a longer fence escaped")
+        return 1
+    arms += 1
+    if style_findings(Path("fixture.md"), f"~~~\n{long}\n~~~\n"):
+        print("docs selftest: long line in a tilde fence failed")
+        return 1
+    usage = {"Shipping": (1000, 1024), "Seeded regression": (1001, 1024)}
     rom = (f"{ROM_HEADING}\n\n| Image | Words used | Free |\n|---|---|---:|\n"
            "| Shipping | 1,000 of 1,024 | 24 |\n"
            "| Seeded regression | 1,001 of 1,024 | 23 |\n")
