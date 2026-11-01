@@ -925,6 +925,7 @@ def selftest() -> int:
         ("strikethrough on the value", "docs/GUIDE.md", "A ~~375~~ ms watch."),
         ("marker in an HTML block", "docs/GUIDE.md", "<pre>\n```\n</pre>\n\nA 375 ms watch.\n"),
         ("indented heading after the home", CONSTANTS_PAGE, f"{table}\n  ## Aside\n\nA 375 ms watch.\n"),
+        ("fence after a lazy list line", "docs/GUIDE.md", "- Item.\nlazy\n  ```\nA 375 ms watch.\n"),
     ):
         arms += 1
         if copy_findings({page: copy}, table, fixture):
