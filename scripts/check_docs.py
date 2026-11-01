@@ -913,6 +913,23 @@ def selftest() -> int:
     if style_findings(Path("fixture.md"), f"~~~\n{long}\n~~~\n"):
         print("docs selftest: long line in a tilde fence failed")
         return 1
+    # Expected failures: real copies the rule misses today. Catching one fails
+    # its arm here, and the case then moves to the must-fail arms above (#96).
+    for label, page, copy in (
+        ("decimal seconds", "docs/GUIDE.md", "A 0.375 s watch."),
+        ("spelled unit", "docs/GUIDE.md", "A 375 milliseconds watch."),
+        ("wrapped line", "docs/GUIDE.md", "The Sync watch is 375\nms long.\n"),
+        ("link on the value", "docs/GUIDE.md", "A [375](x.md) ms watch."),
+        ("HTML tag on the value", "docs/GUIDE.md", "A <b>375</b> ms watch."),
+        ("HTML entity as the space", "docs/GUIDE.md", "A 375&nbsp;ms watch."),
+        ("strikethrough on the value", "docs/GUIDE.md", "A ~~375~~ ms watch."),
+        ("marker in an HTML block", "docs/GUIDE.md", "<pre>\n```\n</pre>\n\nA 375 ms watch.\n"),
+        ("indented heading after the home", CONSTANTS_PAGE, f"{table}\n  ## Aside\n\nA 375 ms watch.\n"),
+    ):
+        arms += 1
+        if copy_findings({page: copy}, table, fixture):
+            print(f"docs selftest: expected failure now caught: {label}")
+            return 1
     usage = {"Shipping": (1000, 1024), "Seeded regression": (1001, 1024)}
     rom = (f"{ROM_HEADING}\n\n| Image | Words used | Free |\n|---|---|---:|\n"
            "| Shipping | 1,000 of 1,024 | 24 |\n"
