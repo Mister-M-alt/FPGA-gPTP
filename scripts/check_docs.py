@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
+import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 
@@ -25,6 +28,9 @@ WORD_RE = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*")
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 TABLE_RULE_RE = re.compile(r"^\s*\|?(?:\s*:?-+:?\s*\|)+\s*$")
 LIST_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+")
+LIST_ITEM_RE = re.compile(r"(?:[-+*]|\d{1,9}[.)])( +|$)")
+FENCE_OPEN_RE = re.compile(r"(`{3,})[^`]*$|(~{3,})")
+FENCE_CLOSE_RE = re.compile(r"(`{3,}|~{3,})[ \t]*$")
 
 RETIRED_TERMS = (
     "lin" + "ux",
@@ -96,6 +102,38 @@ REQUIRED_CURRENT = {
     ),
 }
 
+STATUS_PAGE = "docs/README.md"
+STATUS_HEADING = "## Document status"
+STATUS_VALUES = ("Current", "Historical")
+HISTORY_ROW = "docs/history/v1/"
+STATUS_ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|(?:[^|]*\|){2}\s*([^|]*?)\s*\|\s*$")
+
+GENERATOR = "hdl/ucode/gen_gptp_ucode.py"
+CONSTANTS_PAGE = "docs/INTEGRATION.md"
+CONSTANTS_HEADING = "## Protocol constants"
+# Rows are found by their name cell alone, so a value cell in any other
+# syntax is reported rather than silently skipped (#96).
+CONSTANT_ROW_RE = re.compile(r"^\|\s*`([A-Za-z_][A-Za-z0-9_]*)`\s*\|\s*([^|]*?)\s*\|")
+DECIMAL_RE = re.compile(r"[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+")
+CONSTANTS = (
+    "P1_C", "ASCAP_UP_C", "LOST_N_C", "LOST_CLEARS_AT_C", "NPD_HI_C",
+    "NPD_LO_C", "SYNC_RTO_MS_C", "FU_RTO_MS_C", "CEASE_N_C", "CEASE_MS_C",
+    "STEP_LINKUP_NS_C", "STEP_LOCKED_NS_C", "SLEW_SETTLED_NS_C", "RATE_PPM_C",
+    "DEPTH", "ROM_CID_HI_C", "ROM_GMCAP_BIT_C",
+)
+# A Meaning cell ending in ms, ns or ppm gives the row's unit; that value
+# spelled with its unit elsewhere is a copy the table cannot correct (#96).
+UNIT_CELL_RE = re.compile(r"(?:,\s*|\s+|\()(ms|ns|ppm)\)?\s*$")
+# Emphasis, strong and code-span delimiters. An underscore between word
+# characters delimits nothing in CommonMark 0.31.2, so it stays (#96).
+INLINE_MARKUP_RE = re.compile(r"[*`]+|(?<!\w)_+|_+(?!\w)")
+NUMBER_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+ROM_PAGE = "docs/MANAGER.md"
+ROM_HEADING = "## Current ROM budget"
+ROM_ROW_RE = re.compile(r"^\|\s*(Shipping|Seeded regression)\s*\|([^|]*)\|([^|]*)\|\s*$")
+ROM_USED_RE = re.compile(r"\s*([0-9,]+) of ([0-9,]+)\s*")
+SEEDED_SEQ_SEED = 0x200000
+
 TEXT_SUFFIXES = {
     ".md", ".py", ".sv", ".cpp", ".h", ".sh", ".tcl", ".xdc", ".yml", ".yaml",
     ".svg",  # rendered diagrams carry visible labels the vocabulary rule owns
@@ -128,18 +166,53 @@ def textual_files(root: Path = ROOT) -> list[Path]:
     return sorted(files)
 
 
+def unfenced_lines(text: str) -> list[tuple[int, str]]:
+    """Return numbered lines outside code fences, per CommonMark 0.31.2 4.5.
+
+    A fence opens on three or more of one character. A backtick fence's info
+    string holds no backtick. It closes on a run of that character at least as
+    long with only spaces or tabs after it, or where its list item ends. Any
+    other line inside is content. A fence marker in an HTML comment opens
+    nothing; the comment's own lines are returned (#96).
+    """
+    lines: list[tuple[int, str]] = []
+    fence, comment = "", False
+    items: list[int] = []
+    for number, raw in enumerate(re.split(r"\r\n?|\n", text), start=1):
+        line = raw.expandtabs(4)
+        column = len(line) - len(line.lstrip(" "))
+        while items and line.strip() and column < items[-1]:
+            items.pop()
+            fence = ""
+        base = items[-1] if items else 0
+        if fence:
+            run = FENCE_CLOSE_RE.match(line, column)
+            if (column - base <= 3 and run and run.group(1)[0] == fence[0]
+                    and len(run.group(1)) >= len(fence)):
+                fence = ""
+            continue
+        while column - base <= 3:
+            item = LIST_ITEM_RE.match(line, column)
+            if item is None:
+                break
+            base = max(item.end(), item.start(1) + 1)
+            items.append(base)
+            column = item.end()
+        if comment or (column - base <= 3 and line.startswith("<!--", column)):
+            comment = "-->" not in line
+            lines.append((number, raw))
+            continue
+        run = FENCE_OPEN_RE.match(line, column)
+        if column - base <= 3 and run:
+            fence = run.group(1) or run.group(2)
+            continue
+        lines.append((number, raw))
+    return lines
+
+
 def without_fences(text: str) -> str:
     """Remove fenced code and HTML comments."""
-    text = HTML_COMMENT_RE.sub("", text)
-    output: list[str] = []
-    fenced = False
-    for line in text.splitlines():
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
-            continue
-        if not fenced:
-            output.append(line)
-    return "\n".join(output)
+    return "\n".join(line for _, line in unfenced_lines(HTML_COMMENT_RE.sub("", text)))
 
 
 def clean_prose(text: str) -> str:
@@ -303,6 +376,239 @@ def required_current_findings(root: Path = ROOT) -> list[str]:
     return findings
 
 
+def section_lines(text: str, heading: str) -> list[str]:
+    """Return the lines under one second-level heading."""
+    lines: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            inside = line.strip() == heading
+            continue
+        if inside:
+            lines.append(line)
+    return lines
+
+
+def status_findings(root: Path = ROOT, text: str | None = None) -> list[str]:
+    """Require one status row for every maintained Markdown page."""
+    if text is None:
+        text = (root / STATUS_PAGE).read_text(encoding="utf-8")
+    findings: list[str] = []
+    seen: dict[str, str] = {}
+    for line in section_lines(text, STATUS_HEADING):
+        match = STATUS_ROW_RE.match(line.strip())
+        if match is None:
+            continue
+        page, status = match.groups()
+        if page in seen:
+            findings.append(f"{STATUS_PAGE}: duplicate status row: {page}")
+        seen[page] = status
+        expected = "Historical" if page == HISTORY_ROW else "Current"
+        if status != expected:
+            findings.append(
+                f"{STATUS_PAGE}: {page}: status {status!r}, expected {expected!r}"
+            )
+        target = root / page
+        if not (target.is_dir() if page == HISTORY_ROW else target.is_file()):
+            findings.append(f"{STATUS_PAGE}: status row names a missing page: {page}")
+    if not seen:
+        findings.append(f"{STATUS_PAGE}: no document status rows")
+    if HISTORY_ROW not in seen:
+        findings.append(f"{STATUS_PAGE}: no status row for {HISTORY_ROW}")
+    for path in current_markdown(root):
+        relative = path.relative_to(root).as_posix()
+        if relative not in seen:
+            findings.append(f"{STATUS_PAGE}: no status row for {relative}")
+    return findings
+
+
+def decimal(cell: str) -> int | None:
+    """Return a plain or comma-grouped decimal cell, else None."""
+    cell = cell.strip()
+    if DECIMAL_RE.fullmatch(cell) is None:
+        return None
+    return int(cell.replace(",", ""))
+
+
+def load_generator(root: Path = ROOT):
+    """Import the microcode generator that owns the protocol constants."""
+    sys.dont_write_bytecode = True  # keep the gate from writing into hdl/ (#96)
+    spec = importlib.util.spec_from_file_location(
+        "gen_gptp_ucode_docs", root / GENERATOR
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {GENERATOR}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def constant_findings(text: str, generator) -> list[str]:
+    """Bind each constants-table value to the generator constant it names."""
+    findings: list[str] = []
+    seen: set[str] = set()
+    for line in section_lines(text, CONSTANTS_HEADING):
+        match = CONSTANT_ROW_RE.match(line.strip())
+        if match is None:
+            continue
+        name, cell = match.groups()
+        if name in seen:
+            findings.append(f"{CONSTANTS_PAGE}: duplicate constant row: {name}")
+        seen.add(name)
+        actual = getattr(generator, name, None)
+        value = decimal(cell)
+        if not isinstance(actual, int):
+            findings.append(f"{CONSTANTS_PAGE}: {name} is not a generator constant")
+        elif value is None:
+            findings.append(
+                f"{CONSTANTS_PAGE}: {name} value {cell!r} is not a plain decimal"
+            )
+        elif value != actual:
+            findings.append(
+                f"{CONSTANTS_PAGE}: {name} is {cell}, generator has {actual}"
+            )
+    if not seen:
+        findings.append(f"{CONSTANTS_PAGE}: no protocol constant rows")
+    findings.extend(
+        f"{CONSTANTS_PAGE}: no protocol constant row for {name}"
+        for name in CONSTANTS
+        if name not in seen
+    )
+    return findings
+
+
+def value_spellings(value: int, unit: str) -> list[str]:
+    """Return the patterns that restate `value` in `unit` or a larger unit."""
+    numbers = [(value, unit)]
+    if unit == "ms" and value % 1000 == 0:
+        numbers.append((value // 1000, "s"))
+    if unit == "ns" and value % 1000 == 0:
+        numbers.append((value // 1000, "(?:us|\u00b5s|\u03bcs)"))
+    patterns = [
+        rf"(?<![\d.,]){re.escape(text)}[\s-]?{suffix}\b"
+        for number, suffix in numbers
+        for text in {str(number), f"{number:,}"}
+    ]
+    minutes = value // 60000 if unit == "ms" and value % 60000 == 0 else 0
+    if 1 <= minutes <= len(NUMBER_WORDS):
+        word = NUMBER_WORDS[minutes - 1]
+        patterns += [
+            rf"(?<![\d.,])\b{minutes}[\s-]?min(?:ute)?s?\b",
+            rf"(?<![\w-]){word}[\s-]min(?:ute)?s?\b",
+        ]
+    return patterns
+
+
+def without_markup(line: str) -> tuple[str, str]:
+    """Return a line with inline delimiters spaced out, then closed up (#96)."""
+    spaced, joined = (
+        " ".join(INLINE_MARKUP_RE.sub(gap, line).split()) for gap in (" ", "")
+    )
+    return spaced, joined
+
+
+def copy_findings(texts: dict[str, str], constants_text: str, generator) -> list[str]:
+    """Reject a unit-bearing constant restated outside its constants row."""
+    spellings: list[tuple[str, re.Pattern[str]]] = []
+    for line in section_lines(constants_text, CONSTANTS_HEADING):
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        match = CONSTANT_ROW_RE.match(line.strip())
+        unit = UNIT_CELL_RE.search(cells[2]) if match and len(cells) > 2 else None
+        actual = getattr(generator, match.group(1), None) if match else None
+        if unit is not None and isinstance(actual, int):
+            spellings.extend(
+                (match.group(1), re.compile(pattern, re.IGNORECASE))
+                for pattern in value_spellings(actual, unit.group(1))
+            )
+    findings: list[str] = []
+    for relative, text in texts.items():
+        home = False
+        for number, line in unfenced_lines(text):
+            if line.startswith("## "):
+                home = relative == CONSTANTS_PAGE and line.strip() == CONSTANTS_HEADING
+            if home:
+                continue
+            spaced, joined = without_markup(line)
+            findings.extend(
+                f"{relative}:{number}: {found.group(0)!r} restates {name}; "
+                "link its constants row"
+                for name, pattern in spellings
+                for found in [pattern.search(spaced) or pattern.search(joined)]
+                if found
+            )
+    return findings
+
+
+def rom_usage(root: Path = ROOT, *extra: str) -> tuple[int, int]:
+    """Run the generator as shipped and return (real words, depth)."""
+    with tempfile.TemporaryDirectory() as directory:
+        result = subprocess.run(
+            [sys.executable, str(root / GENERATOR), *extra,
+             "-o", str(Path(directory) / "gptp_ucode.hex")],
+            check=True, capture_output=True, text=True,
+        )
+    match = re.search(r": (\d+) words, (\d+) real ", result.stdout)
+    if match is None:
+        raise ValueError(f"unexpected generator report: {result.stdout!r}")
+    return int(match.group(2)), int(match.group(1))
+
+
+def rom_findings(text: str, usage: dict[str, tuple[int, int]]) -> list[str]:
+    """Bind the ROM budget table to the generator's own word count."""
+    findings: list[str] = []
+    seen: set[str] = set()
+    for line in section_lines(text, ROM_HEADING):
+        match = ROM_ROW_RE.match(line.strip())
+        if match is None:
+            continue
+        image, used_cell, free_cell = match.groups()
+        if image in seen:
+            findings.append(f"{ROM_PAGE}: duplicate ROM budget row: {image}")
+        seen.add(image)
+        counts = ROM_USED_RE.fullmatch(used_cell)
+        free = decimal(free_cell)
+        if counts is None or free is None:
+            findings.append(
+                f"{ROM_PAGE}: {image} row {used_cell.strip()!r} | "
+                f"{free_cell.strip()!r} is not plain 'N of M' | N"
+            )
+            continue
+        used, depth = (decimal(value) for value in counts.groups())
+        if used is None or depth is None:
+            findings.append(f"{ROM_PAGE}: {image} counts are not plain decimals")
+            continue
+        real_used, real_depth = usage[image]
+        if (used, depth, free) != (real_used, real_depth, real_depth - real_used):
+            findings.append(
+                f"{ROM_PAGE}: {image} image reads {used} of {depth} with {free} free; "
+                f"generator builds {real_used} of {real_depth}"
+            )
+    findings.extend(
+        f"{ROM_PAGE}: no ROM budget row for the {image} image"
+        for image in usage
+        if image not in seen
+    )
+    return findings
+
+
+def freshness_findings(root: Path = ROOT) -> list[str]:
+    """Tie the constants and ROM budget tables to the generator."""
+    generator = load_generator(root)
+    constants_text = (root / CONSTANTS_PAGE).read_text(encoding="utf-8")
+    findings = constant_findings(constants_text, generator)
+    pages = {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in current_markdown(root)
+    }
+    findings.extend(copy_findings(pages, constants_text, generator))
+    usage = {
+        "Shipping": rom_usage(root),
+        "Seeded regression": rom_usage(root, "--seq-seed", hex(SEEDED_SEQ_SEED)),
+    }
+    findings.extend(rom_findings((root / ROM_PAGE).read_text(encoding="utf-8"), usage))
+    return findings
+
+
 def check(root: Path = ROOT) -> list[str]:
     """Run every documentation rule."""
     findings: list[str] = []
@@ -317,6 +623,8 @@ def check(root: Path = ROOT) -> list[str]:
     findings.extend(local_link_findings(root))
     findings.extend(archive_metadata_findings(root))
     findings.extend(required_current_findings(root))
+    findings.extend(status_findings(root))
+    findings.extend(freshness_findings(root))
     return findings
 
 
@@ -374,6 +682,284 @@ def selftest() -> int:
     arms += 1
     if not any(victim in finding for finding in required_current_findings(Path("/nonexistent"))):
         print("docs selftest: missing audience page escaped")
+        return 1
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "docs" / "history" / "v1").mkdir(parents=True)
+        (root / "README.md").write_text("# Root\n", encoding="utf-8")
+        (root / "docs" / "README.md").write_text("# Map\n", encoding="utf-8")
+        rows = {
+            "README.md": "Current",
+            STATUS_PAGE: "Current",
+            HISTORY_ROW: "Historical",
+        }
+
+        def table(entries: dict[str, str]) -> str:
+            """Render a status section holding one row per entry."""
+            body = "".join(
+                f"| `{page}` | Reader | Topic | {status} |\n"
+                for page, status in entries.items()
+            )
+            return f"{STATUS_HEADING}\n\n| Page | Audience | Describes | Status |\n|---|---|---|---|\n{body}"
+
+        arms += 1
+        if status_findings(root, table(rows)):
+            print("docs selftest: complete status table failed")
+            return 1
+        arms += 1
+        if not status_findings(root, table({k: v for k, v in rows.items() if k != "README.md"})):
+            print("docs selftest: unlisted page escaped")
+            return 1
+        arms += 1
+        if not status_findings(root, table({**rows, "docs/GONE.md": "Current"})):
+            print("docs selftest: status row for a missing page escaped")
+            return 1
+        arms += 1
+        if not status_findings(root, table({**rows, "README.md": "Stale"})):
+            print("docs selftest: wrong status escaped")
+            return 1
+        arms += 1
+        if not status_findings(root, table(rows) + "| `README.md` | Reader | Topic | Current |\n"):
+            print("docs selftest: duplicate status row escaped")
+            return 1
+    generator = load_generator(ROOT)
+    good = f"{CONSTANTS_HEADING}\n\n| Constant | Value |\n|---|---:|\n" + "".join(
+        f"| `{name}` | {getattr(generator, name):,} |\n" for name in CONSTANTS
+    )
+    sync = f"| {generator.SYNC_RTO_MS_C} |"
+    stale = generator.SYNC_RTO_MS_C + 1
+    arms += 1
+    if constant_findings(good, generator):
+        print("docs selftest: true constants table failed")
+        return 1
+    arms += 1
+    if not constant_findings(good.replace(sync, f"| {stale} |"), generator):
+        print("docs selftest: drifted constant escaped")
+        return 1
+    arms += 1
+    if not constant_findings(good.replace("SYNC_RTO_MS_C", "NO_SUCH_C"), generator):
+        print("docs selftest: unknown constant escaped")
+        return 1
+    arms += 1
+    if not constant_findings(f"{CONSTANTS_HEADING}\n\nNo table.\n", generator):
+        print("docs selftest: empty constants table escaped")
+        return 1
+    for label, cell in (("bold", f"**{stale}**"), ("negative", "-1"),
+                        ("unit-bearing", f"{stale} ms"), ("bold true", f"**{stale - 1}**")):
+        arms += 1
+        named = constant_findings(good.replace(sync, f"| {cell} |"), generator)
+        if not any("SYNC_RTO_MS_C value" in finding for finding in named):
+            print(f"docs selftest: {label} constant cell escaped")
+            return 1
+    arms += 1
+    deleted = "".join(line + "\n" for line in good.splitlines() if "SYNC_RTO_MS_C" not in line)
+    if not constant_findings(deleted, generator):
+        print("docs selftest: deleted constant row escaped")
+        return 1
+    arms += 1
+    if not constant_findings(good.replace("`SYNC_RTO_MS_C`", "SYNC_RTO_MS_C"), generator):
+        print("docs selftest: unnamed constant row escaped")
+        return 1
+    arms += 1
+    row = next(line for line in good.splitlines() if "`SYNC_RTO_MS_C`" in line)
+    named = constant_findings(f"{good}{row}\n", generator)
+    if not any("duplicate constant row: SYNC_RTO_MS_C" in finding for finding in named):
+        print("docs selftest: duplicate constant row escaped")
+        return 1
+    fixture = types.SimpleNamespace(
+        SYNC_RTO_MS_C=375, FU_RTO_MS_C=125, CEASE_MS_C=300_000,
+        STEP_LINKUP_NS_C=20_000, RATE_PPM_C=200,
+    )
+    table = (f"{CONSTANTS_HEADING}\n\n| Constant | Value | Meaning |\n|---|---:|---|\n"
+             "| `SYNC_RTO_MS_C` | 375 | syncReceiptTimeout, ms |\n"
+             "| `FU_RTO_MS_C` | 125 | Follow_Up receipt timeout, ms |\n"
+             "| `CEASE_MS_C` | 300,000 | Cease countdown, ms |\n"
+             "| `STEP_LINKUP_NS_C` | 20,000 | Step threshold, ns |\n"
+             "| `RATE_PPM_C` | 200 | Rate bound, ppm |\n"
+             "| Sync interval | 375 ms | Literal kept in the home |\n")
+    linked = "The [`SYNC_RTO_MS_C`](INTEGRATION.md#protocol-constants) Sync watch.\n"
+    arms += 1
+    if copy_findings({"docs/GUIDE.md": linked, CONSTANTS_PAGE: table}, table, fixture):
+        print("docs selftest: linked constant or its home row failed")
+        return 1
+    arms += 1
+    if copy_findings({"docs/GUIDE.md": "```\nsleep 375 ms\n```\n"}, table, fixture):
+        print("docs selftest: fenced command failed")
+        return 1
+    arms += 1
+    if copy_findings({"docs/GUIDE.md": "A 1.375 ms gap and 3,750 ms.\n"}, table, fixture):
+        print("docs selftest: unrelated number failed")
+        return 1
+    for label, copy in (
+        ("plain", "A 375 ms Sync watch."),
+        ("grouped", "A 300,000 ms countdown."),
+        ("converted", "A 20 us threshold."),
+        ("second-converted", "A 300 s countdown."),
+        ("spelled", "The five-minute countdown."),
+        ("rate", "Inside 200 ppm."),
+        ("outside the home", f"{table}\n## Next\n\nA 375 ms watch.\n"),
+    ):
+        arms += 1
+        if not copy_findings({CONSTANTS_PAGE: copy}, table, fixture):
+            print(f"docs selftest: {label} constant copy escaped")
+            return 1
+    for label, text in (
+        ("decimal minutes", "A 2.5 min hold."),
+        ("decimal minute word", "Wait 0.5 minutes."),
+        ("larger number word", "A twenty-five minutes soak."),
+        ("word starting min", "At least 5 minimum samples."),
+        ("tilde fence", "~~~\nsleep 375 ms\n~~~\n"),
+        ("unit-word prefix", "A 375 msec gap."),
+        ("larger number", "A 1375 ms gap."),
+        ("underscores between word characters", "snake_5_min"),
+        ("underscores between word characters in code", "`snake_5_min`"),
+        ("content of a longer tilde fence", "~~~~\n~~~\nA 375 ms watch.\n~~~~\n"),
+        ("content of a longer backtick fence", "````\n```\nA 375 ms watch.\n````\n"),
+        ("backtick line in a tilde fence", "~~~\n```\nA 375 ms watch.\n~~~\n"),
+        ("tilde line in a backtick fence", "```\n~~~\nA 375 ms watch.\n```\n"),
+        ("close marker with text", "~~~\n~~~ x\nA 375 ms watch.\n~~~\n"),
+        ("close marker before a form feed", "~~~\n~~~\x0c\nA 375 ms watch.\n~~~\n"),
+        ("close marker indented four", "~~~\n    ~~~\nA 375 ms watch.\n~~~\n"),
+        ("tilde info string holding markers", "~~~ a`b~\nA 375 ms watch.\n~~~\n"),
+        ("fence inside a list item", "1.  Item.\n\n    ```\n    A 375 ms watch.\n    ```\n"),
+        ("fence on a list marker", "- ```\n  A 375 ms watch.\n  ```\n"),
+        ("fence on a nested list marker", "- - ```\n    A 375 ms watch.\n    ```\n"),
+        ("tab-indented fence in a list item", "1.  Item.\n\n\t```\n\tA 375 ms watch.\n\t```\n"),
+        ("blank line in a list-item fence", "- ```\n  x\n\n  A 375 ms watch.\n  ```\n"),
+        ("fence after an empty list item", "-\n ```\nA 375 ms watch.\n```\n"),
+        ("fence after an HTML comment", "<!-- x -->\n```\nA 375 ms watch.\n```\n"),
+        ("fence after an indented comment marker", "    <!--\n```\nA 375 ms watch.\n```\n"),
+        ("unindented line in an indented fence", "  ```\nA 375 ms watch.\n  ```\n"),
+    ):
+        arms += 1
+        if copy_findings({"docs/GUIDE.md": text}, table, fixture):
+            print(f"docs selftest: {label} failed")
+            return 1
+    rto, follow_up, cease = "SYNC_RTO_MS_C", "FU_RTO_MS_C", "CEASE_MS_C"
+    for label, copy, name in (
+        ("unspaced minutes", "A 5min countdown.", cease),
+        ("number word and min", "A five min countdown.", cease),
+        ("copy after a tilde fence", "~~~\n```\n~~~\nA 375 ms watch.\n", rto),
+        ("copy after a longer tilde fence", "~~~~\n~~~\n~~~~\nThe Sync watch is 375 ms.\n", rto),
+        ("copy after a tilde close with text",
+         "~~~text\nliteral\n~~~ not a close\nmore\n~~~\nThe Sync watch is 375 ms.\n", rto),
+        ("copy after a longer backtick fence", "````\n```\n````\nThe Sync watch is 375 ms.\n", rto),
+        ("copy after a backtick close with text", "```\n``` x\n```\nA 375 ms watch.\n", rto),
+        ("copy after an inner info-string tilde", "~~~sh\n~~~ x\n~~~\nA 375 ms watch.\n", rto),
+        ("second copy after a longer tilde fence",
+         "~~~~text\n~~~\n~~~~\n\nThe Sync receipt timeout is 125 ms.\n", follow_up),
+        ("second copy after an inner tilde info",
+         "~~~text\n~~~example\n~~~\n\nThe Sync receipt timeout is 125 ms.\n", follow_up),
+        ("second copy after a four-tilde block",
+         "~~~~text\nexample\n~~~~\n\nThe Sync receipt timeout is 125 ms.\n", follow_up),
+        ("copy after a close with trailing blanks", "~~~\n~~~  \t\nA 375 ms watch.\n", rto),
+        ("copy after a close indented three", "~~~\n   ~~~\nA 375 ms watch.\n", rto),
+        ("copy after a marker indented four", "    ~~~\nA 375 ms watch.\n", rto),
+        ("copy after a marker tab-indented", "\t~~~\nA 375 ms watch.\n", rto),
+        ("copy after a two-character run", "~~\nA 375 ms watch.\n", rto),
+        ("copy after a backtick info with a backtick", "``` a`b\nA 375 ms watch.\n", rto),
+        ("copy after a fence on a list marker", "- ```\n  x\n  ```\nA 375 ms watch.\n", rto),
+        ("copy after a list item ended its fence", "- Item.\n  ```\n  x\n\nA 375 ms watch.\n", rto),
+        ("copy after a marker in an HTML comment", "<!--\n```\n-->\nA 375 ms watch.\n", rto),
+        ("copy after a comment on a list marker", "- <!--\n  ```\n  -->\nA 375 ms watch.\n", rto),
+        ("copy under a list marker indented four", "    - ```\n      A 375 ms watch.\n", rto),
+        ("copy after a list-item fence",
+         "1.  Item.\n\n    ```\n    x\n    ```\n    A 375 ms watch.\n", rto),
+        ("underscore unit copy", "The Sync watch is _375 ms_.", rto),
+        ("underscore digit minutes", "After _5 minutes_ it ceases.", cease),
+        ("underscore word minutes", "After _five minutes_ it ceases.", cease),
+        ("underscore second copy", "The Sync receipt timeout is _125 ms_.", follow_up),
+        ("underscore digit minutes opening", "A _5 minutes_ countdown.", cease),
+        ("underscore word minutes opening", "A _five minutes_ countdown.", cease),
+        ("asterisk second copy", "The Sync receipt timeout is *125 ms*.", follow_up),
+        ("strong underscore", "A __375 ms__ watch.", rto),
+        ("nested markup", "A _**375 ms**_ watch.", rto),
+        ("code span", "A `375 ms` watch.", rto),
+        ("markup on the value alone", "A **375** ms watch.", rto),
+        ("underscore on the value alone", "A _375_ ms watch.", rto),
+        ("code span on the value alone", "A `375` ms watch.", rto),
+        ("markup on the unit alone", "A 375 *ms* watch.", rto),
+        ("markup on digit minutes before a hyphen", "A **5**-minute countdown.", cease),
+        ("markup on the minute word after a hyphen", "A 5-*minute* countdown.", cease),
+        ("markup inside the value", "A 37*5* ms watch.", rto),
+        ("code span against the value", "`hold`five minutes", cease),
+        ("two spaces before the unit", "A 375  ms watch.", rto),
+    ):
+        arms += 1
+        if not any(f"restates {name}" in finding
+                   for finding in copy_findings({"docs/GUIDE.md": copy}, table, fixture)):
+            print(f"docs selftest: {label} constant copy escaped")
+            return 1
+    for cell in ("syncReceiptTimeout ms", "syncReceiptTimeout in ms", "syncReceiptTimeout (ms)"):
+        arms += 1
+        unit = table.replace("syncReceiptTimeout, ms", cell)
+        if not any("restates SYNC_RTO_MS_C" in finding
+                   for finding in copy_findings({"docs/GUIDE.md": "A 375 ms watch."}, unit, fixture)):
+            print(f"docs selftest: copy of a row whose Meaning ends {cell!r} escaped")
+            return 1
+    arms += 1
+    planted = f"{CONSTANTS_HEADING}\n\n```\n## Next\n```\nA 375 ms watch.\n"
+    if copy_findings({CONSTANTS_PAGE: planted}, table, fixture):
+        print("docs selftest: heading inside a fence closed the home section")
+        return 1
+    arms += 1
+    planted = "```\n## Protocol constants\n```\nA 375 ms watch.\n"
+    if not copy_findings({CONSTANTS_PAGE: planted}, table, fixture):
+        print("docs selftest: heading inside a fence opened the home section")
+        return 1
+    arms += 1
+    if not style_findings(Path("fixture.md"), f"````\n```\n````\n{long}\n"):
+        print("docs selftest: long sentence after a longer fence escaped")
+        return 1
+    arms += 1
+    if style_findings(Path("fixture.md"), f"~~~\n{long}\n~~~\n"):
+        print("docs selftest: long line in a tilde fence failed")
+        return 1
+    # Expected failures: real copies the rule misses today. Catching one fails
+    # its arm here, and the case then moves to the must-fail arms above (#96).
+    for label, page, copy in (
+        ("decimal seconds", "docs/GUIDE.md", "A 0.375 s watch."),
+        ("spelled unit", "docs/GUIDE.md", "A 375 milliseconds watch."),
+        ("wrapped line", "docs/GUIDE.md", "The Sync watch is 375\nms long.\n"),
+        ("link on the value", "docs/GUIDE.md", "A [375](x.md) ms watch."),
+        ("HTML tag on the value", "docs/GUIDE.md", "A <b>375</b> ms watch."),
+        ("HTML entity as the space", "docs/GUIDE.md", "A 375&nbsp;ms watch."),
+        ("strikethrough on the value", "docs/GUIDE.md", "A ~~375~~ ms watch."),
+        ("marker in an HTML block", "docs/GUIDE.md", "<pre>\n```\n</pre>\n\nA 375 ms watch.\n"),
+        ("indented heading after the home", CONSTANTS_PAGE, f"{table}\n  ## Aside\n\nA 375 ms watch.\n"),
+        ("fence after a lazy list line", "docs/GUIDE.md", "- Item.\nlazy\n  ```\nA 375 ms watch.\n"),
+    ):
+        arms += 1
+        if copy_findings({page: copy}, table, fixture):
+            print(f"docs selftest: expected failure now caught: {label}")
+            return 1
+    usage = {"Shipping": (1000, 1024), "Seeded regression": (1001, 1024)}
+    rom = (f"{ROM_HEADING}\n\n| Image | Words used | Free |\n|---|---|---:|\n"
+           "| Shipping | 1,000 of 1,024 | 24 |\n"
+           "| Seeded regression | 1,001 of 1,024 | 23 |\n")
+    arms += 1
+    if rom_findings(rom, usage):
+        print("docs selftest: true ROM budget failed")
+        return 1
+    arms += 1
+    if not rom_findings(rom.replace("1,000 of", "999 of"), usage):
+        print("docs selftest: drifted ROM count escaped")
+        return 1
+    arms += 1
+    if not rom_findings(rom.replace("| 24 |", "| 25 |"), usage):
+        print("docs selftest: drifted free count escaped")
+        return 1
+    arms += 1
+    if not rom_findings(rom.replace("| Seeded regression |", "| Seeded |"), usage):
+        print("docs selftest: missing ROM row escaped")
+        return 1
+    arms += 1
+    if not rom_findings(rom.replace("1,000 of", "**999** of"), usage):
+        print("docs selftest: formatted ROM count escaped")
+        return 1
+    arms += 1
+    if not rom_findings(rom + "| Shipping | 1,000 of 1,024 | 24 |\n", usage):
+        print("docs selftest: duplicate ROM row escaped")
         return 1
     arms += 1
     if vocabulary_findings(ROOT):

@@ -3,6 +3,17 @@
 
 This guide explains structure, timing, and invariants.
 
+## Summary
+
+- Five RTL modules share one clock under `KL_gptp_engine`.
+- Microcode decides protocol policy; RTL moves bytes and time.
+- The microCPU reaches engine state through six address regions.
+- Scratch survives warm reset; validity bits do not.
+- Sample on `pub_commit_o`; staging writes change outputs first.
+- Synthesis figures here are dated measurements.
+
+Terms are defined in the [glossary](GLOSSARY.md).
+
 ![FPGA-gPTP architecture](diagrams/gptp_architecture.png)
 
 The editable source remains [available](diagrams/gptp_architecture.drawio).
@@ -152,15 +163,15 @@ Microcode bit 0 means only that a peer is elected.
 
 The output also sets bit 0 for a grandmaster-capable thisClock.
 
-ROM word 1022 bit 32 marks that capability.
+ROM word [`ROM_CID_HI_C`](INTEGRATION.md#protocol-constants), bit [`ROM_GMCAP_BIT_C`](INTEGRATION.md#protocol-constants), marks that capability.
 
 Microcode reads of word 2 return the unmodified bits.
 
 ## MicroCPU shape
 
-- ROM contains 1,024 forty-eight-bit words.
+- ROM contains [`DEPTH`](INTEGRATION.md#protocol-constants) forty-eight-bit words.
 - Its last two words hold thisClock as data.
-- Bit 32 of word 1022 marks grandmaster capability.
+- Bit `ROM_GMCAP_BIT_C` of word `ROM_CID_HI_C` marks grandmaster capability.
 - Register storage contains sixteen sixty-four-bit words.
 - Integer logic supports common sixty-four-bit operations.
 - Shifts run serially.
@@ -187,7 +198,9 @@ A disabled port withdraws a frame before its first acceptance.
 
 ## Microcode receipt state
 
-Timer slot 4 is the 375 ms Sync receipt watch.
+Values here come from the [protocol constants](INTEGRATION.md#protocol-constants).
+
+Timer slot 4 is the [`SYNC_RTO_MS_C`](INTEGRATION.md#protocol-constants) Sync receipt watch.
 
 Every usable Sync pair restarts it, in either role.
 
@@ -239,7 +252,7 @@ Each Pdelay beat judges the previous request first.
 
 An uncompleted interval adds one lost response.
 
-The fifth consecutive loss clears asCapable.
+Consecutive loss [`LOST_CLEARS_AT_C`](INTEGRATION.md#protocol-constants) clears asCapable.
 
 Scratch word 39 adds each matching response's armed sequence.
 
@@ -303,7 +316,9 @@ The cease entry now ends in that tail.
 
 Microcode stages publication values first.
 
-`OP_COMMIT` exposes the complete staged tuple.
+`OP_COMMIT` marks the staged tuple complete.
+
+Staging writes reach the `pub_*_o` outputs at once.
 
 Consumers sample only during `pub_commit_o`.
 

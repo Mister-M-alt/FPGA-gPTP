@@ -23,6 +23,7 @@ They never define current behavior.
 | [Engine test record](testing/ENGINE_TEST_RECORD.md) | `tb/verilator/engine/README.md` | 2026-08-31 | [Test guide](../../TEST_DEVELOPER.md) |
 | [Parser test record](testing/PARSER_TEST_RECORD.md) | `tb/verilator/parser/README.md` | 2026-08-31 | [Test guide](../../TEST_DEVELOPER.md) |
 | [MicroCPU test record](testing/UCPU_TEST_RECORD.md) | `tb/verilator/ucpu/README.md` | 2026-08-31 | [Test guide](../../TEST_DEVELOPER.md) |
+| [Resource deltas](RESOURCE_DELTAS_2026_10.md) | `docs/MANAGER.md` | 2026-10-30 | [HDL guide](../../HDL_DEVELOPER.md#out-of-context-measurement) |
 
 ## Prototype line
 
@@ -45,4 +46,4 @@ Their rendered diagrams live beside them under `prototype/diagrams/`.
 | [asCapable bench](prototype/BENCH_ASCAPABLE.md) | `docs/BENCH_ASCAPABLE.md` | 2026-09-01 | [Manager guide](../../MANAGER.md) |
 | [TAP wire truth](prototype/BENCH_TAP_WIRETRUTH.md) | `docs/BENCH_TAP_WIRETRUTH.md` | 2026-09-01 | [Manager guide](../../MANAGER.md) |
 
-Archive total: 17 Markdown pages.
+Archive total: 18 Markdown pages.

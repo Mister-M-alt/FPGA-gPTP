@@ -32,7 +32,7 @@ EXPECTED = {
     "Six state regions": [(ENGINE, "//                  0  message bank      RO  (parser-written, PING-PONG")],
     "Stable stalled transmission": [("hdl/wire/KL_gptp_tx_slot.sv", "assign tx_valid_o = ser_run_r && !ser_drop_w;")],
     "Committed publication": [(ENGINE, "output logic        pub_commit_o,")],
-    "1,024-word microcode ROM": [(UCPU, "// ------------------------------------------------------------------ ROM")],
+    "Microcode ROM depth": [(UCPU, "// ------------------------------------------------------------------ ROM")],
     "Sixteen registers": [(UCPU, "// 16 x 64 distributed RAM, 1W3R (SET_MASKED reads rd as well).")],
     "Registered policy slew level": [
         (ENGINE, "output logic        phc_slew_active_o,"),
