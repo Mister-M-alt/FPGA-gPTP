@@ -26,13 +26,13 @@
 //                header and two reserved fields, so the header alone no
 //                longer draws a response), frame truncated before that
 //                minimum,
-//                a Follow_Up whose information TLV header is not the
-//                one 11.4.4.3 prescribes (Table 11-9 makes the TLV a
-//                field of the 76-octet Follow_Up, 11.4.4.2.2 places it
-//                first), rx_err_i (below). The domain and messageLength arms
-//                sit at header bytes 4 and 2..3, ahead of every
-//                message-bank write, so a foreign-domain or short-
-//                declared frame leaves nothing a handler could read.
+//                a Follow_Up without the information TLV of 11.4.4.3
+//                in its TLV chain, or whose chain is malformed within
+//                messageLength (below), rx_err_i (below). The domain
+//                and messageLength arms sit at header bytes 4 and
+//                2..3, ahead of every message-bank write, so a
+//                foreign-domain or short-declared frame leaves
+//                nothing a handler could read.
 //                The declared messageLength is also the hard parsing
 //                boundary: physical Ethernet padding is ignored, a frame
 //                shorter than its declaration is refused. A fixed 64-octet
@@ -49,9 +49,21 @@
 //                refused Follow_Up's header words land in the write
 //                bank like those of any frame cut by truncation or
 //                rx_err, no event names that bank, and the next frame
-//                overwrites it. TLVs after the information TLV are not
-//                parsed (11.4.1: ignore a TLV and attempt the next), so
-//                a messageLength above 76 is accepted.
+//                overwrites it.
+//
+//                Follow_Up TLV chain (FPGA-gPTP #98): 802.1AS-2011 11.4.1
+//                has a receiver ignore a TLV it cannot parse and attempt
+//                the next (IEEE 1588-2008 14.1), so the information TLV
+//                need not sit at octet 44. The chain is walked from
+//                octet 44 within messageLength, one byte per cycle with
+//                no buffer: a TLV other than the information TLV is
+//                skipped by its lengthField, the first information TLV
+//                fills word 11 and accepts the Follow_Up, and any later
+//                TLV is skipped the same way. Refused and counted: no
+//                information TLV, an odd lengthField (IEEE 1588-2008
+//                5.3.8), a TLV whose value runs past messageLength, and
+//                a TLV header that messageLength cuts. Physical padding
+//                past messageLength is not walked.
 //
 //                rx_err_i contract (FPGA-gPTP #35): the flag is sampled
 //                with every byte of a frame (rx_valid_i high), the first
@@ -171,13 +183,20 @@ module KL_gptp_rx_parser
   // ---- the Follow_Up information TLV header -----------------------------
   //! 802.1AS-2011 11.4.4.3, Table 11-10: tlvType 0x3 (ORGANIZATION_EXTENSION,
   //! 11.4.4.3.2), lengthField 28 (11.4.4.3.3), organizationId 00-80-C2
-  //! (11.4.4.3.4), organizationSubType 1 (11.4.4.3.5). Table 11-9 makes
-  //! the TLV a field of the Follow_Up message and 11.4.4.2.2 places it
-  //! first after the fixed fields, so octets 44..53 of every Follow_Up
-  //! are this header; a frame that carries anything else there has no
-  //! information TLV and is refused (FPGA-gPTP #11).
+  //! (11.4.4.3.4), organizationSubType 1 (11.4.4.3.5). A Follow_Up without
+  //! it is refused (FPGA-gPTP #11). 11.4.4.2.2 has a sender place it first
+  //! after the fixed fields, but 11.4.1 has a receiver skip a TLV it
+  //! cannot parse and attempt the next, so it is looked for along the
+  //! whole chain (FPGA-gPTP #98). A TLV whose header differs in any of
+  //! the four values is not this TLV and is skipped like any other.
   localparam logic [15:0] FU_TLV_TYPE_C = 16'h0003;
-  localparam logic [63:0] FU_TLV_HDR_C  = {16'd28, 24'h0080C2, 24'd1};
+  localparam logic [15:0] FU_TLV_LEN_C  = 16'd28;
+  localparam logic [47:0] FU_TLV_ORG_C  = {24'h0080C2, 24'd1};
+  //! Table 11-10 TLV offsets as value bytes still to come, lengthField 28
+  //! counting down: organizationSubType ends at TLV octet 9 (value byte 5)
+  //! and gmTimeBaseIndicator at octet 15 (value byte 11)
+  localparam logic [15:0] FU_LEFT_AT_SUB_C = 16'd23;
+  localparam logic [15:0] FU_LEFT_AT_TBI_C = 16'd17;
 
   // ---- absolute byte offsets (DA = byte 0, PTP header = byte 14) --------
   localparam int unsigned OFF_ETYPE_HI_C = 12;
@@ -205,11 +224,9 @@ module KL_gptp_rx_parser
   localparam int unsigned OFF_AN_GM_END_C = 74;
   localparam int unsigned OFF_AN_TSRC_C   = 77;
   localparam int unsigned OFF_AN_TLV_C    = 78;
-  // follow-up information TLV (Table 11-10 offsets + 58)
-  localparam int unsigned OFF_FU_TLVT_END_C = 59;   //! tlvType
-  localparam int unsigned OFF_FU_TLVH_END_C = 67;   //! lengthField..organizationSubType
-  localparam int unsigned OFF_FU_CSRO_END_C = 71;
-  localparam int unsigned OFF_FU_TBI_END_C  = 73;
+  // follow-up: the TLV chain starts after preciseOriginTimestamp (octet 44,
+  // OFF_TS_NS_END_C + 1); a chain of the information TLV alone ends at
+  // octet 75, Table 11-9's 76 octets, the minimum
   localparam int unsigned OFF_FU_END_C      = 89;   //! scaledLastGmFreqChange
 
   // ---- parse state -------------------------------------------------------
@@ -222,11 +239,15 @@ module KL_gptp_rx_parser
   logic [63:0] acc_r;          //! big-endian byte accumulator
   logic [15:0] utc_r;          //! announce currentUtcOffset (straddles acc)
   logic [10:0] msg_end_r;      //! absolute final declared byte (DA = 0)
-  // announce TLV chain and PathTrace walk
+  // TLV chain (the Announce suffix and the Follow_Up chain, #98: one frame
+  // has one type, so the two walks share these registers), PathTrace walk
   logic        tlv_hdr_run_r;  //! consuming the next generic 4-byte header
   logic  [1:0] tlv_hdr_pos_r;  //! byte inside that generic header
   logic [15:0] tlv_left_r;     //! bytes remaining in the current TLV value
   logic        tlv_chain_done_r; //! declared suffix ended on a TLV boundary
+  logic        fu_info_r;      //! this TLV's tlvType and lengthField are the
+                               //! information TLV's, and none matched before
+  logic        fu_found_r;     //! the information TLV matched (word 11 is its)
   logic [15:0] pt_left_r;      //! PathTrace value bytes remaining
   logic [7:0]  pt_cnt_r;       //! hops seen
   logic [2:0]  pt_byte_r;      //! byte inside the current identity
@@ -335,6 +356,30 @@ module KL_gptp_rx_parser
                          (cnt_r <= msg_end_r);
   assign ann_pt_left_after_w = pt_left_r - (ann_pt_byte_w ? 16'd1 : 16'd0);
 
+  //! #98: the Follow_Up TLV chain, from octet 44 (frame byte 58). A header
+  //! byte counts only within messageLength, so physical padding is never
+  //! read as a TLV. A value byte needs no such bound: its header was
+  //! refused unless the whole value lies within messageLength.
+  logic fu_tlv_header_byte_w, fu_tlv_header_end_w, fu_tlv_value_byte_w;
+  logic fu_tlv_header_bad_w, fu_tlv_cut_after_w;
+  assign fu_tlv_header_byte_w = (mtype_r == MT_FU_C) && tlv_hdr_run_r &&
+                                (cnt_r <= msg_end_r);
+  assign fu_tlv_header_end_w = fu_tlv_header_byte_w &&
+                               (tlv_hdr_pos_r == 2'd3);
+  assign fu_tlv_value_byte_w = (mtype_r == MT_FU_C) && !tlv_hdr_run_r &&
+                               (tlv_left_r != 16'd0);
+  //! IEEE 1588-2008 5.3.8: every TLV is an even number of octets; and the
+  //! value must end within messageLength (802.1AS-2011 11.4.2.2 counts
+  //! every TLV octet in it). Current byte included, for an EOF header end.
+  assign fu_tlv_header_bad_w = fu_tlv_header_end_w &&
+      (acc_nxt_w[0] ||
+       ({6'd0, cnt_r} + {1'b0, acc_nxt_w[15:0]} > {6'd0, msg_end_r}));
+  //! a TLV header begun within messageLength and not complete by its end,
+  //! the current byte included: the chain does not end on a TLV boundary
+  assign fu_tlv_cut_after_w = tlv_hdr_run_r &&
+      (fu_tlv_header_byte_w ? !fu_tlv_header_end_w
+                            : (tlv_hdr_pos_r != 2'd0));
+
   logic [7:0] ev_map_w;
   always_comb begin : ev_map
     unique case (mtype_r)
@@ -365,6 +410,8 @@ module KL_gptp_rx_parser
       tlv_hdr_pos_r <= '0;
       tlv_left_r    <= '0;
       tlv_chain_done_r <= 1'b0;
+      fu_info_r   <= 1'b0;
+      fu_found_r  <= 1'b0;
       pt_left_r   <= '0;
       pt_cnt_r    <= '0;
       pt_byte_r   <= '0;
@@ -414,6 +461,8 @@ module KL_gptp_rx_parser
           tlv_hdr_pos_r <= '0;
           tlv_left_r <= '0;
           tlv_chain_done_r <= 1'b0;
+          fu_info_r <= 1'b0;
+          fu_found_r <= 1'b0;
           pt_run_r <= 1'b0;
           pt_cnt_r <= '0;
           pt_left_r <= '0;
@@ -509,19 +558,42 @@ module KL_gptp_rx_parser
               end
             end
             if (mtype_r == MT_FU_C) begin
-              // the information TLV header: tlvType at octets 44..45,
-              // then lengthField, organizationId and organizationSubType
-              // at 46..53; a mismatch poisons the frame, so neither the
-              // w11 write below nor the event follows
-              if ((cnt_r == 11'(OFF_FU_TLVT_END_C)) &&
-                  (acc_nxt_w[15:0] != FU_TLV_TYPE_C)) bad_r <= 1'b1;
-              if ((cnt_r == 11'(OFF_FU_TLVH_END_C)) &&
-                  (acc_nxt_w != FU_TLV_HDR_C)) bad_r <= 1'b1;
-              if (cnt_r == 11'(OFF_FU_TBI_END_C)) begin
-                bank_we_o    <= 1'b1;
-                bank_addr_o  <= 5'd11;
-                bank_wdata_o <= {acc_nxt_w[47:16], acc_nxt_w[15:0],
-                                 16'd0};
+              // #98: walk the TLV chain from octet 44 (802.1AS-2011 11.4.1,
+              // IEEE 1588-2008 14.1). Each header's lengthField skips its
+              // value; the first TLV whose tlvType, lengthField,
+              // organizationId and organizationSubType are the information
+              // TLV's (11.4.4.3) fills word 11; any other TLV is skipped.
+              if (cnt_r == 11'(OFF_TS_NS_END_C)) begin
+                tlv_hdr_run_r <= 1'b1;
+                tlv_hdr_pos_r <= '0;
+              end
+              if (fu_tlv_header_byte_w) begin
+                if (!fu_tlv_header_end_w) begin
+                  tlv_hdr_pos_r <= tlv_hdr_pos_r + 2'd1;
+                end else begin
+                  tlv_hdr_pos_r <= '0;
+                  fu_info_r <= !fu_found_r &&
+                               (acc_nxt_w[31:16] == FU_TLV_TYPE_C) &&
+                               (acc_nxt_w[15:0] == FU_TLV_LEN_C);
+                  if (fu_tlv_header_bad_w) begin
+                    bad_r <= 1'b1;
+                  end else if (acc_nxt_w[15:0] != 16'd0) begin
+                    tlv_hdr_run_r <= 1'b0;
+                    tlv_left_r    <= acc_nxt_w[15:0];
+                  end
+                end
+              end else if (fu_tlv_value_byte_w) begin
+                tlv_left_r <= tlv_left_r - 16'd1;
+                if (fu_info_r && (tlv_left_r == FU_LEFT_AT_SUB_C) &&
+                    (acc_nxt_w[47:0] == FU_TLV_ORG_C)) fu_found_r <= 1'b1;
+                if (fu_info_r && fu_found_r &&
+                    (tlv_left_r == FU_LEFT_AT_TBI_C)) begin
+                  bank_we_o    <= 1'b1;
+                  bank_addr_o  <= 5'd11;
+                  bank_wdata_o <= {acc_nxt_w[47:16], acc_nxt_w[15:0],
+                                   16'd0};
+                end
+                if (tlv_left_r == 16'd1) tlv_hdr_run_r <= 1'b1;
               end
             end
             if (mtype_r == MT_ANN_C) begin
@@ -614,11 +686,13 @@ module KL_gptp_rx_parser
           end
 
           // ---------------- end of frame -------------------------------
-          //! bad_r is sampled as registered. Fixed header/FU poison arms sit
-          //! below their type minima. An Announce TLV header can legitimately
-          //! end on EOF, so its current-byte bad term and chain completion
-          //! are included explicitly below, as is the eof byte's own
-          //! rx_err_i (an earlier one is in bad_r).
+          //! bad_r is sampled as registered. Fixed header poison arms sit
+          //! below their type minima. An Announce or Follow_Up TLV header
+          //! can legitimately end on EOF, so its current-byte bad term and
+          //! chain completion are included explicitly below, as is the eof
+          //! byte's own rx_err_i (an earlier one is in bad_r). The
+          //! Follow_Up's information TLV matched at its octet 9, ahead of
+          //! its own last octet, so fu_found_r is already registered.
           if (rx_eof_i) begin
             run_r    <= 1'b0;
             fin_r    <= 1'b1;
@@ -628,7 +702,10 @@ module KL_gptp_rx_parser
                          (ann_tlv_chain_done_after_w &&
                           !ann_tlv_header_bad_w &&
                           (!pt_seen_r ||
-                           (ann_pt_left_after_w == 16'd0))));
+                           (ann_pt_left_after_w == 16'd0)))) &&
+                        ((mtype_r != MT_FU_C) ||
+                         (fu_found_r && !fu_tlv_header_bad_w &&
+                          !fu_tlv_cut_after_w));
           end
         end
 
