@@ -14,7 +14,9 @@
 // two reserved fields, rx_err at eof and at every other byte, with every
 // bank write of a flagged frame counted; that no word a refused frame
 // leaves reaches the next accepted frame's event; and that a Sync padded
-// to the 60-byte Ethernet minimum is accepted.
+// to the 60-byte Ethernet minimum is accepted. #98: a Follow_Up whose
+// information TLV follows unknown TLVs is accepted with the plain case's
+// words, and a malformed Follow_Up TLV chain is refused.
 
 #include <cstdint>
 #include <cstdio>
@@ -160,6 +162,9 @@ class RxParserHarness {
   void check_a_path_head_and_an_empty_path_qualify();
   void check_sync();
   void check_follow_up_with_information_tlv();
+  void check_follow_up_tlv_walk_accepts();
+  void check_follow_up_tlv_walk_refuses();
+  void expect_fu_refused(const char *tag, uint16_t d0, bool no_w11);
   void check_pdelay_resp();
   void check_header_level_drop_arms();
   void check_foreign_domain_is_refused_for_every_type();
@@ -815,6 +820,174 @@ void RxParserHarness::check_follow_up_with_information_tlv() {
     expect_eq("fu w11", bank[11],
               (0xFFFFF000ull << 32) | (0x0007ull << 16));
   }
+}
+
+// ---- #98: the Follow_Up TLV chain -------------------------------------
+//! One TLV as the wire carries it: lengthField is written as given, and
+//! `value` is every octet that follows it, so a header may declare more
+//! or fewer octets than it carries.
+struct FuTlv {
+  uint16_t type;
+  uint16_t length;
+  std::vector<uint8_t> value;
+};
+
+//! A TLV whose lengthField counts exactly its value.
+static FuTlv tlv_of(uint16_t type, const std::vector<uint8_t> &value) {
+  return {type, static_cast<uint16_t>(value.size()), value};
+}
+
+//! 802.1AS-2011 Table 11-10 with organizationId 00-80-C2 and
+//! organizationSubType `sub`: cumulativeScaledRateOffset, then
+//! gmTimeBaseIndicator, lastGmPhaseChange zero, scaledLastGmFreqChange.
+static FuTlv info_tlv(uint32_t csro, uint16_t tbi, uint8_t sub = 1) {
+  std::vector<uint8_t> v = {0x00, 0x80, 0xC2, 0x00, 0x00, sub};
+  for (int s = 24; s >= 0; s -= 8) v.push_back(static_cast<uint8_t>(csro >> s));
+  v.push_back(static_cast<uint8_t>(tbi >> 8));
+  v.push_back(static_cast<uint8_t>(tbi));
+  v.resize(28 - 4, 0x00);                            // lastGmPhaseChange
+  v.insert(v.end(), {0x00, 0x00, 0x01, 0x23});       // scaledLastGmFreq
+  return tlv_of(0x0003, v);
+}
+
+//! A Follow_Up with fu_frame's header and preciseOriginTimestamp and the
+//! TLV chain `chain`, messageLength `declared` (0: every chain octet,
+//! 802.1AS-2011 11.4.2.2), then `pad` octets of physical padding.
+static Frame fu_chain_frame(uint16_t seq, const std::vector<FuTlv> &chain,
+                            uint16_t declared = 0, size_t pad = 0) {
+  Hdr h; h.mtype = 0x8; h.seq = seq; h.srcid = 0xAABBCCFFFE001122ull;
+  h.srcpn = 1;
+  Frame f = common(h, 10);
+  f.u48(0x000012345678ull); f.u32(0x2FAF0800);
+  for (const FuTlv &t : chain) {
+    f.u16(t.type); f.u16(t.length);
+    for (uint8_t b : t.value) f.u8(b);
+  }
+  set_declared_to_physical(f);
+  if (declared != 0) {
+    f.b[16] = static_cast<uint8_t>(declared >> 8);
+    f.b[17] = static_cast<uint8_t>(declared);
+  }
+  f.b.resize(f.b.size() + pad, 0x00);
+  return f;
+}
+
+//! TLVs a Follow_Up receiver does not parse: an organization extension of
+//! another OUI, a PATH_TRACE-typed TLV, a zero-length reserved type, a
+//! 00-80-C2 TLV of subtype 2 carrying other values, and a 30-octet
+//! extension of OUI 12-34-00 whose octets 6..11 read 00-80-C2 00-00-01,
+//! so only the TLV's own octets 4..9 can name the information TLV.
+static const FuTlv ORG_OTHER = tlv_of(0x0003, {0x12, 0x34, 0x56, 0xAB, 0xCD,
+                                               0xEF, 0x55, 0xAA});
+static const FuTlv PT_TYPED = tlv_of(0x0008, std::vector<uint8_t>(8, 0x33));
+static const FuTlv ZERO_LEN = tlv_of(0x000A, {});
+static const FuTlv SUB2 = info_tlv(0x11111111, 0x2222, 2);
+static const FuTlv MIMIC = tlv_of(0x0003, {0x12, 0x34, 0x00, 0x80, 0xC2, 0x00,
+                                           0x00, 0x01, 0x11, 0x11, 0x11, 0x11,
+                                           0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
+                                           0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
+                                           0x22, 0x22, 0x22, 0x22, 0x22, 0x22});
+
+// 802.1AS-2011 11.4.1 (IEEE 1588-2008 14.1): a receiver ignores a TLV it
+// cannot parse and attempts the next, so the information TLV is found
+// wherever the chain carries it within messageLength (FPGA-gPTP #98).
+// Each accepted shape reports the plain Follow_Up's words: the same
+// event, sequence, w0..w5 and the first information TLV's word 11, each
+// packed here from the fields fu_chain_frame writes, and the plain
+// Follow_Up itself is held to the same words first.
+void RxParserHarness::check_follow_up_tlv_walk_accepts() {
+  const FuTlv INFO = info_tlv(0xFFFFF000, 0x0007);
+  Hdr h; h.mtype = 0x8; h.seq = 0x9800; h.srcid = 0xAABBCCFFFE001122ull;
+  h.srcpn = 1;
+  const std::map<uint32_t, uint64_t> plain = {
+    {0, w0_of(h)}, {1, h.corr}, {2, h.srcid}, {3, h.srcpn},
+    {4, 0x000012345678ull}, {5, 0x2FAF0800ull},
+    {11, (0xFFFFF000ull << 32) | (0x0007ull << 16)}};
+  struct Probe { const char *tag; std::vector<FuTlv> chain; size_t pad; };
+  const Probe probes[] = {
+    {"#98 plain fu", {INFO}, 0},
+    {"#98 unknown TLV first", {ORG_OTHER, INFO}, 0},
+    {"#98 three unknown TLVs first", {ZERO_LEN, PT_TYPED, SUB2, INFO}, 0},
+    {"#98 unknown TLV first, padded", {ORG_OTHER, INFO}, 16},
+    {"#98 second information TLV", {ORG_OTHER, INFO,
+                                    info_tlv(0x00000FFF, 0x0009)}, 0},
+    {"#98 unknown TLVs after", {INFO, ZERO_LEN, ORG_OTHER, ZERO_LEN}, 0},
+    {"#98 identifiers at octet 6", {MIMIC, INFO}, 0},
+  };
+  for (const Probe &p : probes) {
+    const uint16_t d0 = dut->drop_cnt_o;
+    feed(fu_chain_frame(0x9800, p.chain, 0, p.pad).b, false);
+    char n[96];
+    snprintf(n, sizeof n, "%s: event", p.tag);
+    expect_eq(n, ev_seen ? ev_code : 0, 2);
+    snprintf(n, sizeof n, "%s: ev_seq", p.tag);
+    expect_eq(n, ev_seq, 0x9800);
+    for (const auto &[w, want] : plain) {
+      snprintf(n, sizeof n, "%s: w%u as the plain case", p.tag, w);
+      expect_eq(n, bank.count(w) ? bank[w] : ~0ull, want);
+    }
+    snprintf(n, sizeof n, "%s: no drop", p.tag);
+    expect_eq(n, dut->drop_cnt_o, d0);
+  }
+}
+
+//! A refused Follow_Up: no event and one counted drop, and with `no_w11`
+//! no word-11 write either (the refusal came before any information TLV).
+void RxParserHarness::expect_fu_refused(const char *tag, uint16_t d0,
+                                        bool no_w11) {
+  char n[96];
+  snprintf(n, sizeof n, "%s: no event", tag);
+  expect_eq(n, ev_seen, 0);
+  snprintf(n, sizeof n, "%s: one drop", tag);
+  expect_eq(n, dut->drop_cnt_o, static_cast<uint16_t>(d0 + 1));
+  if (no_w11) {
+    snprintf(n, sizeof n, "%s: no w11 write", tag);
+    expect_eq(n, bank.count(11), 0);
+  }
+}
+
+// What #98 still refuses and counts: a chain without the information TLV;
+// a TLV whose value runs past messageLength, whether the information TLV
+// itself or a TLV after it, and a header ending on the last declared octet
+// with a value still to come; a TLV header that messageLength cuts after
+// one, two or three octets, with and without padding behind it; and an
+// odd lengthField (IEEE 1588-2008 5.3.8), which would otherwise land the
+// walk on an information TLV at an odd offset.
+void RxParserHarness::check_follow_up_tlv_walk_refuses() {
+  const FuTlv INFO = info_tlv(0xFFFFF000, 0x0007);
+  const FuTlv CUT = {0x000A, 2, {}};                 // header, no value
+  const FuTlv LONG = {0x000A, 8, {0xC1, 0xC2}};      // 2 of 8 value octets
+  uint16_t d0 = dut->drop_cnt_o;
+  feed(fu_chain_frame(0x9810, {ORG_OTHER, PT_TYPED, SUB2}).b, false);
+  expect_fu_refused("#98 no information TLV", d0, true);
+  d0 = dut->drop_cnt_o;
+  feed(fu_chain_frame(0x9811, {ORG_OTHER, INFO}, 76).b, false);
+  expect_fu_refused("#98 information TLV past messageLength", d0, true);
+  d0 = dut->drop_cnt_o;
+  feed(fu_chain_frame(0x9812, {INFO, CUT}).b, false);
+  expect_fu_refused("#98 header ends messageLength, value to come", d0,
+                    false);
+  d0 = dut->drop_cnt_o;
+  feed(fu_chain_frame(0x9813, {INFO, LONG}, 0, 6).b, false);
+  expect_fu_refused("#98 trailing TLV past messageLength", d0, false);
+  for (unsigned octets = 1; octets <= 3; octets++) {
+    for (size_t pad : {static_cast<size_t>(0), static_cast<size_t>(8)}) {
+      d0 = dut->drop_cnt_o;
+      Frame f = fu_chain_frame(0x9814, {INFO});
+      for (unsigned i = 0; i < octets; i++)
+        f.u8(static_cast<uint8_t>(i == 1 ? 0x0A : 0x00));
+      set_declared_to_physical(f);
+      f.b.resize(f.b.size() + pad, 0x02);
+      feed(f.b, false);
+      char n[96];
+      snprintf(n, sizeof n, "#98 header cut after %u octet(s)%s", octets,
+               pad ? ", padded" : "");
+      expect_fu_refused(n, d0, false);
+    }
+  }
+  d0 = dut->drop_cnt_o;
+  feed(fu_chain_frame(0x9815, {tlv_of(0x000A, {1, 2, 3}), INFO}).b, false);
+  expect_fu_refused("#98 odd lengthField", d0, true);
 }
 
 // ---- Pdelay_Resp ------------------------------------------------------
@@ -1639,6 +1812,8 @@ int RxParserHarness::run() {
   check_a_path_head_and_an_empty_path_qualify();
   check_sync();
   check_follow_up_with_information_tlv();
+  check_follow_up_tlv_walk_accepts();
+  check_follow_up_tlv_walk_refuses();
   check_pdelay_resp();
   check_header_level_drop_arms();
   check_foreign_domain_is_refused_for_every_type();
