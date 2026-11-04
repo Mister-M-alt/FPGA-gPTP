@@ -22,6 +22,7 @@ Terms are defined in the [glossary](GLOSSARY.md).
 | Python | `tb/mutation_verdict.py` | Reads each mutant's verdict from suite output |
 | Python | `tb/tsngen/run_tsngen.py` | Cross-checks frames against independent protocol decoders |
 | Python | `scripts/check_docs.py` | Checks documentation rules and generated values |
+| Python | `scripts/check_docs_selftest.py` | Plants documentation defects the docs gate must catch |
 | C | None | No first-party C harness exists |
 | C++ | `tb/verilator/*/sim_main.cpp` | Drives and checks Verilated RTL |
 | C++ | `bench/arty/bench_mii_tx_tag_test.cpp` | Checks timestamp-tag transport |

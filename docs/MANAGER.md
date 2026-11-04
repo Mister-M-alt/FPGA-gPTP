@@ -56,7 +56,7 @@ The generator prints this budget on every run.
 
 The seeded row counts the `--seq-seed 0x200000` image.
 
-`make docs` rules are `scripts/check_docs.py`; its [`selftest()`](../scripts/check_docs.py) cases are the specification.
+`make docs` rules are `scripts/check_docs.py`; its [`selftest()`](../scripts/check_docs_selftest.py) cases are the specification.
 
 | Image | Words used | Free |
 |---|---|---:|
