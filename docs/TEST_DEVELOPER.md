@@ -44,7 +44,7 @@ No handwritten C harness exists.
 | `make -C tb/verilator/parser` | Frame parsing and refusal paths |
 | `make -C tb/verilator/engine` | Whole-plane protocol behavior |
 | `make -C tb/verilator/engine mutants` | Engine mutation controls |
-| `make -C tb/verilator/parser mutants` | Parser receive-error and PathTrace mutation controls |
+| `make -C tb/verilator/parser mutants` | Parser receive-error, PathTrace and TLV-walk mutation controls |
 | `make -C tb/verilator/gaskets` | Bench MII gasket loopback and its mutation controls |
 | `make -C tb/tsngen` | Independent frame decode; skips without its checkout |
 | `make -C bench/arty test` | MII timestamp-tag transport |
@@ -115,6 +115,8 @@ Prefer independent protocol formulas and frame builders.
 - Accepts PathTrace counts other than stepsRemoved plus one.
 - Accepts empty paths and heads other than the grandmaster.
 - Reports a present TLV apart from its count.
+- Finds the Follow_Up information TLV behind unknown TLVs.
+- Refuses missing, overrunning, odd and cut Follow_Up TLVs.
 - Proves each acceptance through a planted defect.
 
 ### Engine suite
