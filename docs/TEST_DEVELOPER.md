@@ -117,8 +117,12 @@ Prefer independent protocol formulas and frame builders.
 - Accepts empty paths and heads other than the grandmaster.
 - Reports a present TLV apart from its count.
 - Finds the Follow_Up information TLV behind unknown TLVs.
+- Accepts a chain ending on a header at messageLength.
 - Refuses missing, overrunning, odd and cut Follow_Up TLVs.
-- Proves each acceptance through a planted defect.
+- Refuses malformed headers ahead of an information TLV.
+- Refuses an information TLV whose lengthField is not 28.
+- Proves each acceptance and refusal through a planted defect.
+- Plants thirty-four parser defects, nineteen for the TLV walk.
 
 ### Engine suite
 

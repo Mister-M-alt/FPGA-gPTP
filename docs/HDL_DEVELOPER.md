@@ -41,7 +41,9 @@ Follow_Up TLVs are walked up to messageLength.
 
 Unknown TLVs are skipped by their length.
 
-The first information TLV accepts the Follow_Up.
+The first information TLV supplies word 11.
+
+A malformed chain still refuses the Follow_Up.
 
 A receive error on any byte refuses its frame.
 
