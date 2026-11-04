@@ -952,7 +952,11 @@ void RxParserHarness::expect_fu_refused(const char *tag, uint16_t d0,
 // with a value still to come; a TLV header that messageLength cuts after
 // one, two or three octets, with and without padding behind it; and an
 // odd lengthField (IEEE 1588-2008 5.3.8), which would otherwise land the
-// walk on an information TLV at an odd offset.
+// walk on an information TLV at an odd offset. A malformed header ahead
+// of a well-formed information TLV, past messageLength or odd, refuses
+// even though a walk that forgot it would land on that TLV. A 00-80-C2/1
+// TLV whose lengthField is even but not 28 (11.4.4.3.3) is not the
+// information TLV.
 void RxParserHarness::check_follow_up_tlv_walk_refuses() {
   const FuTlv INFO = info_tlv(0xFFFFF000, 0x0007);
   const FuTlv CUT = {0x000A, 2, {}};                 // header, no value
@@ -988,6 +992,23 @@ void RxParserHarness::check_follow_up_tlv_walk_refuses() {
   d0 = dut->drop_cnt_o;
   feed(fu_chain_frame(0x9815, {tlv_of(0x000A, {1, 2, 3}), INFO}).b, false);
   expect_fu_refused("#98 odd lengthField", d0, true);
+  // a header with no value whose lengthField 0x0100 runs past
+  // messageLength 80, or is odd (1), then the information TLV
+  d0 = dut->drop_cnt_o;
+  feed(fu_chain_frame(0x9816, {{0x000A, 0x0100, {}}, INFO}).b, false);
+  expect_fu_refused("#98 TLV past messageLength ahead of the information TLV",
+                    d0, true);
+  d0 = dut->drop_cnt_o;
+  feed(fu_chain_frame(0x9817, {{0x000A, 0x0001, {}}, INFO}).b, false);
+  expect_fu_refused("#98 odd lengthField ahead of the information TLV", d0,
+                    true);
+  // Table 11-10's fields in their places, two octets more, no other TLV
+  FuTlv long_info = INFO;
+  long_info.value.insert(long_info.value.end(), {0x00, 0x00});
+  long_info.length = static_cast<uint16_t>(long_info.value.size());
+  d0 = dut->drop_cnt_o;
+  feed(fu_chain_frame(0x9818, {long_info}).b, false);
+  expect_fu_refused("#98 information TLV with lengthField 30", d0, true);
 }
 
 // ---- Pdelay_Resp ------------------------------------------------------
