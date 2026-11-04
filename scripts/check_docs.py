@@ -636,8 +636,23 @@ def selftest() -> int:
     rules (#98).
     """
     sys.dont_write_bytecode = True  # keep the gate from writing into scripts/
-    from check_docs_selftest import selftest as run_arms
-    return run_arms()
+    if "check_docs" not in sys.modules:
+        _load_sibling("check_docs")
+    return _load_sibling("check_docs_selftest").selftest()
+
+
+def _load_sibling(name: str) -> types.ModuleType:
+    """Import a module of this directory by its own path, so the gate
+    does not depend on the interpreter putting it on sys.path (#98)."""
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).resolve().with_name(f"{name}.py")
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {name}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def main() -> int:
