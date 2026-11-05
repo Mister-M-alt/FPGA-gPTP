@@ -27,7 +27,7 @@ The eighth is the defect the ruling in #35 asks for: a refused frame's words
 may stay in the write bank, so a clean frame behind it that skips one field
 write would hand its event the refused frame's word.
 
-Six belong to #87 and #88. Two restore PathTrace refusals #88
+Seven belong to #87 and #88. Two restore PathTrace refusals #88
 retired, a hop count other than stepsRemoved+1 and a first entry other than
 grandmasterIdentity: each refused the whole Announce, which 802.1AS-2011
 10.3.10.2.1 does not allow. One reports grandmasterIdentity in place of the
