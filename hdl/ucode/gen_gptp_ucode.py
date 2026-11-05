@@ -4,6 +4,30 @@
 """gPTP µcode ROM image generator -- v8, the announce qualification and the
 Pdelay_Resp_Follow_Up pairing rounds.
 
+FPGA-gPTP #100, what this plane's mastership and its receipt rules carry:
+
+  * The Follow_Up information TLV of a grandmaster (802.1AS-2011
+    10.2.8.2.1 j) to l), 11.4.4.3.7 to 11.4.4.3.9) is the engine's, read
+    from region 6 (RG_TLV): gmTimeBaseIndicator counts BECOME's PHC
+    word-3 write, the one entry into mastership; lastGmPhaseChange is the
+    offset of the last Sync consumed as a slave (10.2.9, Figure 10-6);
+    scaledLastGmFreqChange is the trim the PHC keeps less the rate
+    estimate word 3 carries. cumulativeScaledRateOffset stays zero.
+  * The announce receipt watch (timer slot 2) is announceReceiptTimeout
+    times the received interval (10.3.9.1). The engine scales BTCA's
+    3000 ms arm by 2^logMessageInterval and counts it from the Announce's
+    last octet. An Announce at the deadline is aged first: Annex D leaves
+    that tie unordered, and Milan v1.2 Table 4.2 allows 2.7 to 4.5 s.
+  * A Pdelay_Resp later than PD_LATE_NS_C after its request is a lost
+    response (11.2.15.3): PDPAIR's first test, ahead of the ratio window.
+    Milan v1.2 4.2.6.2.6 bounds the turnaround at 15 ms and lets a later
+    response go unprocessed; its "should not" clear asCapable is not taken.
+  * clockAccuracy defaults to 0x22 (within 250 ns, 8.6.2.3 a) and
+    --clock-accuracy sets it per image: 0xFE (8.6.2.3 b) for a build with
+    no characterised oscillator.
+  * e_hdr writes adjacent zero header fields as one wider zero field, the
+    same octets in fewer words, which pay for the two new tests.
+
 FPGA-gPTP #94, portEnabled (802.1AS-2011 10.2.4.11: MAC_Operational and the
 port administratively enabled), which the engine now takes as an input:
 
@@ -340,6 +364,13 @@ BRS_NZOK, BRS_ITER, BRS_Z, BRS_LT, BRS_OVF = range(5)
 
 RG_BANK, RG_TS, RG_SCR, RG_PUB, RG_PHC, RG_TMR = (
     0x00000, 0x10000, 0x20000, 0x30000, 0x40000, 0x50000)
+# #100: the Follow_Up information TLV's last 18 octets, read-only, as the
+# engine holds them for this plane's mastership (KL_gptp_engine.sv region
+# 6): word 0 {gmTimeBaseIndicator, lastGmPhaseChange[95:48]}, word 1
+# {lastGmPhaseChange[47:0], scaledLastGmFreqChange[31:16]}, word 2
+# scaledLastGmFreqChange[15:0]
+RG_TLV = 0x60000
+TLV_WORDS_C = ((0, FMT_Q), (1, FMT_Q), (2, FMT_W))
 
 # ---- scratch map -----------------------------------------------------------
 # v6 reclaimed three write-only slots (the old S_OFFSET/S_AMGM/S_TICK:
@@ -511,7 +542,15 @@ ROM_GMCAP_BIT_C = 32
 
 # ---- our clock vector (Milan defaults) -------------------------------------
 P1_C, P2_C = 248, 248
-CQ_C = 0xF8FE436A               # class 248, accuracy 0xFE, variance 0x436A
+CQ_C = 0xF822436A               # class 248, accuracy 0x22, variance 0x436A
+# clockAccuracy (802.1AS-2011 8.6.2.3, IEEE 1588-2008 7.6.2.5): the octet at
+# bits 23:16 of CQ_C. 0x22 is "within 250 ns", the default since #100 for
+# the board's characterised oscillator. --clock-accuracy replaces it per
+# image, so a build without a characterised oscillator states 0xFE
+# (unknown), as 8.6.2.3 b) requires
+CQ_ACCURACY_SHIFT_C = 16
+CLOCK_ACCURACY_C = (CQ_C >> CQ_ACCURACY_SHIFT_C) & 0xFF
+CLOCK_ACCURACY_UNKNOWN_C = 0xFE
 UTC_OFF_C = 37
 
 # ---- Milan v1.2 profile numbers --------------------------------------------
@@ -550,6 +589,23 @@ GAIN_S_C = 6                    # ns -> addend units: (off * GAIN_M) >> 6
 GAIN_M_C = 86                   # for the 100 MHz default; see set_servo_gains
 ILIM_C = 33554                  # RATE_PPM_C in addend units at that clock
 
+# #100: a Pdelay_Resp is late, and so a lost response, when it arrives more
+# than PD_LATE_NS_C after its own request, both read on this plane's clock
+# (t4 - t1). Milan v1.2 4.2.6.2.6 relaxes the 10 ms of 802.1AS-2011 B.2.3
+# by 50%: a responder turns a request around within 15 ms, measured at the
+# TAI frequency. This clock can read that interval long by its own offset,
+# the LocalClock's +-100 ppm (B.1.1) plus the trim's RATE_PPM_C (4,500 ns
+# on 15 ms), and the response also crosses the link twice, at most
+# NPD_HI_C each way on a link that stays asCapable. So no response within
+# the clause's 15 ms is ever counted lost: the bound is 15.0061 ms
+PD_TURNAROUND_MAX_NS_C = 15_000_000
+LOCAL_CLOCK_PPM_C = 100
+PD_LATE_NS_C = (PD_TURNAROUND_MAX_NS_C
+                + PD_TURNAROUND_MAX_NS_C
+                * (LOCAL_CLOCK_PPM_C + RATE_PPM_C) // 1_000_000
+                + 2 * NPD_HI_C)
+assert PD_LATE_NS_C + 1 < (1 << 24), PD_LATE_NS_C   # one CMP immediate
+
 # ---- what this run actually uses -------------------------------------------
 # Seeded from the constants above and MUTATED IN PLACE by the CLI and by
 # set_servo_gains. The constants stay the literal, one-per-file declarations
@@ -562,7 +618,16 @@ RUNTIME = {
     "gain_m": GAIN_M_C,         # --clk-hz, through set_servo_gains
     "ilim": ILIM_C,             # --clk-hz, through set_servo_gains: the
                                 # +-RATE_PPM_C envelope in addend units
+    "cq": CQ_C,                 # --clock-accuracy, through set_clock_accuracy
 }
+
+
+def set_clock_accuracy(accuracy: int) -> None:
+    """Replace the clockAccuracy octet of the announced clockQuality, the
+    rest of CQ_C kept (#100, 802.1AS-2011 8.6.2.3)."""
+    assert 0 <= accuracy <= 0xFF, accuracy
+    mask = 0xFF << CQ_ACCURACY_SHIFT_C
+    RUNTIME["cq"] = (CQ_C & ~mask) | (accuracy << CQ_ACCURACY_SHIFT_C)
 
 
 def ppm_addend(ppm: int, clk_hz: int) -> int:
@@ -811,15 +876,19 @@ def e_hdr(p: Prog, mtype: int, seq_reg: int, logint: int,
     p.emit("BFLD", ra=RT, fmt=FMT_B)
     p.emit("MOVE", rd=RT, ra=0, imm=msglen)
     p.emit("BFLD", ra=RT, fmt=FMT_W)
-    p.emit("BFLD", ra=0, fmt=FMT_B)
-    p.emit("BFLD", ra=0, fmt=FMT_B)
+    # domainNumber 0 and the reserved octet, then flagField, then
+    # correctionField and four reserved octets. Adjacent zero fields go
+    # out as one wider zero field: the octets are the same, and the words
+    # pay for the #100 Follow_Up TLV and the late-response check
     if flags:
+        p.emit("BFLD", ra=0, fmt=FMT_W)
         p.emit("MOVE", rd=RT, ra=0, imm=flags)
         p.emit("BFLD", ra=RT, fmt=FMT_W)
+        p.emit("BFLD", ra=0, fmt=FMT_Q)
+        p.emit("BFLD", ra=0, fmt=FMT_D)
     else:
-        p.emit("BFLD", ra=0, fmt=FMT_W)
-    p.emit("BFLD", ra=0, fmt=FMT_Q)
-    p.emit("BFLD", ra=0, fmt=FMT_D)
+        p.emit("BFLD", ra=0, fmt=FMT_Q)
+        p.emit("BFLD", ra=0, fmt=FMT_Q)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("BFLD", ra=RC, fmt=FMT_Q)
     p.emit("MOVE", rd=RT, ra=0, imm=OUR_PORTNUM_C)
@@ -1536,8 +1605,8 @@ def _tmr_init_once(p, mac, seq_seed, sync_seq_seed):
     constants derived from `mac`, and the scratch cells cleared at boot."""
     hdr8 = (0x0180C200000E << 16) | ((mac >> 32) & 0xFFFF)
     salo = mac & 0xFFFFFFFF
-    mypv = (RUNTIME["p1"] << 56) | (CQ_C << 24) | (P2_C << 16)
-    annbody = (UTC_OFF_C << 48) | (RUNTIME["p1"] << 32) | CQ_C
+    mypv = (RUNTIME["p1"] << 56) | (RUNTIME["cq"] << 24) | (P2_C << 16)
+    annbody = (UTC_OFF_C << 48) | (RUNTIME["p1"] << 32) | RUNTIME["cq"]
     p.emit("RDST", rd=RA, imm=RG_SCR | S_INIT, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_D, imm=1)
     p.emit("BRS", cnd=BRS_Z, label="cadence")
@@ -1850,6 +1919,10 @@ def prog_btca(base: int) -> Prog:
     # A parent refresh (same_gm) restarts nothing
     p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
     p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)       # sync watch
+    # #100: this Announce handler's arm is announceReceiptTimeout at the
+    # interval 2^0. The engine scales it by the Announce's own
+    # logMessageInterval and counts it from its last octet (10.3.9.1,
+    # KL_gptp_engine.sv ANN_RTO_MS_C)
     p.label("same_gm")
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)       # receipt watch
@@ -1908,6 +1981,10 @@ def prog_become(base: int) -> Prog:
     # Retire the slave's phase correction before publishing mastership.
     # Word 3 replaces the trim with the retained rate estimate and clears
     # the slew verdict on that same PHC write, just as a step's rate tail.
+    # #100: this write is also the engine's mark of a new mastership, for
+    # the Follow_Up TLV: it counts gmTimeBaseIndicator and takes the
+    # frequency change against the estimate it carries. Keep it BECOME's
+    # alone, once per mastership
     p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
     p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)
     p.emit("WRST", ra=RT, imm=RG_PHC | 3, fmt=FMT_Q)
@@ -2016,6 +2093,7 @@ def prog_leg_pdpair(base: int) -> Prog:
     Reads only scratch and publication, never a released message bank.
     """
     p = Prog(base)
+    _pdpost_late_response(p)
     _pdpost_neighbor_rate_ratio(p)
     _pdpost_corrected_delay(p)
     _pdpost_verdict(p)
@@ -2076,10 +2154,33 @@ def _pdpost_pairing_gates(p):
     p.label("live")
 
 
+def _pdpost_late_response(p):
+    """#100: a Pdelay_Resp later than PD_LATE_NS_C after its own request
+    is a lost response (11.2.15.3 lostResponses). Milan v1.2 4.2.6.2.6
+    bounds the turnaround at 15 ms and lets a device leave a later
+    response unprocessed; its "should not" clear asCapable is a
+    recommendation the board does not take. So the pair moves nothing:
+    no ratio window, no delay, no verdict, and S_PDGOT stays clear, so
+    the next beat counts the loss and the fifth consecutive one clears
+    asCapable (LOST_CLEARS_AT_C).
+
+    turn = t4 - t1, both stamps of this plane's own clock at the wire. A
+    t4 before t1 (a response ahead of its request) compares above the
+    bound too. The compare reads turn's low 32 bits, which hold all of
+    it: t4 falls inside the request interval. Leaves RD_ = t4 and
+    RW = turn for the tail; RW is no other register of this leg."""
+    p.emit("RDST", rd=RD_, imm=RG_SCR | S_T4, fmt=FMT_Q)
+    p.emit("RDST", rd=RW, imm=RG_SCR | S_T1, fmt=FMT_Q)
+    p.emit("ALU", rd=RW, ra=RD_, rb=RW, cnd=ALU_SUB)  # turn = t4 - t1
+    p.emit("CMP", ra=RW, rb=0, fmt=FMT_D, imm=PD_LATE_NS_C + 1)
+    p.emit("BRS", cnd=BRS_LT, label="in_time")
+    p.emit("END")                                    # late: lost
+    p.label("in_time")
+
+
 def _pdpost_neighbor_rate_ratio(p):
     """The nrr window (802.1AS-2011 11.2.15.3): Q2.30 (t3-prev3)/(t4-prev4),
-    skipped whenever the window is first, stale or zero."""
-    p.emit("RDST", rd=RD_, imm=RG_SCR | S_T4, fmt=FMT_Q)
+    skipped whenever the window is first, stale or zero. RD_ = t4."""
     p.emit("RDST", rd=RA, imm=RG_SCR | S_NR3, fmt=FMT_Q)
     p.emit("CMP", ra=RA, rb=0, fmt=FMT_Q, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="save")           # first exchange
@@ -2102,18 +2203,17 @@ def _pdpost_neighbor_rate_ratio(p):
 
 
 def _pdpost_corrected_delay(p):
-    """The published link delay: D = (nrr*(t4-t1) - (t3-t2)) / 2."""
-    p.emit("RDST", rd=RB, imm=RG_SCR | S_T1, fmt=FMT_Q)
-    p.emit("ALU", rd=RB, ra=RD_, rb=RB, cnd=ALU_SUB)  # turn = t4 - t1
+    """The published link delay: D = (nrr*(t4-t1) - (t3-t2)) / 2, with
+    turn = t4 - t1 in RW from the late-response check."""
     p.emit("RDST", rd=RV, imm=RG_SCR | S_NRR, fmt=FMT_Q)
     p.emit("CMP", ra=RV, rb=0, fmt=FMT_Q, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="uncorr")         # no ratio yet
-    p.emit("MD", rd=RB, ra=RV, rb=RB, cnd=MD_MULS)
-    p.emit("ALU", rd=RB, ra=RB, rb=0, cnd=ALU_SHR, imm=30)
+    p.emit("MD", rd=RW, ra=RV, rb=RW, cnd=MD_MULS)
+    p.emit("ALU", rd=RW, ra=RW, rb=0, cnd=ALU_SHR, imm=30)
     p.label("uncorr")
     p.emit("RDST", rd=RT, imm=RG_SCR | S_T2, fmt=FMT_Q)
     p.emit("ALU", rd=RC, ra=RC, rb=RT, cnd=ALU_SUB)  # resid = t3 - t2
-    p.emit("ALU", rd=RD_, ra=RB, rb=RC, cnd=ALU_SUB)
+    p.emit("ALU", rd=RD_, ra=RW, rb=RC, cnd=ALU_SUB)
     p.emit("ALU", rd=RD_, ra=RD_, rb=0, cnd=ALU_SAR, imm=1)
     p.emit("WRST", ra=RD_, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
     p.emit("WRST", ra=RD_, imm=RG_PUB | 3, fmt=FMT_Q)
@@ -2296,11 +2396,15 @@ def prog_leg_syncfu(base: int) -> Prog:
     p.emit("BFLD", ra=RT, fmt=FMT_W)                 # org 00-80-
     p.emit("RDST", rd=RT, imm=RG_SCR | S_FUORG, fmt=FMT_Q)
     p.emit("BFLD", ra=RT, fmt=FMT_D)                 # C2 + subtype 000001
-    p.emit("BFLD", ra=0, fmt=FMT_D)                  # cumScaledRateOffset
-    p.emit("BFLD", ra=0, fmt=FMT_W)                  # gmTimeBaseIndicator
-    p.emit("BFLD", ra=0, fmt=FMT_Q)                  # lastGmPhaseChange
-    p.emit("BFLD", ra=0, fmt=FMT_D)                  #   (12 bytes)
-    p.emit("BFLD", ra=0, fmt=FMT_D)                  # scaledLastGmFreqChg
+    # cumulativeScaledRateOffset: a grandmaster's rateRatio is 1.0
+    # (802.1AS-2011 10.2.8.2.1 i), 11.4.4.3.6)
+    p.emit("BFLD", ra=0, fmt=FMT_D)
+    # gmTimeBaseIndicator, lastGmPhaseChange and scaledLastGmFreqChange
+    # (10.2.8.2.1 j) to l), 11.4.4.3.7 to 11.4.4.3.9), as the engine set
+    # them when this plane became grandmaster (#100)
+    for word, fmt in TLV_WORDS_C:
+        p.emit("RDST", rd=RT, imm=RG_TLV | word, fmt=FMT_Q)
+        p.emit("BFLD", ra=RT, fmt=fmt)
     p.emit("SEND")
     p.emit("END")
     return p
@@ -2502,11 +2606,16 @@ def main() -> None:
                     help="engine clock; sets the servo's ns-to-addend gain")
     ap.add_argument("--cease-ms", type=int, default=300_000,
                     help="cease-rule resume delay (Milan: 5 minutes)")
+    ap.add_argument("--clock-accuracy", type=lambda s: int(s, 0),
+                    default=CLOCK_ACCURACY_C,
+                    help="announced clockAccuracy (802.1AS-2011 8.6.2.3); "
+                         "0xFE when the oscillator is not characterised")
     args = ap.parse_args()
     RUNTIME["cease_ms"] = args.cease_ms
     assert 0 < RUNTIME["cease_ms"] < (1 << 24), RUNTIME["cease_ms"]
     RUNTIME["p1"] = args.p1
     set_servo_gains(args.clk_hz)
+    set_clock_accuracy(args.clock_accuracy)
     rom, used = build(args.mac, args.seq_seed, args.sync_seq_seed)
     with open(args.out, "w", encoding="ascii") as f:
         for word in rom:
