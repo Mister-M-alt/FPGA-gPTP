@@ -854,7 +854,15 @@ They follow 10.2.8.2.1 j) to l).
 
 Each new mastership increments gmTimeBaseIndicator by one.
 
-lastGmPhaseChange is the last slave offset, as ScaledNs.
+11.4.4.3.8 defines lastGmPhaseChange, a ScaledNs.
+
+It is the current grandmaster's time minus the previous one's.
+
+It is taken when the current grandmaster became grandmaster.
+
+This plane sends the offset last measured as a slave.
+
+That offset is not extrapolated to the handover.
 
 scaledLastGmFreqChange is the kept trim less the estimate.
 
