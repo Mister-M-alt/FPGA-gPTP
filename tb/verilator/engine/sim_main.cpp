@@ -5465,7 +5465,10 @@ class GptpEngineHarness {
     expect("D2c the pair publishes nothing without its t1",
            dut->pub_pdelay_ns_o, delay_frozen);
     size_t cmark = txf.size();
-    deliver_result_by_tag(0, cseq, 0x2, false);
+    // the lost result still carries the time the request left at, so a
+    // plane taking it as t1 would complete the pair inside the #100 late
+    // bound; a zero there would be refused as late and hide that defect
+    deliver_result_by_tag(c4 - 21200, cseq, 0x2, false);
     run(60000);
     expect("D2c lost t1 publishes no delay",
            dut->pub_pdelay_ns_o, delay_frozen);
