@@ -1054,11 +1054,14 @@ class GptpEngineHarness {
       uint64_t t3 = t2 + resid;
       uint64_t t4 = t1 + 21200;
       if (pd_mode == PD_EDGE || pd_mode == PD_LATE) {
-        // #100: a response P100_LATE_NS after its request, or 1 ns later,
-        // whose residence keeps the corrected delay at 600 ns
+        // #100: a response P100_LATE_NS after its request, or 1 ns later.
+        // At the bound its residence keeps the corrected delay at 600 ns;
+        // past it, the residence is that of a 650 ns delay, so a late pair
+        // the plane completed would move the published delay
         const uint64_t turn = P100_LATE_NS + (pd_mode == PD_LATE ? 1 : 0);
+        const uint64_t trip = pd_mode == PD_LATE ? 1300 : 1200;
         t4 = t1 + turn;
-        t3 = t2 + (pdm.nrr != 0 ? (pdm.nrr * turn) >> 30 : turn) - 1200;
+        t3 = t2 + (pdm.nrr != 0 ? (pdm.nrr * turn) >> 30 : turn) - trip;
       }
       Frame f = ptp(0x3, seq, 0, 0x0200, 20);
       f.ts(t2); f.u64(OUR_CID); f.u16(1);
@@ -7477,15 +7480,20 @@ class GptpEngineHarness {
     return nullptr;
   }
 
-  //! the three information TLV fields of a Follow_Up this plane sent
+  //! the three information TLV fields of a Follow_Up this plane sent; all
+  //! zero with `whole` clear for a frame too short to hold them, such as
+  //! the empty one a timed-out wait_tx returns
   struct TlvFields {
     uint16_t tbi;
     uint32_t phase_hi;
     uint64_t phase_lo;
     int32_t freq;
+    bool whole;
   };
   TlvFields tlv_of(const std::vector<uint8_t> &fu) {
     TlvFields t{};
+    if (fu.size() < FU_FREQ_AT + 4) return t;
+    t.whole = true;
     t.tbi = fld16(fu, FU_TBI_AT);
     t.phase_hi = fld32(fu, FU_PHASE_AT);
     t.phase_lo = fld64(fu, FU_PHASE_AT + 4);
@@ -7532,6 +7540,7 @@ class GptpEngineHarness {
         first = tlv_of(txf[i]);
         found = true;
       }
+    found = found && first.whole;
     expect("#100 TLV: the first mastership's Follow_Up carries indicator 1",
            found ? first.tbi : 0u, 1);
     expect("#100 TLV: the first mastership carries no phase change",
@@ -7548,7 +7557,8 @@ class GptpEngineHarness {
     // PHC rate, and no rate has been written since, so neither is known
     expect("#100 TLV: a mastership after a warm reset, no rate written since, "
            "carries no phase or frequency change",
-           reset.phase_hi == 0 && reset.phase_lo == 0 && reset.freq == 0, 1);
+           reset.whole && reset.phase_hi == 0 && reset.phase_lo == 0 &&
+               reset.freq == 0, 1);
     p100_mst_base = phc() - cyc * 500ull - cyc / 20ull;
     lose_the_grandmaster_and_grade_the_tlv("#100 TLV settled", 24, 60);
     lose_the_grandmaster_and_grade_the_tlv("#100 TLV slewing", 4, -1500);
@@ -7754,9 +7764,10 @@ class GptpEngineHarness {
                t.aged ? "the port is aged" : "the port is not aged");
       expect(n, m != nullptr, t.aged);
       snprintf(n, sizeof n, "%s: the grandmaster is elected after it", t.tag);
+      const PubSnap *g = last_commit_naming(P100_GM);
       expect(n, (dut->pub_flags_o & 3) == FL_PRESENT &&
-                    dut->pub_gm_id_o == P100_GM &&
-                    last_commit_naming(P100_GM)->cyc > (m ? m->cyc : 0), 1);
+                    dut->pub_gm_id_o == P100_GM && g != nullptr &&
+                    g->cyc > (m ? m->cyc : 0), 1);
       prev = eof;
     }
     hold_an_announce_handler_past_the_deadline(prev);
@@ -7792,8 +7803,9 @@ class GptpEngineHarness {
   // later response go unprocessed; the board counts one as lost (802.1AS-2011
   // 11.2.15.3), so the fifth in a row clears asCapable (LOST_CLEARS_AT_C).
   // A response P100_LATE_NS after its request is inside the bound: six in a
-  // row keep asCapable and publish the modelled delay. Five 1 ns later each
-  // move nothing: four keep asCapable and the fifth clears it
+  // row keep asCapable and publish the modelled delay. Five 1 ns later, each
+  // timed for a 650 ns delay, move nothing: four keep asCapable and the
+  // fifth clears it
   void count_late_pdelay_responses_as_lost() {
     pd_mode = PD_NORMAL;
     expect("#100 late responses: runs from a capable plane",
