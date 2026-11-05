@@ -1919,10 +1919,7 @@ def prog_btca(base: int) -> Prog:
     # A parent refresh (same_gm) restarts nothing
     p.emit("MOVE", rd=RT, ra=0, imm=SYNC_RTO_MS_C)
     p.emit("WRST", ra=RT, imm=RG_TMR | 4, fmt=FMT_Q)       # sync watch
-    # #100: this Announce handler's arm is announceReceiptTimeout at the
-    # interval 2^0. The engine scales it by the Announce's own
-    # logMessageInterval and counts it from its last octet (10.3.9.1,
-    # KL_gptp_engine.sv ANN_RTO_MS_C)
+    # #100: the engine scales this arm by the Announce's interval (ann_watch)
     p.label("same_gm")
     p.emit("MOVE", rd=RT, ra=0, imm=3000)
     p.emit("WRST", ra=RT, imm=RG_TMR | 2, fmt=FMT_Q)       # receipt watch

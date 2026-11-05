@@ -717,6 +717,13 @@ class GptpEngineHarness {
   //! #100: the cycle of the first edge with rst_n high after it was low
   uint64_t rst_release_cyc = 0;
   bool rst_was_high = false;
+
+  //! #100: the engine's millisecond prescaler restarts on the first edge
+  //! with rst_n high, so its ticks fall 1999 + 2000 k cycles after it
+  void note_reset_release() {
+    if (dut->rst_n && !rst_was_high) rst_release_cyc = cyc;
+    rst_was_high = dut->rst_n;
+  }
   //! #100: Milan v1.2 4.2.6.2.6's 15 ms turnaround, read on a clock up to
   //! 300 ppm off TAI (802.1AS-2011 B.1.1's 100 ppm and the 200 ppm trim),
   //! plus a round trip at Milan 4.2.6.1.1's 800 ns neighborPropDelayThresh
@@ -724,10 +731,7 @@ class GptpEngineHarness {
       15000000ull + 15000000ull * 300ull / 1000000ull + 2ull * 800ull;
 
   void tick() {
-    // #100: the engine's millisecond prescaler restarts on the first edge
-    // with rst_n high, so its ticks fall 1999 + 2000 k cycles after it
-    if (dut->rst_n && !rst_was_high) rst_release_cyc = cyc;
-    rst_was_high = dut->rst_n;
+    note_reset_release();
     if (auto_pend >= 0 && !ts_offer) {
       if (is_withheld(static_cast<size_t>(auto_pend))) {
         auto_pend = -1;                            // this phase delivers it
