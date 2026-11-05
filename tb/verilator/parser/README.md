@@ -15,7 +15,7 @@ It checks acceptance, refusal, and message-bank writes.
 
 It proves refused frames leave no stale words.
 
-Its mutation arm plants receive-error and PathTrace defects.
+Its mutation arm plants receive-error, PathTrace and TLV-walk defects.
 
 Each defect must fail the checks it names.
 

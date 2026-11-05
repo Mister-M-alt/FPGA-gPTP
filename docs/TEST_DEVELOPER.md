@@ -22,6 +22,7 @@ Terms are defined in the [glossary](GLOSSARY.md).
 | Python | `tb/mutation_verdict.py` | Reads each mutant's verdict from suite output |
 | Python | `tb/tsngen/run_tsngen.py` | Cross-checks frames against independent protocol decoders |
 | Python | `scripts/check_docs.py` | Checks documentation rules and generated values |
+| Python | `scripts/check_docs_selftest.py` | Plants documentation defects the docs gate must catch |
 | C | None | No first-party C harness exists |
 | C++ | `tb/verilator/*/sim_main.cpp` | Drives and checks Verilated RTL |
 | C++ | `bench/arty/bench_mii_tx_tag_test.cpp` | Checks timestamp-tag transport |
@@ -44,7 +45,7 @@ No handwritten C harness exists.
 | `make -C tb/verilator/parser` | Frame parsing and refusal paths |
 | `make -C tb/verilator/engine` | Whole-plane protocol behavior |
 | `make -C tb/verilator/engine mutants` | Engine mutation controls |
-| `make -C tb/verilator/parser mutants` | Parser receive-error and PathTrace mutation controls |
+| `make -C tb/verilator/parser mutants` | Parser receive-error, PathTrace and TLV-walk mutation controls |
 | `make -C tb/verilator/gaskets` | Bench MII gasket loopback and its mutation controls |
 | `make -C tb/tsngen` | Independent frame decode; skips without its checkout |
 | `make -C bench/arty test` | MII timestamp-tag transport |
@@ -115,7 +116,13 @@ Prefer independent protocol formulas and frame builders.
 - Accepts PathTrace counts other than stepsRemoved plus one.
 - Accepts empty paths and heads other than the grandmaster.
 - Reports a present TLV apart from its count.
-- Proves each acceptance through a planted defect.
+- Finds the Follow_Up information TLV behind unknown TLVs.
+- Accepts a chain ending on a header at messageLength.
+- Refuses missing, overrunning, odd and cut Follow_Up TLVs.
+- Refuses malformed headers ahead of an information TLV.
+- Refuses an information TLV whose lengthField is not 28.
+- Proves each acceptance and refusal through a planted defect.
+- Plants thirty-four parser defects, nineteen for the TLV walk.
 
 ### Engine suite
 
