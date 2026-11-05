@@ -593,17 +593,20 @@ ILIM_C = 33554                  # RATE_PPM_C in addend units at that clock
 # than PD_LATE_NS_C after its own request, both read on this plane's clock
 # (t4 - t1). Milan v1.2 4.2.6.2.6 relaxes the 10 ms of 802.1AS-2011 B.2.3
 # by 50%: a responder turns a request around within 15 ms, measured at the
-# TAI frequency. This clock can read that interval long by its own offset,
-# the LocalClock's +-100 ppm (B.1.1) plus the trim's RATE_PPM_C (4,500 ns
-# on 15 ms), and the response also crosses the link twice, at most
-# NPD_HI_C each way on a link that stays asCapable. So no response within
-# the clause's 15 ms is ever counted lost: the bound is 15.0061 ms
+# TAI frequency. The response also crosses the link twice, at most NPD_HI_C
+# each way on a link that stays asCapable. This clock can read that whole
+# span long by its own offset, the LocalClock's +-100 ppm (B.1.1) plus the
+# trim's RATE_PPM_C, so the span is scaled by both and rounded up. Each of
+# t1 and t4 can also read up to one LocalClock granule off (B.1.2). So no
+# response within the clause's 15 ms is ever counted lost: the bound is
+# (15 ms + 1.6 us) x 1.0003, rounded up, + 80 ns = 15.006181 ms
 PD_TURNAROUND_MAX_NS_C = 15_000_000
 LOCAL_CLOCK_PPM_C = 100
-PD_LATE_NS_C = (PD_TURNAROUND_MAX_NS_C
-                + PD_TURNAROUND_MAX_NS_C
-                * (LOCAL_CLOCK_PPM_C + RATE_PPM_C) // 1_000_000
-                + 2 * NPD_HI_C)
+LOCAL_CLOCK_GRAIN_NS_C = 40
+PD_LATE_NS_C = (-(-(PD_TURNAROUND_MAX_NS_C + 2 * NPD_HI_C)
+                  * (1_000_000 + LOCAL_CLOCK_PPM_C + RATE_PPM_C)
+                  // 1_000_000)
+                + 2 * LOCAL_CLOCK_GRAIN_NS_C)
 assert PD_LATE_NS_C + 1 < (1 << 24), PD_LATE_NS_C   # one CMP immediate
 
 # ---- what this run actually uses -------------------------------------------

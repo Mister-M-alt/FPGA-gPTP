@@ -26,11 +26,11 @@ TLV_TX = ("        p.emit(\"RDST\", rd=RT, imm=RG_TLV | word, fmt=FMT_Q)\n"
 #: the late-response branch of the Pdelay tail
 LATE_END = ("    p.emit(\"END\")                                    "
             "# late: lost\n")
-#: the late-response bound's two guards
-LATE_PPM = ("                + PD_TURNAROUND_MAX_NS_C\n"
-            "                * (LOCAL_CLOCK_PPM_C + RATE_PPM_C)"
-            " // 1_000_000\n")
-LATE_LINK = "                + 2 * NPD_HI_C)\n"
+#: the late-response bound's three guards
+LATE_PPM = ("                  * (1_000_000 + LOCAL_CLOCK_PPM_C"
+            " + RATE_PPM_C)\n")
+LATE_LINK = "(PD_TURNAROUND_MAX_NS_C + 2 * NPD_HI_C)"
+LATE_GRAIN = "                + 2 * LOCAL_CLOCK_GRAIN_NS_C)\n"
 #: the frequency change's operands, taken at BECOME's PHC word-3 write
 TLV_DLT = ("        tlv_dlt_r <= (phc_slew_active_o || !phc_rate_seen_r)"
            " ? 25'sd0\n"
@@ -158,10 +158,14 @@ P100_MUTATIONS = [
      " | #100 responses at the bound: the delay is published"),
     ("the late bound leaves out the clock tolerance", GENERATOR,
      LATE_PPM,
-     "",
+     "                  * 1_000_000\n",
      "#100 responses at the bound: six keep asCapable"),
     ("the late bound leaves out the link", GENERATOR,
      LATE_LINK,
+     "(PD_TURNAROUND_MAX_NS_C)",
+     "#100 responses at the bound: six keep asCapable"),
+    ("the late bound leaves out the timestamp granules", GENERATOR,
+     LATE_GRAIN,
      "                )\n",
      "#100 responses at the bound: six keep asCapable"),
     # ---- #100: clockAccuracy (802.1AS-2011 8.6.2.3) ------------------------

@@ -724,11 +724,14 @@ class GptpEngineHarness {
     if (dut->rst_n && !rst_was_high) rst_release_cyc = cyc;
     rst_was_high = dut->rst_n;
   }
-  //! #100: Milan v1.2 4.2.6.2.6's 15 ms turnaround, read on a clock up to
-  //! 300 ppm off TAI (802.1AS-2011 B.1.1's 100 ppm and the 200 ppm trim),
-  //! plus a round trip at Milan 4.2.6.1.1's 800 ns neighborPropDelayThresh
+  //! #100: Milan v1.2 4.2.6.2.6's 15 ms turnaround and a round trip at
+  //! Milan 4.2.6.1.1's 800 ns neighborPropDelayThresh, read on a clock up
+  //! to 300 ppm off TAI (802.1AS-2011 B.1.1's 100 ppm and the 200 ppm
+  //! trim) and rounded up, plus B.1.2's 40 ns granule for each of t1 and t4
   static constexpr uint64_t P100_LATE_NS =
-      15000000ull + 15000000ull * 300ull / 1000000ull + 2ull * 800ull;
+      ((15000000ull + 2ull * 800ull) * 1000300ull + 999999ull) / 1000000ull +
+      2ull * 40ull;
+  static_assert(P100_LATE_NS == 15006181ull, "the #100 late bound");
 
   void tick() {
     note_reset_release();

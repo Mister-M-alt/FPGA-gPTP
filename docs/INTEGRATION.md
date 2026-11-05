@@ -929,7 +929,8 @@ Clauses without a prefix are IEEE 802.1AS-2011.
 | `RATE_PPM_C` | 200 | Rate trim and integrator bound, ppm | Issue #68 |
 | `PD_TURNAROUND_MAX_NS_C` | 15,000,000 | Pdelay turnaround bound, ns | Milan 4.2.6.2.6 |
 | `LOCAL_CLOCK_PPM_C` | 100 | LocalClock frequency tolerance, ppm | B.1.1 |
-| `PD_LATE_NS_C` | 15,006,100 | Pdelay_Resp lateness bound, ns | Issue #100 |
+| `LOCAL_CLOCK_GRAIN_NS_C` | 40 | LocalClock time granularity, ns | B.1.2 |
+| `PD_LATE_NS_C` | 15,006,181 | Pdelay_Resp lateness bound, ns | Issue #100 |
 | `CLOCK_ACCURACY_C` | 34 | Default clockAccuracy, `0x22` | 8.6.2.3; issue #100 |
 | `DEPTH` | 1,024 | Microcode ROM words | [ROM budget](MANAGER.md#current-rom-budget) |
 | `ROM_CID_HI_C` | 1,022 | ROM word holding thisClock's high half | Issue #82 |
@@ -952,11 +953,15 @@ The receipt row holds for a peer's logMessageInterval 0.
 
 logMessageInterval n stretches it to 3 × 2^n s.
 
-[`PD_LATE_NS_C`](#protocol-constants) adds two tolerances to the turnaround.
+[`PD_LATE_NS_C`](#protocol-constants) starts from the turnaround bound.
 
-One is the clock offset at both ppm bounds.
+It adds twice [`NPD_HI_C`](#protocol-constants), the link round trip.
 
-The other is twice [`NPD_HI_C`](#protocol-constants), the link round trip.
+It scales that span by both ppm bounds, rounding up.
+
+It adds one [`LOCAL_CLOCK_GRAIN_NS_C`](#protocol-constants) for each of t1 and t4.
+
+So a turnaround within Milan's bound is never counted lost.
 
 ## Integration checklist
 
