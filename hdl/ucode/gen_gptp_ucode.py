@@ -2609,7 +2609,8 @@ def main() -> None:
     ap.add_argument("--clock-accuracy", type=lambda s: int(s, 0),
                     default=CLOCK_ACCURACY_C,
                     help="announced clockAccuracy (802.1AS-2011 8.6.2.3); "
-                         "0xFE when the oscillator is not characterised")
+                         f"0x{CLOCK_ACCURACY_UNKNOWN_C:02X} when the "
+                         "oscillator is not characterised")
     args = ap.parse_args()
     RUNTIME["cease_ms"] = args.cease_ms
     assert 0 < RUNTIME["cease_ms"] < (1 << 24), RUNTIME["cease_ms"]
