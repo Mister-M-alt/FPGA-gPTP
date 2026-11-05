@@ -244,10 +244,25 @@
 //         place and completes whole; asCapable still falls within 2 ms
 // 51      #94: a warm reset taken with the port disabled inside a cease:
 //         the first rise sends a request at once
+// 52      #100: the Follow_Up information TLV of each mastership
+//         (802.1AS-2011 10.2.8.2.1 j) to l), 11.4.4.3): gmTimeBaseIndicator
+//         counts masterships, lastGmPhaseChange is the last slave offset,
+//         scaledLastGmFreqChange the kept trim less the rate estimate, after
+//         a lock on a master 100 ppm fast
+// 53      #100: the announce receipt watch from the received interval
+//         (10.3.9.1): logMessageInterval 1 ages at 6 s, -1 at 1.5 s
+// 54      #100: Announces exactly 3.0 s apart age the port, whatever the
+//         order their events and the expiry reach the queue; 2.999 s apart,
+//         or one whose handler a stalled transmitter holds past the
+//         deadline, do not
+// 55      #100: Pdelay_Resp at the late bound keep asCapable; 1 ns past it
+//         each is a lost response, and the fifth clears asCapable
+// 56      #100: every Announce carries the image's clockAccuracy: 0x22 by
+//         default, 0xFE in the fourth pass's image
 //
-// A fourth pass (+not-gm-capable, an image built with --p1 255) runs only
-// the phases a self publication passes through: boot, mastership, 36..38,
-// 41 and 42.
+// A fourth pass (+not-gm-capable, an image built with --p1 255 and
+// --clock-accuracy 0xFE) runs only the phases a self publication passes
+// through: boot, mastership, 36..38, 41, 42 and 56.
 // There thisClock is not grandmaster-capable, so gmPresent stays clear in
 // every self publication and is set only while a capable peer is elected
 // (10.3.13.2.4 g). Its checks print with a "p1 255 " prefix.
@@ -301,7 +316,7 @@ static_assert((REQ_HI_CID >> 32) == (OUR_CID >> 32),
               "REQ_HI_CID must share OUR_CID's high half");
 static_assert((REQ_HI_CID & 0xFFFFFFFFull) != (OUR_CID & 0xFFFFFFFFull),
               "REQ_HI_CID must differ from OUR_CID below the halfway line");
-constexpr uint32_t OUR_CQ = 0xF8FE436A;
+constexpr uint32_t OUR_CQ = 0xF822436A;
 
 // publish flags bits (the retired software contract)
 constexpr uint32_t FL_PRESENT = 1;
@@ -355,6 +370,7 @@ class GptpEngineHarness {
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
+    announce_the_image_clock_accuracy();
   }
 
   //! The shipping passes: every phase named in the file header, in order.
@@ -448,6 +464,7 @@ class GptpEngineHarness {
     age_the_port_whatever_role_the_timeout_finds();
     defer_a_whole_interval_to_the_issue_shapes();
     run_the_port_enable_phases();
+    run_the_followup_tlv_phases();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -507,9 +524,17 @@ class GptpEngineHarness {
     f.u32(0);
     f.u64(src); f.u16(1);
     f.u16(seq);
-    f.u8(0x05); f.u8(0x7F);
+    // logMessageInterval: an Announce's is its currentLogAnnounceInterval
+    // (802.1AS-2011 10.5.2.2.11), 0 for the 1 s these peers announce at,
+    // and the engine times its receipt watch from it (10.3.9.1, #100).
+    // No other message's value is read
+    f.u8(0x05); f.u8(mtype == 0xB ? ANN_LOG_INTERVAL : 0x7F);
     return f;
   }
+
+  //! the logMessageInterval octet of a built frame (header octet 33)
+  static constexpr size_t LOG_INTERVAL_AT = 14 + 33;
+  static constexpr uint8_t ANN_LOG_INTERVAL = 0;
 
   // a Follow_Up: header, preciseOriginTimestamp and the information TLV
   // (802.1AS-2011 Table 11-9: 76 octets; 11.4.4.3 / Table 11-10: tlvType
@@ -689,7 +714,20 @@ class GptpEngineHarness {
 
   uint64_t phc() { return static_cast<uint64_t>(phc_acc >> 24); }
 
+  //! #100: the cycle of the first edge with rst_n high after it was low
+  uint64_t rst_release_cyc = 0;
+  bool rst_was_high = false;
+  //! #100: Milan v1.2 4.2.6.2.6's 15 ms turnaround, read on a clock up to
+  //! 300 ppm off TAI (802.1AS-2011 B.1.1's 100 ppm and the 200 ppm trim),
+  //! plus a round trip at Milan 4.2.6.1.1's 800 ns neighborPropDelayThresh
+  static constexpr uint64_t P100_LATE_NS =
+      15000000ull + 15000000ull * 300ull / 1000000ull + 2ull * 800ull;
+
   void tick() {
+    // #100: the engine's millisecond prescaler restarts on the first edge
+    // with rst_n high, so its ticks fall 1999 + 2000 k cycles after it
+    if (dut->rst_n && !rst_was_high) rst_release_cyc = cyc;
+    rst_was_high = dut->rst_n;
     if (auto_pend >= 0 && !ts_offer) {
       if (is_withheld(static_cast<size_t>(auto_pend))) {
         auto_pend = -1;                            // this phase delivers it
@@ -959,8 +997,9 @@ class GptpEngineHarness {
   //! identical Pdelay_Resp and one Follow_Up, PD_DUP3 with three (#90, #91).
   //! None of the three completes an exchange (802.1AS-2011 Figure 11-8: a
   //! second response is RESET), so none of them feeds the pdelay model
+  //! PD_EDGE answers at the #100 late bound, PD_LATE 1 ns past it
   enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_SELF, PD_DUAL,
-                PD_DUP, PD_DUAL_LATE, PD_NOFU, PD_DUP3 };
+                PD_DUP, PD_DUAL_LATE, PD_NOFU, PD_DUP3, PD_EDGE, PD_LATE };
   PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
   size_t pd_seen = 0;
   int pd_self_sent = 0;             // PD_SELF pairs actually sent
@@ -1007,6 +1046,13 @@ class GptpEngineHarness {
       if (pd_mode == PD_FAR) resid = 19200;   // D ~ +1001: over threshold
       uint64_t t3 = t2 + resid;
       uint64_t t4 = t1 + 21200;
+      if (pd_mode == PD_EDGE || pd_mode == PD_LATE) {
+        // #100: a response P100_LATE_NS after its request, or 1 ns later,
+        // whose residence keeps the corrected delay at 600 ns
+        const uint64_t turn = P100_LATE_NS + (pd_mode == PD_LATE ? 1 : 0);
+        t4 = t1 + turn;
+        t3 = t2 + (pdm.nrr != 0 ? (pdm.nrr * turn) >> 30 : turn) - 1200;
+      }
       Frame f = ptp(0x3, seq, 0, 0x0200, 20);
       f.ts(t2); f.u64(OUR_CID); f.u16(1);
       send_frame(f.b, t4);
@@ -1037,7 +1083,8 @@ class GptpEngineHarness {
         send_frame(d.b, t4 + 2000);
         run(400);
       }
-      if (dups == 0) model_exchange(t1, t2, t3, t4);
+      // a late response completes no exchange (#100)
+      if (dups == 0 && pd_mode != PD_LATE) model_exchange(t1, t2, t3, t4);
     }
   }
 
@@ -7315,6 +7362,480 @@ class GptpEngineHarness {
         expect(n, reserved, 0);
       }
     }
+  }
+
+  // ==== #100, phases 52 to 56 ===============================================
+  // 802.1AS-2011 10.2.8.2.1 j) to l), 10.2.9 and 11.4.4.3: the Follow_Up
+  // information TLV of this plane's mastership; 10.3.9.1: the announce
+  // receipt timeout from the received interval; and the three stricter
+  // readings of 2026-11-05: an Announce at the timeout instant, late Pdelay
+  // responses and the default clockAccuracy. Every check here is named
+  // "#100 ...", and p100_mutants.py plants one or more defects for each.
+
+  //! #100, phases 52 to 56, in file order
+  void run_the_followup_tlv_phases() {
+    carry_the_mastership_change_in_the_follow_up_tlv();
+    time_the_announce_watch_from_the_received_interval();
+    age_the_port_at_the_announce_timeout_instant();
+    count_late_pdelay_responses_as_lost();
+    announce_the_image_clock_accuracy();
+  }
+
+  //! the #100 grandmasters, each announcing from its own port
+  static constexpr uint64_t P100_GM = 0x00A100FFFE000001ull;
+  static constexpr uint64_t P100_SRC = 0x00A100FFFE000002ull;
+  //! Follow_Up octets of the information TLV's last three fields
+  static constexpr size_t FU_TBI_AT = 72;
+  static constexpr size_t FU_PHASE_AT = 74;
+  static constexpr size_t FU_FREQ_AT = 86;
+  //! the #100 master's clock: p100_mst_base + 500.05 ns per cycle, 100 ppm
+  //! fast, and the Sync and Announce sequenceIds it sends next
+  uint64_t p100_mst_base = 0;
+  uint16_t p100_seq = 0xA001;
+  uint16_t p100_aseq = 0xA101;
+  //! the source of the usable Sync the #100 runner sends, none when zero,
+  //! and the cycle its next pair is due
+  uint64_t p100_sync_src = 0;
+  uint64_t p100_next_sync = 0;
+
+  uint64_t p100_master_time() const {
+    return p100_mst_base + cyc * 500ull + cyc / 20ull;
+  }
+
+  //! an Announce of `gm` from `src` with a path {gm, src}, its
+  //! logMessageInterval `log`, built as send_announce builds one
+  Frame p100_announce(uint8_t p1, uint64_t gm, uint64_t src, int8_t log) {
+    Frame a = ptp(0xB, p100_aseq++, 0, 0x0008, 30 + 4 + 16, src);
+    a.b[LOG_INTERVAL_AT] = static_cast<uint8_t>(log);
+    for (int i = 0; i < 10; i++) a.u8(0);
+    a.u16(0xFFC4); a.u8(0);
+    a.u8(p1); a.u32(OUR_CQ); a.u8(248);
+    a.u64(gm);
+    a.u16(1); a.u8(0xA0);
+    a.u16(0x0008); a.u16(16); a.u64(gm); a.u64(src);
+    return a;
+  }
+
+  //! one usable Sync/Follow_Up pair from `src`, measured exactly on time
+  void p100_usable_pair(uint64_t src) {
+    const uint64_t local = phc() + 150;
+    const uint16_t seq = p100_seq++;
+    Frame f = ptp(0x0, seq, 0, 0x0208, 10, src);
+    f.ts(0);
+    send_frame(f.b, local);
+    run(1000);
+    Frame g = follow_up(seq, 0, local - static_cast<uint64_t>(pdm.d), src);
+    send_frame(g.b, local + 500);
+    run(1000);
+  }
+
+  //! Run to cycle `target` exactly, the auto-peer answering, with a usable
+  //! pair from p100_sync_src every 125 ms. The last 6000 cycles carry no
+  //! frame at all, so a frame sent at `target` starts on that cycle
+  void p100_run_to(uint64_t target) {
+    while (cyc + 6000 < target) {
+      if (p100_sync_src != 0 && cyc >= p100_next_sync) {
+        p100_next_sync = cyc + 250000;
+        p100_usable_pair(p100_sync_src);
+        continue;
+      }
+      uint64_t until = target - 6000;
+      if (p100_sync_src != 0 && p100_next_sync < until) until = p100_next_sync;
+      run_svc(until - cyc);
+    }
+    if (cyc < target) run(target - cyc);
+  }
+
+  //! Send `a` so its last octet arrives on cycle `eof`; returns `eof`
+  uint64_t p100_send_eof_at(const Frame &a, uint64_t eof) {
+    p100_run_to(eof + 1 - a.b.size());
+    send_frame(a.b, phc() + 100);
+    return eof;
+  }
+
+  //! the first cycle after `from` whose distance from the timer's last
+  //! restart is `phase` modulo one millisecond
+  uint64_t p100_at_phase(uint64_t from, uint64_t phase) const {
+    const uint64_t at = (from - rst_release_cyc) % MS_CYC;
+    return from + (phase + MS_CYC - at) % MS_CYC;
+  }
+
+  //! the first commit at or after commit index `mark` naming `gm`, or null
+  const PubSnap *p100_commit_naming(size_t mark, uint64_t gm) const {
+    for (size_t i = mark; i < commit_snaps.size(); i++)
+      if (commit_snaps[i].gm == gm) return &commit_snaps[i];
+    return nullptr;
+  }
+
+  //! the three information TLV fields of a Follow_Up this plane sent
+  struct TlvFields {
+    uint16_t tbi;
+    uint32_t phase_hi;
+    uint64_t phase_lo;
+    int32_t freq;
+  };
+  TlvFields tlv_of(const std::vector<uint8_t> &fu) {
+    TlvFields t{};
+    t.tbi = fld16(fu, FU_TBI_AT);
+    t.phase_hi = fld32(fu, FU_PHASE_AT);
+    t.phase_lo = fld64(fu, FU_PHASE_AT + 4);
+    t.freq = static_cast<int32_t>(fld32(fu, FU_FREQ_AT));
+    return t;
+  }
+
+  //! the last Follow_Up this plane sent before transmitted frame `mark`
+  bool last_follow_up_before(size_t mark, TlvFields *out) {
+    for (size_t i = mark; i-- > 0;)
+      if (type_of(txf[i]) == 0x8 && txf[i].size() >= FU_FREQ_AT + 4) {
+        *out = tlv_of(txf[i]);
+        return true;
+      }
+    return false;
+  }
+
+  //! floor(units * CLK * 2^17 / 1e9) at 2 MHz, the exact rational 32768/125:
+  //! a trim unit's fractional frequency scaled by 2^41 (11.4.4.3.9)
+  static int64_t scaled_freq_of(int64_t units) {
+    const int64_t num = units * 32768;
+    return num >= 0 ? num / 125 : -((-num + 124) / 125);
+  }
+
+  // ---- 52: #100, the Follow_Up information TLV of a new mastership -------
+  // 802.1AS-2011 10.2.8.2.1 j) to l) fill a grandmaster's Follow_Up from
+  // its ClockSource; becoming grandmaster changes the time base. So the
+  // first mastership after power-up carries indicator 1 with no phase or
+  // frequency change; and each later one moves the indicator by one,
+  // carries as lastGmPhaseChange the offset of the last Sync this plane
+  // consumed as a slave (Figure 10-6, clockSourcePhaseOffset), and as
+  // scaledLastGmFreqChange the trim the PHC keeps less the rate estimate
+  // the slave held (11.4.4.3.9), zero while no rate has been written since
+  // reset, when the PHC's rate is not known. A slave of a master 100 ppm
+  // fast locks on it, so the estimate is that rate. It loses the
+  // grandmaster settled 60 ns off, when the PHC keeps its last trim, and
+  // again slewing 1,500 ns ahead of it, when BECOME writes the estimate
+  // itself as the trim
+  void carry_the_mastership_change_in_the_follow_up_tlv() {
+    TlvFields first{};
+    bool found = false;
+    for (size_t i = 0; i < txf.size() && !found; i++)
+      if (type_of(txf[i]) == 0x8) {
+        first = tlv_of(txf[i]);
+        found = true;
+      }
+    expect("#100 TLV: the first mastership's Follow_Up carries indicator 1",
+           found ? first.tbi : 0u, 1);
+    expect("#100 TLV: the first mastership carries no phase change",
+           found && first.phase_hi == 0 && first.phase_lo == 0, 1);
+    expect("#100 TLV: the first mastership carries no frequency change",
+           found ? static_cast<uint32_t>(first.freq) : ~0u, 0);
+    pd_mode = PD_NORMAL;
+    auto_txts = true;
+    wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull);
+    wait_flags(FL_AMGM, FL_AMGM, 8000000ull);
+    tx_seen = txf.size();
+    const TlvFields reset = tlv_of(wait_tx(0x8, 800000));
+    // phase 51's warm reset cleared the offset and the engine's view of the
+    // PHC rate, and no rate has been written since, so neither is known
+    expect("#100 TLV: a mastership after a warm reset, no rate written since, "
+           "carries no phase or frequency change",
+           reset.phase_hi == 0 && reset.phase_lo == 0 && reset.freq == 0, 1);
+    p100_mst_base = phc() - cyc * 500ull - cyc / 20ull;
+    lose_the_grandmaster_and_grade_the_tlv("#100 TLV settled", 24, 60);
+    lose_the_grandmaster_and_grade_the_tlv("#100 TLV slewing", 4, -1500);
+  }
+
+  //! From a master, the #100 master's usable pair clears any aged mark
+  //! (#89), and its Announce elects it. Its clock moves 200 us back, so the
+  //! first pair steps and its addend is the integrator alone, which the
+  //! mirror then takes as its own; `pairs` closed-loop pairs follow, the
+  //! last `last_off` ns off. Then its Sync and Announces stop, so the sync
+  //! receipt timeout makes this plane master. Grades that mastership's TLV
+  void lose_the_grandmaster_and_grade_the_tlv(const char *tag, int pairs,
+                                              int64_t last_off) {
+    char n[128];
+    TlvFields before{};
+    const bool had = last_follow_up_before(txf.size(), &before);
+    p100_usable_pair(P100_SRC);
+    send_frame(p100_announce(50, P100_GM, P100_SRC, 0).b, phc() + 100);
+    run_svc(6000);
+    snprintf(n, sizeof n, "%s: the grandmaster is elected", tag);
+    expect(n, (dut->pub_flags_o & 3) == FL_PRESENT &&
+                  dut->pub_gm_id_o == P100_GM, 1);
+    const size_t s0 = steps_seen.size();
+    p100_mst_base -= 200000;
+    const int64_t first = p100_closed_loop_pair(0);
+    svm.intg = -static_cast<int64_t>(static_cast<int32_t>(last_adj()));
+    snprintf(n, sizeof n, "%s: the first pair steps", tag);
+    expect(n, first > 100000 && steps_seen.size() == s0 + 1 &&
+                  steps_seen.back() == static_cast<uint64_t>(-first), 1);
+    bool mirrored = true;
+    for (int k = 1; k <= pairs; k++) {
+      if (k % 8 == 7)
+        send_frame(p100_announce(50, P100_GM, P100_SRC, 0).b, phc() + 100);
+      const int64_t off = p100_closed_loop_pair(k == pairs ? last_off : 0);
+      servo_mirror(off, false);
+      mirrored &= last_adj() == adj_bits(svm.addend);
+      if (k + 4 > pairs)
+        printf("INFO %s: pair %d off %lld\n", tag, k,
+               static_cast<long long>(off));
+    }
+    snprintf(n, sizeof n, "%s: every pair's addend matches the mirror", tag);
+    expect(n, mirrored, 1);
+    snprintf(n, sizeof n, "%s: the last pair's offset is published", tag);
+    expect(n, static_cast<uint32_t>(dut->pub_offset_o),
+           static_cast<uint32_t>(last_off));
+    const bool slewing = dut->phc_slew_active_o;
+    snprintf(n, sizeof n, "%s: the slew level is as scripted", tag);
+    expect(n, slewing, last_off < -100 || last_off > 100);
+    const int64_t kept = static_cast<int32_t>(last_adj());
+    const int64_t units = slewing ? 0 : kept + svm.intg;
+    const size_t a0 = adj_seen.size();
+    const size_t mark = txf.size();
+    snprintf(n, sizeof n, "%s: the sync receipt timeout makes it master", tag);
+    expect(n, wait_flags(FL_AMGM, FL_AMGM, 900000ull), 1);
+    snprintf(n, sizeof n, "%s: BECOME keeps the trim or writes the estimate",
+             tag);
+    expect(n, slewing ? adj_seen.size() == a0 + 1 &&
+                            last_adj() == adj_bits(-svm.intg)
+                      : adj_seen.size() == a0, 1);
+    grade_the_tlv_of_this_mastership(tag, mark, had ? before.tbi + 1u : ~0u,
+                                     last_off, units);
+  }
+
+  //! One 125 ms interval of the #100 master: service, then a pair stamped
+  //! by our own PHC. A nonzero `want` scripts the measured offset, the
+  //! master's clock unmoved; zero measures the master's own. Returns it
+  int64_t p100_closed_loop_pair(int64_t want) {
+    run_svc(250000);
+    const uint64_t local_rx = phc() + 150;
+    const uint64_t clock = p100_master_time();
+    const int64_t on = static_cast<int64_t>(local_rx - clock -
+                                            static_cast<uint64_t>(pdm.d));
+    const int64_t jump = want != 0 ? on - want : 0;
+    const uint16_t seq = p100_seq++;
+    Frame f = ptp(0x0, seq, 0, 0x0208, 10, P100_SRC);
+    f.ts(0);
+    send_frame(f.b, local_rx);
+    run(1000);
+    send_frame(follow_up(seq, 0, clock + static_cast<uint64_t>(jump),
+                         P100_SRC).b, local_rx + 500);
+    run(4000);
+    return on - jump;
+  }
+
+  //! the first three Follow_Ups from transmitted frame `mark` on carry
+  //! indicator `tbi`, phase change `off` ns as ScaledNs and the frequency
+  //! change of `units` trim units
+  void grade_the_tlv_of_this_mastership(const char *tag, size_t mark,
+                                        uint32_t tbi, int64_t off,
+                                        int64_t units) {
+    char n[128];
+    const int64_t want = scaled_freq_of(units);
+    const int64_t slack = 1 + (units < 0 ? -units : units) / 131072;
+    int seen = 0;
+    tx_seen = mark;
+    bool same_tbi = true;
+    bool same_phase = true;
+    bool near_freq = true;
+    for (int k = 0; k < 3; k++) {
+      size_t idx = 0;
+      const std::vector<uint8_t> fu = wait_tx(0x8, 800000, &idx);
+      if (fu.size() < FU_FREQ_AT + 4 || idx < mark) continue;
+      seen++;
+      const TlvFields t = tlv_of(fu);
+      same_tbi &= t.tbi == static_cast<uint16_t>(tbi);
+      same_phase &= t.phase_hi == (off < 0 ? 0xFFFFFFFFu : 0u) &&
+                    t.phase_lo == static_cast<uint64_t>(off) << 16;
+      const int64_t d = t.freq - want;
+      near_freq &= d <= slack && d >= -slack;
+      if (k == 0)
+        printf("INFO %s: indicator %u, scaledLastGmFreqChange %d, "
+               "expected %lld\n", tag, t.tbi, t.freq,
+               static_cast<long long>(want));
+    }
+    snprintf(n, sizeof n, "%s: three Follow_Ups of the mastership", tag);
+    expect(n, seen, 3);
+    snprintf(n, sizeof n, "%s: gmTimeBaseIndicator increments", tag);
+    expect(n, same_tbi && tbi <= 0xFFFFu, 1);
+    snprintf(n, sizeof n, "%s: lastGmPhaseChange is the last offset", tag);
+    expect(n, same_phase, 1);
+    snprintf(n, sizeof n, "%s: scaledLastGmFreqChange is the kept trim less "
+             "the estimate", tag);
+    expect(n, near_freq && (units == 0) == (want == 0), 1);
+  }
+
+  // ---- 53: #100, the announce receipt timeout from the received interval --
+  // 802.1AS-2011 10.3.9.1: announceReceiptTimeout (3, 10.6.3.2) times the
+  // announceInterval the received Announce's logMessageInterval states,
+  // from its receipt (Figure 10-13). With its Sync usable throughout, a
+  // grandmaster announcing logMessageInterval 1 (2 s) is aged 6 s after its
+  // last Announce, and one announcing -1 (0.5 s) 1.5 s after it, each to
+  // the engine's millisecond
+  void time_the_announce_watch_from_the_received_interval() {
+    const struct { const char *tag; int8_t log; uint64_t ms; } cases[] = {
+        {"#100 logAnnounceInterval 1", 1, 6000},
+        {"#100 logAnnounceInterval -1", -1, 1500},
+    };
+    for (const auto &c : cases) {
+      char n[128];
+      p100_sync_src = P100_SRC;
+      p100_next_sync = cyc;
+      const Frame a = p100_announce(50, P100_GM, P100_SRC, c.log);
+      const uint64_t eof = p100_send_eof_at(a, cyc + 8000);
+      run_svc(6000);
+      snprintf(n, sizeof n, "%s: the grandmaster is elected", c.tag);
+      expect(n, (dut->pub_flags_o & 3) == FL_PRESENT &&
+                    dut->pub_gm_id_o == P100_GM, 1);
+      const size_t c0 = commit_snaps.size();
+      p100_run_to(eof + (c.ms - 2) * MS_CYC);
+      snprintf(n, sizeof n, "%s: still slave %llu ms after the Announce",
+               c.tag, static_cast<unsigned long long>(c.ms - 2));
+      expect(n, !p100_commit_naming(c0, OUR_CID) &&
+                    (dut->pub_flags_o & 3) == FL_PRESENT, 1);
+      p100_run_to(eof + (c.ms + 2) * MS_CYC);
+      const PubSnap *m = p100_commit_naming(c0, OUR_CID);
+      if (m)
+        printf("INFO %s: aged %llu cycles after the Announce\n", c.tag,
+               static_cast<unsigned long long>(m->cyc - eof));
+      snprintf(n, sizeof n, "%s: master within %llu ms of the Announce",
+               c.tag, static_cast<unsigned long long>(c.ms + 2));
+      expect(n, m && (m->flags & FL_AMGM) &&
+                    m->cyc - eof > (c.ms - 1) * MS_CYC, 1);
+      p100_sync_src = 0;
+      run_svc(400000);
+    }
+  }
+
+  // ---- 54: #100, an Announce at the receipt timeout instant -----------------
+  // Annex D leaves unordered a timeout and an rcvdMsg of the same instant
+  // (Figure 10-13); the board ages the port first (#100), inside Milan v1.2
+  // Table 4.2's 2.7 to 4.5 s. With usable Sync throughout, Announces exactly
+  // 3.0 s apart age the port each time, and the second re-elects the
+  // grandmaster: with its last octet one and two clocks after the timer's
+  // millisecond tick, where the engine runs the expiry ahead of an Announce
+  // already queued, and nine clocks before a tick, where the handler that
+  // started the watch ran after that tick. Announces 2.999 s apart never age
+  // it, nor does one received 2 ms before the deadline whose handler a
+  // stalled transmitter holds until 2 ms after it
+  void age_the_port_at_the_announce_timeout_instant() {
+    const struct { const char *tag; uint64_t phase; uint64_t gap; bool aged; }
+        trials[] = {
+            {"#100 3.0 s apart, a clock after the tick", 0, 3000, true},
+            {"#100 3.0 s apart, two clocks after the tick", 1, 3000, true},
+            {"#100 3.0 s apart, nine clocks before a tick", 1990, 3000, true},
+            {"#100 2.999 s apart", 0, 2999, false},
+        };
+    p100_sync_src = P100_SRC;
+    p100_next_sync = cyc;
+    uint64_t prev = p100_send_eof_at(p100_announce(50, P100_GM, P100_SRC, 0),
+                                     p100_at_phase(cyc + 8000, 0));
+    for (const auto &t : trials) {
+      char n[128];
+      // restart the watch at the trial's phase, well inside it
+      prev = p100_send_eof_at(p100_announce(50, P100_GM, P100_SRC, 0),
+                              p100_at_phase(prev + 200 * MS_CYC, t.phase));
+      run_svc(6000);
+      const size_t c0 = commit_snaps.size();
+      const uint64_t eof = p100_send_eof_at(
+          p100_announce(50, P100_GM, P100_SRC, 0), prev + t.gap * MS_CYC);
+      run_svc(20000);
+      const PubSnap *m = p100_commit_naming(c0, OUR_CID);
+      snprintf(n, sizeof n, "%s: %s", t.tag,
+               t.aged ? "the port is aged" : "the port is not aged");
+      expect(n, m != nullptr, t.aged);
+      snprintf(n, sizeof n, "%s: the grandmaster is elected after it", t.tag);
+      expect(n, (dut->pub_flags_o & 3) == FL_PRESENT &&
+                    dut->pub_gm_id_o == P100_GM &&
+                    last_commit_naming(P100_GM)->cyc > (m ? m->cyc : 0), 1);
+      prev = eof;
+    }
+    hold_an_announce_handler_past_the_deadline(prev);
+    p100_sync_src = 0;
+    run_svc(400000);
+  }
+
+  //! #100: an Announce received 2 ms before the watch's deadline, its
+  //! dispatch held 4 ms behind a Pdelay_Resp stalled at its first octet,
+  //! still refreshes the watch: the expiry queued behind it is discarded
+  void hold_an_announce_handler_past_the_deadline(uint64_t prev) {
+    const uint64_t deadline = prev + 3000 * MS_CYC;
+    p100_run_to(deadline - 4 * MS_CYC);
+    const size_t c0 = commit_snaps.size();
+    dut->tx_ready_i = 0;
+    Frame q = ptp(0x2, 0x5A5A, 0, 0x0000, 20, PEER_CID);
+    q.u64(0); q.u16(0); q.ts(0);
+    q.b.resize(68);
+    send_frame(q.b, phc() + 1000);
+    p100_send_eof_at(p100_announce(50, P100_GM, P100_SRC, 0),
+                     deadline - 2 * MS_CYC);
+    run(4 * MS_CYC);
+    dut->tx_ready_i = 1;
+    run_svc(20000);
+    expect("#100 a stalled handler: an Announce received before the "
+           "deadline refreshes the watch", !p100_commit_naming(c0, OUR_CID) &&
+               (dut->pub_flags_o & 3) == FL_PRESENT &&
+               dut->pub_gm_id_o == P100_GM, 1);
+  }
+
+  // ---- 55: #100, late Pdelay responses are lost responses -----------------
+  // Milan v1.2 4.2.6.2.6 bounds the Pdelay turnaround at 15 ms and lets a
+  // later response go unprocessed; the board counts one as lost (802.1AS-2011
+  // 11.2.15.3), so the fifth in a row clears asCapable (LOST_CLEARS_AT_C).
+  // A response P100_LATE_NS after its request is inside the bound: six in a
+  // row keep asCapable and publish the modelled delay. Five 1 ns later each
+  // move nothing: four keep asCapable and the fifth clears it
+  void count_late_pdelay_responses_as_lost() {
+    pd_mode = PD_NORMAL;
+    expect("#100 late responses: runs from a capable plane",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull) &&
+               wait_exchanges(pdm.count + 1, 4000000ull), 1);
+    const size_t c0 = commit_snaps.size();
+    pd_mode = PD_EDGE;
+    const bool edge = wait_exchanges(pdm.count + 6, 7 * INTERVAL_CYC);
+    run(4000);
+    bool held = true;
+    for (size_t i = c0; i < commit_snaps.size(); i++)
+      held &= (commit_snaps[i].flags & FL_ASCAP) != 0;
+    expect("#100 responses at the bound: six keep asCapable",
+           edge && held && (dut->pub_flags_o & FL_ASCAP), 1);
+    expect("#100 responses at the bound: the delay is published",
+           static_cast<int32_t>(dut->pub_pdelay_ns_o),
+           static_cast<int32_t>(pdm.d));
+    const uint32_t pd = dut->pub_pdelay_ns_o;
+    pd_mode = PD_LATE;
+    const uint64_t mark = pd_reqs_sent;
+    bool moved = false;
+    for (uint64_t k = 1; k <= 6; k++) {
+      const bool out = wait_requests(mark + k, 4000000ull);
+      run(2000);
+      moved |= dut->pub_pdelay_ns_o != pd;
+      if (k == 5)
+        expect("#100 late responses: four keep asCapable",
+               out && (dut->pub_flags_o & FL_ASCAP), 1);
+      if (k == 6)
+        expect("#100 late responses: the fifth clears asCapable",
+               out && (dut->pub_flags_o & FL_ASCAP) == 0, 1);
+    }
+    expect("#100 late responses: none moves the delay", moved, 0);
+    re_earn_in_two_exchanges("#100 late responses");
+  }
+
+  // ---- 56: #100, the clockAccuracy every Announce of the image carries -----
+  // 802.1AS-2011 8.6.2.3: the default is 0x22 (within 250 ns, #100), and
+  // --clock-accuracy builds another: the fourth pass's image states 0xFE
+  // (unknown). Graded over every Announce this run transmitted
+  void announce_the_image_clock_accuracy() {
+    const uint8_t want = self_present ? 0x22 : 0xFE;
+    size_t seen = 0;
+    size_t wrong = 0;
+    for (const std::vector<uint8_t> &f : txf) {
+      if (f.size() < 66 || type_of(f) != 0xB) continue;
+      seen++;
+      if (f[63] != want || f[62] != 0xF8 || fld16(f, 64) != 0x436A) wrong++;
+    }
+    expect(self_present ? "#100 the default image announces clockAccuracy 0x22"
+                        : "#100 a --clock-accuracy 0xFE image announces 0xFE",
+           seen != 0 && wrong == 0, 1);
   }
 };
 

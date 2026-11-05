@@ -75,6 +75,7 @@ from mutation_verdict import TALLY, verdict  # noqa: E402
 sys.path.insert(0, str(HERE))
 from receipt_mutants import GENERATOR, RECEIPT_MUTATIONS  # noqa: E402
 from port_mutants import PORT_MUTATIONS  # noqa: E402
+from p100_mutants import P100_MUTATIONS  # noqa: E402
 
 #: the RTL the suite builds, in the order the Makefile lists it
 RTL_SOURCES = (
@@ -87,9 +88,9 @@ RTL_SOURCES = (
 )
 #: the shipping arguments of this suite's image, as tb/verilator/engine/Makefile
 GENARGS = ("--clk-hz", "2000000", "--cease-ms", "3000")
-#: the Makefile's fourth pass (#82): a priority1 of 255, the self-publication
-#: phases only. Its checks print with this prefix, so a control names the pass
-P1_GENARGS = ("--p1", "255")
+#: the Makefile's fourth pass (#82): a priority1 of 255 and, since #100, a
+#: clockAccuracy of 0xFE. Its checks print with this prefix, naming the pass
+P1_GENARGS = ("--p1", "255", "--clock-accuracy", "0xFE")
 P1_PLUSARG = "+not-gm-capable"
 P1_PREFIX = "p1 255 "
 
@@ -533,6 +534,7 @@ MUTATIONS = [
     # ---- #89, #90 and #91: receipt_mutants.py -----------------------------
     *RECEIPT_MUTATIONS,
     *PORT_MUTATIONS,                                  # #94: port_mutants.py
+    *P100_MUTATIONS,                                  # #100: p100_mutants.py
     ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
      "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
      "                 disp_ready_w && !disp_valid_r;",
@@ -887,11 +889,11 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
             answer = "missed its named check"
         else:
             print(named[0])
-    # #82, #84, #85, #87, #88, #89, #90, #91 and #94 controls must fail every
+    # #82, #84, #85, #87 to #91, #94 and #100 controls must fail every
     # check they name, for the same reason: each of those checks needs its
     # own failing defect.
     if breaks.startswith(("#82 ", "#84 ", "#85 ", "#87 ", "#88 ", "#89 ",
-                          "#90 ", "#91 ", "#94 ", P1_PREFIX)) and answer == "caught":
+                          "#90 ", "#91 ", "#94 ", "#100 ", P1_PREFIX)) and answer == "caught":
         failed = [line for line in output.splitlines()
                   if line.startswith("FAIL ")]
         missed = [want for want in breaks.split(" | ")

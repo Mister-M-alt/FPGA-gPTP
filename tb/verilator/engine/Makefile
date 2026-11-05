@@ -29,6 +29,8 @@ all: run mutants
 # at simulation start, so seeded passes run from ignored directories and an
 # interrupt can leave no tracked artifact behind. A fourth pass (#82) runs
 # only the self-publication phases, from an image whose priority1 is 255.
+# That image also states clockAccuracy 0xFE, so the pass proves the #100
+# --clock-accuracy build parameter against the 0x22 of the shipping image.
 run: gptp_ucode.hex
 	$(VERILATOR) $(VFLAGS) $(SRCS) $(CPP) -o Vengine_sim
 	./obj_dir/Vengine_sim
@@ -41,8 +43,8 @@ run: gptp_ucode.hex
 	@echo "-- again, with the Sync counter seeded above 16 bits --"
 	@cd syncseedrun && ../obj_dir/Vengine_sim
 	@mkdir -p p1run
-	@python3 $(GEN) $(GENARGS) --p1 255 -o p1run/gptp_ucode.hex >/dev/null
-	@echo "-- the self publication again, not grandmaster-capable (priority1 255) --"
+	@python3 $(GEN) $(GENARGS) --p1 255 --clock-accuracy 0xFE -o p1run/gptp_ucode.hex >/dev/null
+	@echo "-- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --"
 	@cd p1run && ../obj_dir/Vengine_sim +not-gm-capable
 
 # Rule 8: prove the checks above are load-bearing. Defects are injected into
