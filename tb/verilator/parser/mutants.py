@@ -27,7 +27,7 @@ The eighth is the defect the ruling in #35 asks for: a refused frame's words
 may stay in the write bank, so a clean frame behind it that skips one field
 write would hand its event the refused frame's word.
 
-The last six belong to #87 and #88. Two restore PathTrace refusals #88
+Seven belong to #87 and #88. Two restore PathTrace refusals #88
 retired, a hop count other than stepsRemoved+1 and a first entry other than
 grandmasterIdentity: each refused the whole Announce, which 802.1AS-2011
 10.3.10.2.1 does not allow. One reports grandmasterIdentity in place of the
@@ -35,6 +35,21 @@ received head, the sequence the head refusal existed to prevent, and one
 restores the refusal of an empty pathSequence. The other three lose or
 fabricate the TLV's presence, which 10.3.10.2.1 d) needs to tell an empty
 path from no path (#87).
+
+The last nineteen belong to #98, the Follow_Up TLV walk (802.1AS-2011
+11.4.1). The first restores the defect: a TLV ahead of the information TLV
+refuses the Follow_Up. One reads word 11 at the fixed octets again, and
+one two octets late. Each refusal the walk keeps loses its own term: the
+missing information TLV; a value past messageLength, once in the walk and
+once in the end-of-frame gate; an odd lengthField; a header messageLength
+cuts; and the refusal latch itself, which only a malformed header ahead
+of a well-formed information TLV can show. Others read padding as a
+header, read a second information TLV, end the walk at a zero-length TLV,
+or name the information TLV without one of its four header values, or
+with any lengthField of at least 28. The last three refuse a well-formed
+chain that ends on a header at messageLength: a complete header read as
+cut, a zero-length TLV after the information TLV, and a last declared
+octet not walked.
 """
 
 from __future__ import annotations
@@ -129,6 +144,43 @@ HEAD_PROBES = ("#88 head not the grandmaster, two entries",
                "#88 head not the grandmaster, one entry",
                "#88 head is thisClock")
 EMPTY_PROBES = ("#88 empty path", "#88 empty path between unknowns")
+
+#: #98: the Follow_Up walk's terms, as the parser spells them
+FU_DECLS = "  logic fu_tlv_header_bad_w, fu_tlv_cut_after_w;\n"
+FU_LATCH = "                  if (fu_tlv_header_bad_w) begin\n"
+FU_CUT = ("  assign fu_tlv_cut_after_w = tlv_hdr_run_r &&\n"
+          "      (fu_tlv_header_byte_w ? !fu_tlv_header_end_w\n")
+FU_ODD = ("      (acc_nxt_w[0] ||\n"
+          "       ({6'd0, cnt_r} + {1'b0, acc_nxt_w[15:0]} > {6'd0, msg_end_r}));\n")
+FU_FIN = ("                         (fu_found_r && !fu_tlv_header_bad_w &&\n"
+          "                          !fu_tlv_cut_after_w));\n")
+FU_HDR_BYTE = (
+    "  assign fu_tlv_header_byte_w = (mtype_r == MT_FU_C) && tlv_hdr_run_r &&\n"
+    "                                (cnt_r <= msg_end_r);\n")
+FU_SKIP = ("                  end else if (acc_nxt_w[15:0] != 16'd0) begin\n"
+           "                    tlv_hdr_run_r <= 1'b0;\n")
+FU_MATCH = ("                if (fu_info_r && (tlv_left_r == FU_LEFT_AT_SUB_C) &&\n"
+            "                    (acc_nxt_w[47:0] == FU_TLV_ORG_C)) fu_found_r <= 1'b1;\n")
+FU_W11 = ("                if (fu_info_r && fu_found_r &&\n"
+          "                    (tlv_left_r == FU_LEFT_AT_TBI_C)) begin\n")
+FU_TYPE = "                               (acc_nxt_w[31:16] == FU_TLV_TYPE_C) &&\n"
+FU_LEN = "                               (acc_nxt_w[15:0] == FU_TLV_LEN_C);\n"
+FU_TBI = "  localparam logic [15:0] FU_LEFT_AT_TBI_C = 16'd17;\n"
+#: the walk's accepting shapes and their named words
+FU_FIRST = ("#98 unknown TLV first", "#98 three unknown TLVs first",
+            "#98 unknown TLV first, padded", "#98 second information TLV",
+            "#98 identifiers at octet 6")
+FU_CUTS = tuple(f"#98 header cut after {k} octet(s){p}: no event"
+                for k in (1, 2, 3) for p in ("", ", padded"))
+#: the well-formed chain that ends on a zero-length header at messageLength
+FU_AFTER = ("#98 unknown TLVs after: event", "#98 unknown TLVs after: no drop")
+
+
+def refused(tag: str, no_w11: bool = False) -> tuple[str, ...]:
+    """The named refusal checks of one #98 or #11 Follow_Up row."""
+    return ((f"{tag}: no event", f"{tag}: one drop")
+            + ((f"{tag}: no w11 write",) if no_w11 else ()))
+
 
 #: (clean, refused) pairs of the stale-word check
 PAIRS = (("sync", "sync"), ("sync", "pdresp"), ("fu", "fu"), ("fu", "pdresp"),
@@ -246,6 +298,117 @@ MUTATIONS = [
      ("TLV-less ann: absent, zero count and loop",
       "out-of-message path: absent, zero count and loop",
       "unknown-only ann: zero count")),
+    # #98: the defect restored, every TLV ahead of the information TLV
+    # refuses the Follow_Up, as the fixed octet-44 arm did
+    ("a TLV ahead of the information TLV refuses the Follow_Up (#98)",
+     [(FU_LATCH,
+       "                  if (fu_tlv_header_bad_w || !(fu_found_r ||\n"
+       "                      ((acc_nxt_w[31:16] == FU_TLV_TYPE_C) &&\n"
+       "                       (acc_nxt_w[15:0] == FU_TLV_LEN_C)))) begin\n")],
+     tuple(f"{t}: event" for t in FU_FIRST) + ("#98 unknown TLV first: no drop",)),
+    # #98: word 11 read at the information TLV's octets 68..73 when it is
+    # first, wherever it really is
+    ("word 11 read at the fixed octets 68..73 (#98)",
+     [(FU_W11, "                if (cnt_r == 11'd73) begin\n")],
+     ("#98 unknown TLV first: w11 as the plain case",
+      "#98 three unknown TLVs first: w11 as the plain case")),
+    # #98: gmTimeBaseIndicator read two octets late, from the head of
+    # lastGmPhaseChange, wherever the information TLV is
+    ("word 11 read two octets late (#98)",
+     [(FU_TBI, "  localparam logic [15:0] FU_LEFT_AT_TBI_C = 16'd15;\n")],
+     ("#98 plain fu: w11 as the plain case", "fu w11",
+      "#98 unknown TLV first: w11 as the plain case")),
+    ("a Follow_Up is accepted without its information TLV (#98)",
+     [(FU_FIN, "                         (!fu_tlv_header_bad_w &&\n"
+               "                          !fu_tlv_cut_after_w));\n")],
+     refused("#98 no information TLV") +
+     ("fu tlvType 0x0008 drop: no event", "fu orgId 00-1B-19 drop: no event",
+      "fu orgSubType 2 drop: no event")),
+    # #98: a value past messageLength, walked like any other: the walk's
+    # header verdict keeps only the odd term, the end-of-frame gate keeps
+    # both, so only a header ending ahead of the last octet is lost
+    ("a TLV value past messageLength is walked (#98)",
+     [(FU_LATCH, "                  if (fu_tlv_header_end_w &&"
+                 " acc_nxt_w[0]) begin\n")],
+     refused("#98 information TLV past messageLength", True) +
+     refused("#98 trailing TLV past messageLength")),
+    # #98: the refusal latch of a malformed header lost, the walk still
+    # holding header mode: the next four octets are read as a header, so
+    # the information TLV right behind it is found and the Follow_Up is
+    # accepted. A malformed header with no such TLV behind it is still
+    # refused for lack of one or by the cut term.
+    ("a malformed TLV header does not latch the refusal (#98)",
+     [(FU_LATCH + "                    bad_r <= 1'b1;\n", FU_LATCH)],
+     refused("#98 TLV past messageLength ahead of the information TLV", True) +
+     refused("#98 odd lengthField ahead of the information TLV", True)),
+    # #98: the header's own overrun, when its last octet is the frame's
+    # last, reaches the end-of-frame gate only through the current-byte
+    # term: the end-of-frame half of a value past messageLength
+    ("an EOF header's own overrun is not refused (#98)",
+     [(FU_FIN, "                         (fu_found_r &&\n"
+               "                          !fu_tlv_cut_after_w));\n")],
+     refused("#98 header ends messageLength, value to come")),
+    ("an odd lengthField is walked (#98)",
+     [(FU_ODD, "      (({6'd0, cnt_r} + {1'b0, acc_nxt_w[15:0]} >"
+               " {6'd0, msg_end_r}));\n")],
+     refused("#98 odd lengthField", True)),
+    ("a TLV header cut by messageLength is accepted (#98)",
+     [(FU_FIN, "                         (fu_found_r &&"
+               " !fu_tlv_header_bad_w));\n")],
+     FU_CUTS),
+    ("the walk reads padding past messageLength as a header (#98)",
+     [(FU_HDR_BYTE, "  assign fu_tlv_header_byte_w = (mtype_r == MT_FU_C) &&"
+                    " tlv_hdr_run_r;\n")],
+     ("#98 unknown TLV first, padded: event",
+      "#98 unknown TLV first, padded: no drop")),
+    ("a later information TLV is read again (#98)",
+     [("                  fu_info_r <= !fu_found_r &&\n",
+       "                  fu_info_r <=\n")],
+     ("#98 second information TLV: w11 as the plain case",)),
+    ("a zero-length TLV ends the walk (#98)",
+     [(FU_SKIP, "                  end else begin\n"
+                "                    tlv_hdr_run_r <= 1'b0;\n")],
+     ("#98 three unknown TLVs first: event",
+      "#98 three unknown TLVs first: no drop")),
+    ("the information TLV is named without its organizationId and subtype (#98)",
+     [(FU_MATCH, "                if (fu_info_r && (tlv_left_r =="
+                 " FU_LEFT_AT_SUB_C)) fu_found_r <= 1'b1;\n")],
+     ("#98 three unknown TLVs first: w11 as the plain case",
+      "#98 no information TLV: no event", "fu orgId 00-1B-19 drop: no event",
+      "fu orgSubType 2 drop: no event")),
+    ("the information TLV is named without its tlvType (#98)",
+     [(FU_TYPE, "")],
+     refused("fu tlvType 0x0008 drop", True)),
+    ("the information TLV is named without its lengthField (#98)",
+     [(FU_LEN, "                               1'b1;\n")],
+     ("#98 identifiers at octet 6: w11 as the plain case",)),
+    # #98: 11.4.4.3.3 fixes lengthField at 28. A walk that takes any
+    # lengthField of at least 28 and finds the fields from the TLV's start
+    # accepts a longer 00-80-C2/1 TLV.
+    ("the information TLV is named by any lengthField of 28 or more (#98)",
+     [(FU_DECLS, FU_DECLS +
+       "  logic [15:0] mut_len_r;\n"
+       "  always_ff @(posedge clk_i)\n"
+       "    if (rx_valid_i && fu_tlv_header_end_w) mut_len_r <= acc_nxt_w[15:0];\n"),
+      (FU_LEN, "                               (acc_nxt_w[15:0] >= FU_TLV_LEN_C);\n"),
+      (FU_MATCH, FU_MATCH.replace("FU_LEFT_AT_SUB_C", "mut_len_r - 16'd5")),
+      (FU_W11, FU_W11.replace("FU_LEFT_AT_TBI_C", "mut_len_r - 16'd11"))],
+     refused("#98 information TLV with lengthField 30", True)),
+    # #98: a well-formed chain that ends on a complete zero-length header
+    # at exactly messageLength is accepted; each defect refuses it
+    ("a complete header ending on the last declared octet is read as cut (#98)",
+     [(FU_CUT, "  assign fu_tlv_cut_after_w = tlv_hdr_run_r &&\n"
+               "      (fu_tlv_header_byte_w ? 1'b1\n")],
+     FU_AFTER),
+    ("a zero-length TLV after the information TLV refuses the Follow_Up (#98)",
+     [(FU_SKIP, "                  end else if ((acc_nxt_w[15:0] == 16'd0) &&"
+                " fu_found_r) begin\n"
+                "                    bad_r <= 1'b1;\n" + FU_SKIP)],
+     FU_AFTER),
+    ("the last declared octet is not walked as a header byte (#98)",
+     [(FU_HDR_BYTE, FU_HDR_BYTE.replace("(cnt_r <= msg_end_r)",
+                                        "(cnt_r < msg_end_r)"))],
+     FU_AFTER),
 ]
 
 

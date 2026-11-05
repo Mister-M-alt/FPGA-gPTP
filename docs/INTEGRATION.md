@@ -907,7 +907,7 @@ Each row names the generator constant it reads.
 
 Other pages name the constant and link its row.
 
-`make docs` rules are `scripts/check_docs.py`; its [`selftest()`](../scripts/check_docs.py) cases are the specification.
+`make docs` rules are `scripts/check_docs.py`; its [`selftest()`](../scripts/check_docs_selftest.py) cases are the specification.
 
 Clauses without a prefix are IEEE 802.1AS-2011.
 

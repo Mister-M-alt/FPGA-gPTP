@@ -10,7 +10,7 @@ Line numbers describe the current branch layout.
 | Single clock domain | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L66) | `make lint` |
 | Four instantiated blocks | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L211) | `make lint` |
 | Any-byte receive refusal | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv) | Parser suite and named mutation controls |
-| Deferred receive event | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L392) | Parser suite |
+| Deferred receive event | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L439) | Parser suite |
 | Four-entry event queue | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L559) | Engine suite |
 | Parser arbitration priority | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L586) | Engine suite |
 | Priority timestamp return | [`KL_gptp_engine`](../hdl/top/KL_gptp_engine.sv#L407) | Engine suite |
@@ -30,7 +30,7 @@ Line numbers describe the current branch layout.
 | Step-versus-slew policy | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
 | Registered policy slew level | [Port](../hdl/top/KL_gptp_engine.sv#L125), [word 2](../hdl/top/KL_gptp_engine.sv#L1273), [word 3](../hdl/top/KL_gptp_engine.sv#L1278), [policy](../hdl/ucode/gen_gptp_ucode.py#L1098) | Engine suite and named mutation controls |
 | PHC rate envelope | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
-| Ignored receive flag bits | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L472) | Engine suite |
+| Ignored receive flag bits | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L521) | Engine suite |
 | C++ test harnesses | [`tb/verilator`](../tb/verilator) | `make` |
 | PHC and result face contract | [`check_phc_contract.py`](../tb/check_phc_contract.py) | `make contract` |
 | Load-bearing engine checks | [`mutants.py`](../tb/verilator/engine/mutants.py) | Engine suite |

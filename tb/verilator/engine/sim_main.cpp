@@ -3478,8 +3478,9 @@ class GptpEngineHarness {
   // issue's shape, refused at the messageLength byte ahead of every bank
   // write), messageLength 76 cut at 75 octets (refused at the end-of-
   // frame gate), and a 76-octet frame whose TLV type is 0x0008 (refused
-  // at the TLV header). Each carries the pairing sequence and source with
-  // an origin skewed a further -777 ns, so a wrong acceptance would move
+  // at end of frame: the TLV is skipped and the chain holds no
+  // information TLV, #98). Each carries the pairing sequence and source
+  // with an origin skewed a further -777 ns, so a wrong acceptance would move
   // the published offset; each is counted and leaves the offset, the PHC
   // knobs and the flags unmoved; none consumes the pending Sync, so the
   // complete Follow_Up that follows pairs with it and lands an offset 333
@@ -3554,8 +3555,9 @@ class GptpEngineHarness {
   // that is not gated on the message type would refuse every one of
   // them while passing a suite that never pads (the #18 review's MR7).
   // Two shapes: the 60-byte minimum, and a Sync padded to 74 bytes, the
-  // span of the whole Follow_Up TLV header arm (octets past messageLength
-  // are padding to a receiver whatever their count). Each is accepted
+  // span of the former fixed Follow_Up TLV header arm (octets 44..59,
+  // before #98) (octets past messageLength are padding to a receiver
+  // whatever their count). Each is accepted
   // with no drop, its Follow_Up pairs with it, and the pair re-bases the
   // PHC by the negation of its own offset. The 74-byte shape is the one
   // an arm at byte 59 cannot hide from: a poison raised on a frame's eof
