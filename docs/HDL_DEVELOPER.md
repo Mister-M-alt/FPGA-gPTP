@@ -325,7 +325,9 @@ Before any rate write since reset, it is zero.
 
 Publish word 4 writes keep the offset's upper half.
 
-Region 6 serves all three fields as ScaledNs and scaled.
+Region 6 serves gmTimeBaseIndicator, lastGmPhaseChange as ScaledNs.
+
+It also serves scaledLastGmFreqChange, scaled by 2^41.
 
 ## Port enable
 
