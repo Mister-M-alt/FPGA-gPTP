@@ -720,6 +720,20 @@ Three departures each return thisClock and {thisClock}.
 
 Announce silence for announceReceiptTimeout ages the peer out.
 
+Its length follows the received logMessageInterval (#100).
+
+Three intervals give 6 s at logMessageInterval 1.
+
+The watch counts from the Announce's last octet.
+
+An Announce at the deadline arrives too late.
+
+The expiry runs first, inside Milan Table 4.2.
+
+Arrival times decide that order, not queue order.
+
+A stale expiry never ages a refreshed watch.
+
 So does [`SYNC_RTO_MS_C`](#protocol-constants) without a usable Sync pair.
 
 That needs a grandmaster priority1 below 255.
@@ -820,6 +834,38 @@ The loss that reaches it clears asCapable.
 
 A completed exchange restarts the count.
 
+A late Pdelay_Resp also counts as lost (#100).
+
+Late means after [`PD_LATE_NS_C`](#protocol-constants) from its request.
+
+Both ends are this clock's own wire timestamps.
+
+Milan v1.2 bounds the turnaround and permits ignoring later.
+
+Its asCapable recommendation is deliberately not taken.
+
+A late pair moves no delay, ratio or ladder.
+
+### Follow_Up information TLV
+
+A grandmaster's Follow_Up carries this plane's own TLV values.
+
+They follow 10.2.8.2.1 j) to l).
+
+Each new mastership increments gmTimeBaseIndicator by one.
+
+lastGmPhaseChange is the last slave offset, as ScaledNs.
+
+scaledLastGmFreqChange is the kept trim less the estimate.
+
+The estimate is the slave's integrator, BECOME's PHC word 3.
+
+An active slew keeps the estimate, so it reads zero.
+
+Unknown values read zero after a reset.
+
+cumulativeScaledRateOffset stays zero for a grandmaster.
+
 ## Microcode configuration
 
 Generate one image for each hardware configuration.
@@ -836,6 +882,14 @@ python3 hdl/ucode/gen_gptp_ucode.py \
 Colon-separated addresses are refused.
 
 `--p1` sets priority1; [`P1_C`](#protocol-constants) is its default.
+
+`--clock-accuracy` sets clockAccuracy (#100).
+
+[`CLOCK_ACCURACY_C`](#protocol-constants) is its default, `0x22`.
+
+Clause 8.6.2.3 b) needs `0xFE` without characterisation.
+
+Parent descriptors must state the value the image announces.
 
 The generator prints its word count and leg placement.
 
@@ -873,6 +927,10 @@ Clauses without a prefix are IEEE 802.1AS-2011.
 | `STEP_LOCKED_NS_C` | 100,000 | Locked step threshold, ns | Issue #68 |
 | `SLEW_SETTLED_NS_C` | 100 | Tracking band half-width, ns | Issue #75 |
 | `RATE_PPM_C` | 200 | Rate trim and integrator bound, ppm | Issue #68 |
+| `PD_TURNAROUND_MAX_NS_C` | 15,000,000 | Pdelay turnaround bound, ns | Milan 4.2.6.2.6 |
+| `LOCAL_CLOCK_PPM_C` | 100 | LocalClock frequency tolerance, ppm | B.1.1 |
+| `PD_LATE_NS_C` | 15,006,100 | Pdelay_Resp lateness bound, ns | Issue #100 |
+| `CLOCK_ACCURACY_C` | 34 | Default clockAccuracy, `0x22` | 8.6.2.3; issue #100 |
 | `DEPTH` | 1,024 | Microcode ROM words | [ROM budget](MANAGER.md#current-rom-budget) |
 | `ROM_CID_HI_C` | 1,022 | ROM word holding thisClock's high half | Issue #82 |
 | `ROM_GMCAP_BIT_C` | 32 | Grandmaster-capable bit in that word | Issue #82 |
@@ -889,6 +947,16 @@ These cadences are literals inside generator legs.
 | Sync interval | 125 ms | 1 | Milan 4.2.6.2.2, Table 4.1 |
 | announceReceiptTimeout | 3 s | 2 | Milan 4.2.6.2.3, Table 4.2 |
 | Announce interval | 1 s | 3 | Milan 4.2.6.2.2, Table 4.1 |
+
+The receipt row holds for a peer's logMessageInterval 0.
+
+logMessageInterval n stretches it to 3 × 2^n s.
+
+[`PD_LATE_NS_C`](#protocol-constants) adds two tolerances to the turnaround.
+
+One is the clock offset at both ppm bounds.
+
+The other is twice [`NPD_HI_C`](#protocol-constants), the link round trip.
 
 ## Integration checklist
 

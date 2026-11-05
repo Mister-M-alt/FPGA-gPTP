@@ -29,7 +29,7 @@ EXPECTED = {
     "Reset-backed pairing validity": [(ENGINE, "logic t1v_valid_r, pdwait_valid_r;")],
     "Transmit admission credit": [(ENGINE, "input  wire         tx_credit_i,")],
     "Eight timer slots": [(ENGINE, "KL_gptp_timer #(")],
-    "Six state regions": [(ENGINE, "//                  0  message bank      RO  (parser-written, PING-PONG")],
+    "Seven state regions": [(ENGINE, "//                  0  message bank      RO  (parser-written, PING-PONG")],
     "Stable stalled transmission": [("hdl/wire/KL_gptp_tx_slot.sv", "assign tx_valid_o = ser_run_r && !ser_drop_w;")],
     "Committed publication": [(ENGINE, "output logic        pub_commit_o,")],
     "Microcode ROM depth": [(UCPU, "// ------------------------------------------------------------------ ROM")],

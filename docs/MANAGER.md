@@ -60,8 +60,8 @@ The seeded row counts the `--seq-seed 0x200000` image.
 
 | Image | Words used | Free |
 |---|---|---:|
-| Shipping | 1,022 of 1,024 | 2 |
-| Seeded regression | 1,023 of 1,024 | 1 |
+| Shipping | 1,015 of 1,024 | 9 |
+| Seeded regression | 1,016 of 1,024 | 8 |
 
 Used words include thisClock's two data words.
 
@@ -75,7 +75,7 @@ That prefix spans addresses 0..15.
 
 The current map places `SERVO@0` in that prefix.
 
-`FUTO@254` sits outside it.
+`FUTO@509` sits outside it.
 
 Engine dispatch entries start at address 16.
 
