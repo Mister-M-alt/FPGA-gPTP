@@ -36,6 +36,8 @@
 //                  4  PHC control       RW  (0 rate, 1 step, 2 slew verdict,
 //                                            3 integral-only rate)
 //                  5  timer arm         WO  (slot = addr, delta ms = data)
+//                  6  Follow_Up TLV     RO  (#100: 0..2, the information
+//                                            TLV after its rate offset)
 //
 //                gather: free-running millisecond time.
 //
@@ -459,6 +461,96 @@ module KL_gptp_engine
       .ev_ready_i     (tev_ready_w)
   );
 
+  // ------------------------------------ #100 announce receipt watch
+  //! The watch is timer slot 2. 802.1AS-2011 10.3.9.1 makes its interval
+  //! announceReceiptTimeout (3, 10.6.3.2) times the announceInterval of
+  //! the port at the other end, from logMessageInterval of the received
+  //! Announce, and Figure 10-13 starts it when that Announce is received.
+  //! So a nonzero slot-2 arm made by an Announce's own handler (BTCA's)
+  //! becomes ANN_RTO_MS_C scaled by 2^logMessageInterval, counted from
+  //! the Announce's last octet; every other arm (boot, init, BECGATE and
+  //! the asCapable fall) keeps its own delta, counted from the arm.
+  //!
+  //! Which of an expiry and an Announce comes first is decided by time,
+  //! not by queue order. Annex D leaves unordered a timeout and an rcvdMsg
+  //! raised in the same instant (Figure 10-13); the board takes the
+  //! expiry first, which Milan v1.2 Table 4.2's 2.7 to 4.5 s allows:
+  //!  - an Announce received at or after the deadline is dispatched after
+  //!    the expiry. If the timer's own event is not ahead of it in the
+  //!    queue, the engine dispatches the expiry first;
+  //!  - an expiry whose watch has since been re-armed, stopped or taken
+  //!    is discarded at the queue head, so an Announce received before
+  //!    the deadline still refreshes the watch however late its handler.
+  //! An Announce received before the deadline is always queued ahead of
+  //! the expiry: its event follows its last octet by two clocks, and the
+  //! timer cannot raise an expiry sooner than four clocks after the
+  //! deadline's tick.
+  //!
+  //! The mirror below is the watch: armed, and its deadline. The timer is
+  //! only the alarm, and its deadline is never earlier than the mirror's.
+  //! ANN_RTO_MS_C mirrors the 3000 BTCA arms (gen_gptp_ucode.py).
+  localparam logic [31:0] ANN_RTO_MS_C = 32'd3000;
+  logic        w2_armed_r;
+  logic [31:0] w2_dl_r;
+  logic        tmr_arm_anchor_r;
+  logic [31:0] tmr_arm_anchor_dl_r;
+  logic [31:0] ann_arr_ms_r;    //! the context Announce's last octet, ms
+  logic  [7:0] ann_log_r;       //! its logMessageInterval (bank w0[7:0])
+  logic        t2_take_w;
+
+  //! 3 s x 2^logMessageInterval in ms, for intervals 2^-11 s to 2^19 s:
+  //! a shorter one gives 1 ms (0 would disarm the slot), a longer one the
+  //! 2^19 s value (the timer's wrap-safe compare spans 2^31 ms). Shorter
+  //! intervals round down to whole milliseconds.
+  function automatic logic [31:0] ann_rto_ms(input logic [7:0] lg);
+    if ($signed(lg) >= 8'sd19)
+      ann_rto_ms = ANN_RTO_MS_C << 19;
+    else if ($signed(lg) >= 8'sd0)
+      ann_rto_ms = ANN_RTO_MS_C << lg[4:0];
+    else if ($signed(lg) >= -8'sd11)
+      ann_rto_ms = ANN_RTO_MS_C >> (5'(-$signed(lg)));
+    else
+      ann_rto_ms = 32'd1;
+  endfunction
+
+  wire [31:0] ann_dl_w  = ann_arr_ms_r + ann_rto_ms(ann_log_r);
+  wire [31:0] ann_rem_w = ann_dl_w - ms_now_w;
+  wire        w2_due_w  = w2_armed_r && ($signed(ms_now_w - w2_dl_r) >= 0);
+  wire        w2_late_w = w2_armed_r &&
+                          ($signed(ann_arr_ms_r - w2_dl_r) >= 0);
+
+  always_ff @(posedge clk_i) begin : ann_watch
+    if (!rst_n) begin
+      w2_armed_r <= 1'b0;
+      w2_dl_r    <= '0;
+    end else begin
+      if (t2_take_w) w2_armed_r <= 1'b0;
+      //! The arm the timer takes on this edge; its deadline is
+      //! ms_now_w + tmr_arm_delta_w, so a delta arm equals it exactly
+      if (tmr_arm_we_w && (tmr_arm_slot_w == 3'd2)) begin
+        w2_armed_r <= (tmr_arm_delta_w != 32'd0);
+        w2_dl_r    <= tmr_arm_anchor_r ? tmr_arm_anchor_dl_r
+                                       : ms_now_w + tmr_arm_delta_w;
+      end
+    end
+  end
+
+  //! The context Announce's arrival and interval, written as ann_ctx_r is,
+  //! by the frame that holds the context: a frame that starts while the
+  //! context is owned is not captured, so both stay that Announce's own
+  //! until its handler ends.
+  always_ff @(posedge clk_i) begin : ann_arrival
+    if (!rst_n) begin
+      ann_arr_ms_r <= '0;
+      ann_log_r    <= '0;
+    end else begin
+      if (rx_valid_i && rx_eof_i && ann_frame_capture_r)
+        ann_arr_ms_r <= ms_now_w;
+      if (bank_we_w && (bank_addr_w == 5'd0) && ann_frame_capture_r)
+        ann_log_r <= bank_wdata_w[7:0];
+    end
+  end
+
   // ------------------------------------------------------- event queue
   //! 4 deep, {code, seq, aux}; parser wins a same-cycle queue push and the
   //! timer waits on its own ready. TX timestamps use the priority side
@@ -621,12 +713,25 @@ module KL_gptp_engine
   //! dispatched after an edge runs before its leg, and it skips the
   //! serializer wait: the leg builds and sends nothing, so a frame stalled
   //! on the wire cannot hold asCapable up on a disabled port
+  //! #100: the announce receipt watch at the queue head (see ann_watch).
+  //! A slot-2 expiry whose watch is no longer due is popped and not
+  //! dispatched. An Announce received at or after a deadline still armed
+  //! stays at the head while the expiry dispatches in its place.
+  wire head_t2_w   = !evq_empty_w && (ev_head_w[39:32] == EV_TMR_C) &&
+                     (ev_head_w[2:0] == 3'd2);
+  wire t2_stale_w  = head_t2_w && !w2_due_w;
+  wire ann_force_w = !evq_empty_w &&
+                     (ev_head_w[39:32] == EV_RX_ANNOUNCE_C) && w2_late_w;
+  logic t2_force_w;
   assign pe_pop_w   = pe_noten_r && disp_ready_w && !disp_valid_r;
   assign txts_pop_w = txts_pend_r && !pe_noten_r && disp_ready_w &&
                       ser_idle_w && !disp_valid_r;
   assign pop_w = !txts_pend_r && !pe_noten_r && !evq_empty_w &&
-                 !pdreq_block_w &&
+                 !pdreq_block_w && !ann_force_w &&
                  disp_ready_w && ser_idle_w && !disp_valid_r;
+  assign t2_force_w = !txts_pend_r && !pe_noten_r && ann_force_w &&
+                      ser_idle_w && disp_ready_w && !disp_valid_r;
+  assign t2_take_w  = t2_force_w || (pop_w && head_t2_w && !t2_stale_w);
 
   logic [UPC_W_C-1:0] disp_upc_r;
   logic [63:0] disp_ev_r, disp_ts0_r;
@@ -647,7 +752,8 @@ module KL_gptp_engine
       disp_pd_cid_r <= '0;
       disp_pd_pn_r <= '0;
     end else begin
-      if (txts_pop_w || pop_w || pe_pop_w) disp_valid_r <= 1'b1;
+      if (txts_pop_w || (pop_w && !t2_stale_w) || pe_pop_w || t2_force_w)
+        disp_valid_r <= 1'b1;
       else if (!disp_ready_w)  disp_valid_r <= 1'b0;   // accepted
       if (pe_pop_w) begin
         //! the timer entry, slot 6: the table's default arm, which
@@ -658,6 +764,15 @@ module KL_gptp_engine
         disp_announce_r <= 1'b0;
         disp_ev_r    <= {24'd0, EV_TMR_C, 16'd0, 13'd0, PE_SLOT_C};
         disp_ts0_r   <= {32'd0, ms_now_w};
+      end else if (t2_force_w) begin
+        //! #100: the announce receipt expiry, slot 2, ahead of the
+        //! Announce received at or after its deadline
+        disp_upc_r   <= UPC_W_C'(512);
+        disp_bank_r  <= 1'b0;
+        disp_pdreq_r <= 1'b0;
+        disp_announce_r <= 1'b0;
+        disp_ev_r    <= {24'd0, EV_TMR_C, 16'd0, 13'd0, 3'd2};
+        disp_ts0_r   <= {32'd0, ms_now_w};
       end else if (txts_pop_w) begin
         disp_upc_r  <= UPC_W_C'(448);
         disp_bank_r <= 1'b0;
@@ -665,7 +780,7 @@ module KL_gptp_engine
         disp_announce_r <= 1'b0;
         disp_ev_r   <= {24'd0, txts_ev_w};
         disp_ts0_r  <= txts_r;
-      end else if (pop_w) begin
+      end else if (pop_w && !t2_stale_w) begin
         disp_upc_r   <= entry_w;
         disp_bank_r  <= ev_head_w[0];
         disp_pdreq_r <= (ev_head_w[39:32] == EV_RX_PDREQ_C);
@@ -791,6 +906,82 @@ module KL_gptp_engine
   //! but the old PHC rate remains affected until its replacement is written.
   logic [1:0] phc_slew_left_r;
 
+  //! #100: an Announce handler's nonzero slot-2 arm counts from its
+  //! Announce (see ann_watch); the timer gets the time still to run
+  wire        ann_anchor_w = disp_announce_r && (st_addr_w[2:0] == 3'd2) &&
+                             (st_wdata_w[31:0] != 32'd0);
+  wire [31:0] tmr_wr_delta_w = !ann_anchor_w ? st_wdata_w[31:0]
+                             : ($signed(ann_rem_w) > 32'sd0) ? ann_rem_w
+                             : 32'd1;
+
+  // ------------------------------- #100 Follow_Up information TLV values
+  //! What this plane's Follow_Up carries while it is grandmaster
+  //! (802.1AS-2011 10.2.8.2.1 j) to l), 11.4.4.3.7 to 11.4.4.3.9), read
+  //! by the Follow_Up leg from region 6. BECOME's PHC word-3 write is the
+  //! plane's one entry into mastership (gen_gptp_ucode.py prog_become), so
+  //! that write is where the grandmaster's time base changes:
+  //!  - gmTimeBaseIndicator counts it. Like the clockIdentity mirror it
+  //!    has no warm-reset assignment, so a mastership after a warm reset
+  //!    still moves it.
+  //!  - lastGmPhaseChange is clockSourcePhaseOffset (10.2.9, Figure 10-6):
+  //!    this plane's time minus the grandmaster's at the last Sync it
+  //!    consumed as a slave, the offset publish word 4 records, kept
+  //!    whole here (pub_offset_o carries its low 32 bits). A master
+  //!    publishes no offset, so it holds through the mastership. Zero
+  //!    after a reset, as is the offset.
+  //!  - scaledLastGmFreqChange is the frequency the time base keeps,
+  //!    relative to the grandmaster it leaves, from the rate estimate the
+  //!    slave held: the trim the PHC keeps minus the integrator that word
+  //!    3 carries. When the write applies (a slew active), the PHC keeps
+  //!    the estimate itself and the change is zero; otherwise the last
+  //!    trim stays, its proportional term the change. Zero when no rate
+  //!    has been written since reset, as the PHC's rate is then unknown.
+  //! A trim unit adds 2^-24 ns per clock, CLK_HZ_P * 2^-24 * 1e-9 of
+  //! frequency, which the TLV scales by 2^41 (11.4.4.3.9): one unit is
+  //! CLK_HZ_P * 2^17 / 1e9, here TLV_K_C / 2^16, rounded to the nearest.
+  //! The product is floored ("the next smaller signed integer"). Both
+  //! trims lie within RATE_PPM_C, so the difference fits 25 bits and the
+  //! result 31.
+  localparam longint unsigned TLV_K_C =
+      ((64'(CLK_HZ_P) << 33) + 64'd500_000_000) / 64'd1_000_000_000;
+  /* verilator lint_off PROCASSINIT */
+  logic [15:0] tlv_tbi_r = 16'd0;
+  /* verilator lint_on PROCASSINIT */
+  logic [31:0] pub_offset_hi_r;
+  logic        phc_rate_seen_r;
+  logic        tlv_mul_r;
+  logic signed [24:0] tlv_dlt_r;
+  logic signed [31:0] tlv_freq_r;
+  wire  [63:0] tlv_off_w = {pub_offset_hi_r, pub_offset_r};
+  //! lastGmPhaseChange, ScaledNs: the offset in units of 2^-16 ns
+  wire  [95:0] tlv_phase_w = {{16{tlv_off_w[63]}}, tlv_off_w, 16'd0};
+  wire         tlv_become_w = st_req_w && st_we_w &&
+                              (st_addr_w[19:16] == 4'd4) &&
+                              (st_addr_w[1:0] == 2'd3);
+  wire signed [63:0] tlv_prod_w = 64'(tlv_dlt_r) *
+                                  $signed({1'b0, TLV_K_C[31:0]});
+
+  always_ff @(posedge clk_i) begin : tlv_become
+    if (tlv_become_w) tlv_tbi_r <= tlv_tbi_r + 16'd1;
+    if (!rst_n) begin
+      pub_offset_hi_r <= '0;
+      phc_rate_seen_r <= 1'b0;
+      tlv_mul_r       <= 1'b0;
+      tlv_dlt_r       <= '0;
+      tlv_freq_r      <= '0;
+    end else begin
+      if (st_req_w && st_we_w && (st_addr_w[19:16] == 4'd3) &&
+          (st_addr_w[3:0] == 4'd4))
+        pub_offset_hi_r <= st_wdata_w[63:32];
+      if (phc_addend_we_o) phc_rate_seen_r <= 1'b1;
+      tlv_mul_r <= tlv_become_w;
+      if (tlv_become_w)
+        tlv_dlt_r <= (phc_slew_active_o || !phc_rate_seen_r) ? 25'sd0
+                   : 25'(phc_addend_o - st_wdata_w[31:0]);
+      if (tlv_mul_r) tlv_freq_r <= 32'(tlv_prod_w >>> 16);
+    end
+  end
+
   logic [63:0] st_rd_mux_w;
   always_comb begin : st_read_mux
     unique case (st_addr_w[19:16])
@@ -854,6 +1045,14 @@ module KL_gptp_engine
         endcase
       end
       4'd4: st_rd_mux_w = {62'd0, phc_slew_left_r};
+      //! #100: the Follow_Up information TLV after cumulativeScaledRateOffset
+      4'd6: begin
+        unique case (st_addr_w[1:0])
+          2'd0: st_rd_mux_w = {tlv_tbi_r, tlv_phase_w[95:48]};
+          2'd1: st_rd_mux_w = {tlv_phase_w[47:0], tlv_freq_r[31:16]};
+          default: st_rd_mux_w = {48'd0, tlv_freq_r[15:0]};
+        endcase
+      end
       default: st_rd_mux_w = 64'd0;
     endcase
   end
@@ -907,6 +1106,8 @@ module KL_gptp_engine
       tmr_arm_we_w    <= 1'b0;
       tmr_arm_slot_w  <= '0;
       tmr_arm_delta_w <= '0;
+      tmr_arm_anchor_r    <= 1'b0;
+      tmr_arm_anchor_dl_r <= '0;
       tmr_claim_valid_r  <= 1'b0;
       resp_claim_valid_r <= 1'b0;
       t1v_valid_r        <= 1'b0;
@@ -921,6 +1122,7 @@ module KL_gptp_engine
       phc_addend_we_o <= 1'b0;
       phc_step_we_o   <= 1'b0;
       tmr_arm_we_w    <= 1'b0;
+      tmr_arm_anchor_r <= 1'b0;
       boot_pub_commit_r <= boot_pub_pend_r;
       boot_pub_pend_r   <= 1'b0;
 `ifndef SYNTHESIS
@@ -1087,7 +1289,10 @@ module KL_gptp_engine
           4'd5: begin
             tmr_arm_we_w    <= 1'b1;
             tmr_arm_slot_w  <= st_addr_w[2:0];
-            tmr_arm_delta_w <= st_wdata_w[31:0];
+            tmr_arm_delta_w <= tmr_wr_delta_w;
+            //! #100: an Announce's watch, anchored at its arrival
+            tmr_arm_anchor_r    <= ann_anchor_w;
+            tmr_arm_anchor_dl_r <= ann_dl_w;
           end
           default: ;
         endcase

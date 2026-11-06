@@ -7,7 +7,7 @@ This guide explains structure, timing, and invariants.
 
 - Five RTL modules share one clock under `KL_gptp_engine`.
 - Microcode decides protocol policy; RTL moves bytes and time.
-- The microCPU reaches engine state through six address regions.
+- The microCPU reaches engine state through seven address regions.
 - Scratch survives warm reset; validity bits do not.
 - Sample on `pub_commit_o`; staging writes change outputs first.
 - Synthesis figures here are dated measurements.
@@ -126,6 +126,7 @@ The microCPU uses `st_addr_o[19:16]` for selection.
 | 3 | Read-write | Publication staging bank; word 15 reads thisClock |
 | 4 | Read-write | PHC controls and policy completion qualifier |
 | 5 | Write-only | Timer arming interface |
+| 6 | Read-only | Follow_Up information TLV values (#100) |
 
 Scratch storage survives warm resets.
 
@@ -262,11 +263,71 @@ An uncompleted interval adds one lost response.
 
 Consecutive loss [`LOST_CLEARS_AT_C`](INTEGRATION.md#protocol-constants) clears asCapable.
 
+PDPAIR first compares t4 less t1 with [`PD_LATE_NS_C`](INTEGRATION.md#protocol-constants).
+
+A later pair ends there, with `S_PDGOT` still clear.
+
+So it counts as lost, and moves nothing (#100).
+
 Scratch word 39 adds each matching response's armed sequence.
 
 A second response therefore leaves no pairable value.
 
 Its exchange counts as lost at the next beat.
+
+## Announce receipt watch
+
+Timer slot 2 is the announce receipt watch.
+
+The engine mirrors it: armed, and its deadline.
+
+The timer only raises the alarm, never earlier.
+
+An Announce handler's nonzero arm is rescaled (#100).
+
+It becomes `ANN_RTO_MS_C` times 2^logMessageInterval.
+
+It counts from that Announce's last octet.
+
+Every other arm keeps its delta from the arm.
+
+A queued expiry whose watch is not due is dropped.
+
+An Announce arriving at or after the deadline waits.
+
+The expiry dispatches ahead of it, from the head.
+
+Each dispatched expiry consumes its watch.
+
+Without that, a master's expiry would wedge dispatch.
+
+An Announce before the deadline always precedes its expiry.
+
+Its event follows its last octet by two clocks.
+
+An expiry needs four clocks after the tick.
+
+## Follow_Up TLV values
+
+BECOME's PHC word-3 write marks each new mastership.
+
+It increments the sixteen-bit gmTimeBaseIndicator.
+
+That counter has no warm-reset assignment.
+
+It also captures the frequency change, through one multiply.
+
+That change is the kept trim less word 3's estimate.
+
+An active slew applies word 3: the change is zero.
+
+Before any rate write since reset, it is zero.
+
+Publish word 4 writes keep the offset's upper half.
+
+Region 6 serves gmTimeBaseIndicator, lastGmPhaseChange as ScaledNs.
+
+It also serves scaledLastGmFreqChange, scaled by 2^41.
 
 ## Port enable
 

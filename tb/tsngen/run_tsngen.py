@@ -26,7 +26,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 OUR_MAC = 0x02A1B2C3D4E5
 OUR_CID = 0x02A1B2FFFEC3D4E5
-OUR_CQ = 0xF8FE436A
+OUR_CQ = 0xF822436A   # clockAccuracy 0x22 by default (8.6.2.3, #100)
 PD_NS = 700
 
 

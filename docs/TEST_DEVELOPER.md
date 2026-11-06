@@ -69,6 +69,7 @@ Configuration inputs include these values:
 - Announced priority one.
 - Engine clock frequency.
 - Cease-rule duration.
+- Announced clockAccuracy.
 - Optional regression sequence seeds.
 
 Regression seeds exercise unreachable runtime counters quickly.
@@ -193,6 +194,13 @@ Values here come from the [protocol constants](INTEGRATION.md#protocol-constants
 - Withholds transmit credit at every initiating leg.
 - Sweeps every transmitted flags word by message type.
 - Pairs received frames differing only in ignored flag bits.
+- Grades each mastership's Follow_Up information TLV (#100).
+- Times the Announce watch from the received interval.
+- Ages the port at the Announce timeout instant.
+- Covers the forced expiry, the queued one and stale ones.
+- Counts Pdelay responses past the late bound as lost.
+- Keeps asCapable through responses exactly at that bound.
+- Grades clockAccuracy in every Announce, in both images.
 - Proves its own checks through planted defects.
 
 ### Bench-tag suite
