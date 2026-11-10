@@ -17,7 +17,7 @@ CPP  = sim_main.cpp
 GEN = $(RTL_DIR)/ucode/gen_gptp_ucode.py
 GENARGS = --clk-hz 2000000 --cease-ms 3000
 
-.PHONY: all run mutants clean
+.PHONY: all run mutants mutants-jobs-test clean
 .DEFAULT_GOAL := all
 all: run mutants
 
@@ -48,12 +48,22 @@ run: gptp_ucode.hex
 	@cd p1run && ../obj_dir/Vengine_sim +not-gm-capable
 
 # Rule 8: prove the checks above are load-bearing. Defects are injected into
-# the real engine RTL and the real micro-code generator, one at a time, and
+# the real engine RTL and the real micro-code generator, one per mutant, and
 # each must make the SAME harness fail; the unmutated build must still pass.
 # Everything is staged into a temporary directory, so nothing is written into
-# the tree.
+# the tree. Since #102 several mutants run at once, each in a directory of
+# its own, at most 8 and no more than the CPUs make may use; the verdicts
+# print in list order. `python3 mutants.py --jobs 1` runs them one by one.
 mutants: gptp_ucode.hex
 	python3 mutants.py
+
+# #102: mutants.py runs its mutants concurrently, --jobs of them at once.
+# This test runs it with --jobs 1 and with --jobs 4 and compares what the
+# two print byte for byte, every verdict, its order and the tally. The
+# serial run takes as long as the whole arm did before #102, so `all`
+# leaves the test out.
+mutants-jobs-test:
+	python3 ../../mutation_jobs_test.py mutants.py
 
 gptp_ucode.hex: $(GEN)
 	python3 $< $(GENARGS) -o $@
