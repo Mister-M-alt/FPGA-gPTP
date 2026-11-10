@@ -24,6 +24,13 @@ Cost note, recorded rather than hidden: micro-code mutants reuse one build of
 the unmutated RTL, because a generator change moves only the ROM image the
 simulation reads at start-up. RTL mutants are built individually.
 
+Each harness run is single-threaded, so since #102 `--jobs N` runs N
+mutants at once. The default is the number of CPUs this process may use,
+at most JOBS_CAP; `--jobs 1` runs them one after another, in list order.
+Concurrency changes no verdict and no output: each mutant stages, builds
+and runs in its own temporary directory, and its lines are printed in list
+order once it and every mutant before it have finished.
+
 What this arm deliberately does NOT list, recorded rather than hidden,
 because the value of a mutation arm is also the map of what it cannot reach.
 Removing the reset-backed read gate on the pending-pair cell alone survives
@@ -60,10 +67,14 @@ tb/verilator/parser/mutants.py by name, so both suites plant one defect.
 
 from __future__ import annotations
 
+import argparse
+import contextlib
 import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -100,6 +111,9 @@ VFLAGS = [
     "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC", "-Wno-UNUSEDPARAM",
     "-GUCODE_HEX_P=\"gptp_ucode.hex\"", "-GCLK_HZ_P=2000000",
 ]
+
+#: #102: the --jobs default never exceeds this many concurrent mutants
+JOBS_CAP = 8
 
 #: #88: the parser arm's planted PathTrace refusals, by its own names
 _PARSER_SPEC = importlib.util.spec_from_file_location(
@@ -873,11 +887,13 @@ def _named_failure(failed: list[str], want: str) -> str | None:
                 None)
 
 
-def named_verdict(answer: str, breaks: str, output: str) -> str:
+def named_verdict(answer: str, breaks: str, output: str,
+                  say=print) -> str:
     """`answer`, unless a caught control missed a check its `breaks` names.
 
-    Prints the failed line of each named check it finds. Any other answer,
-    and a control that names no check, is returned unchanged.
+    Prints the failed line of each named check it finds, through `say`.
+    Any other answer, and a control that names no check, is returned
+    unchanged.
     """
     # #75 controls must fail their specific behavioral check; an
     # unrelated existing failure cannot stand in for that evidence.
@@ -888,7 +904,7 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
         if not named:
             answer = "missed its named check"
         else:
-            print(named[0])
+            say(named[0])
     # #82, #84, #85, #87 to #91, #94 and #100 controls must fail every
     # check they name, for the same reason: each of those checks needs its
     # own failing defect.
@@ -903,65 +919,112 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
                       + "; ".join(missed))
         else:
             for want in breaks.split(" | "):
-                print(_named_failure(failed, want))
+                say(_named_failure(failed, want))
     return answer
 
 
 def run_mutant(work: Path, clean_exe: Path,
-               mutation: tuple) -> bool:
+               mutation: tuple, say=print) -> bool:
     """Plant one of the `MUTATIONS` under `work` and print its verdict.
 
     True when the harness catches it, through every check it names; False,
     with the reason printed, when it survived, did not build, its image was
-    refused, or its pattern no longer appears exactly once.
+    refused, or its pattern no longer appears exactly once. Every line goes
+    through `say`. The mutant stages, builds and runs in a directory of its
+    own under `work`, which no other mutant writes.
     """
     name, fname, pattern, replacement, breaks = mutation
     edits = edits_of(pattern, replacement)
     src = (HDL / fname).read_text(encoding="utf-8")
     for pat, _ in edits:
         if src.count(pat) != 1:
-            print(f"[FAIL] mutation {name!r}: its pattern appears "
-                  f"{src.count(pat)} time(s) in {fname}, expected "
-                  f"exactly 1. The source moved and this mutant is no "
-                  f"longer mutating anything - fix the pattern, do not "
-                  f"delete the arm.")
+            say(f"[FAIL] mutation {name!r}: its pattern appears "
+                f"{src.count(pat)} time(s) in {fname}, expected "
+                f"exactly 1. The source moved and this mutant is no "
+                f"longer mutating anything - fix the pattern, do not "
+                f"delete the arm.")
             return False
     tag = "".join(c if c.isalnum() else "_" for c in name)
-    srcdir = stage(work, tag, (fname, edits))
-    rundir = work / f"run_{tag}"
+    own = Path(tempfile.mkdtemp(prefix="mutant-", dir=work))
+    srcdir = stage(own, tag, (fname, edits))
+    rundir = own / f"run_{tag}"
     if not generate_image(srcdir, rundir):
-        print(f"[FAIL] mutation {name!r}: the generator refused its "
-              f"image, so this mutant proves nothing about the "
-              f"harness")
+        say(f"[FAIL] mutation {name!r}: the generator refused its "
+            f"image, so this mutant proves nothing about the "
+            f"harness")
         return False
     if fname == GENERATOR:
         exe = clean_exe          # only the ROM image differs
     else:
-        exe = build(srcdir, work, tag)
+        exe = build(srcdir, own, tag)
     if exe is None:
-        print(f"[FAIL] mutation {name!r} did not build; a mutant that "
-              f"cannot build proves nothing about the harness")
+        say(f"[FAIL] mutation {name!r} did not build; a mutant that "
+            f"cannot build proves nothing about the harness")
         return False
     rc, output = run_harness(exe, rundir)
-    answer = named_verdict(verdict(rc, output), breaks, output)
+    answer = named_verdict(verdict(rc, output), breaks, output, say)
     if answer == "caught":
-        print(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")
+        say(f"[PASS] mutant caught: {name} - breaks \"{breaks}\"")
         return True
     if answer == "pass":
-        print(f"[FAIL] mutant SURVIVED: {name}. The harness does not "
-              f"prove \"{breaks}\".")
+        say(f"[FAIL] mutant SURVIVED: {name}. The harness does not "
+            f"prove \"{breaks}\".")
     else:
-        print(f"[FAIL] mutant {name!r} {answer}")
+        say(f"[FAIL] mutant {name!r} {answer}")
     return False
 
 
-def main() -> int:
+def default_jobs() -> int:
+    """The CPUs this process may use, at most `JOBS_CAP`."""
+    try:
+        usable = len(os.sched_getaffinity(0))
+    except AttributeError:       # no affinity call on this platform
+        usable = os.cpu_count() or 1
+    return max(1, min(JOBS_CAP, usable))
+
+
+def in_list_order(jobs: int, tasks: list):
+    """Each task's result, in list order, with `jobs` tasks running at once.
+
+    One job calls the tasks one after another, as before #102. More start
+    each task as a worker frees, but yield a result only after every
+    earlier one, so the completion order never shows. An interrupt cancels
+    the tasks not yet started.
+    """
+    if jobs == 1:
+        for task in tasks:
+            yield task()
+        return
+    pool = ThreadPoolExecutor(max_workers=jobs)
+    try:
+        futures = [pool.submit(task) for task in tasks]
+        for future in futures:
+            yield future.result()
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+def jobs_arg(text: str) -> int:
+    """A --jobs value: a whole number of at least 1."""
+    jobs = int(text)
+    if jobs < 1:
+        raise argparse.ArgumentTypeError(f"--jobs must be at least 1, not {jobs}")
+    return jobs
+
+
+def main(argv: list[str] | None = None) -> int:
     """Run the control and every mutant, and report the arm's exit status.
 
     0 when the unmutated sources pass and every mutant is caught; 1 when any
     mutant survived, failed to build, or no longer matches its pattern, each
     printed with the property it was defending.
     """
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument(
+        "--jobs", type=jobs_arg, default=default_jobs(),
+        help=f"mutants run at once (default: the CPUs this process may use, "
+             f"at most {JOBS_CAP}); 1 runs them one after another")
+    args = parser.parse_args(argv)
     passes = fails = 0
     with tempfile.TemporaryDirectory(prefix="engine-mutants-") as td:
         work = Path(td)
@@ -974,21 +1037,39 @@ def main() -> int:
             print("[FAIL] the unmutated sources did not build; every mutant "
                   "result below would be meaningless")
             return 1
-        answer = verdict(*run_harness(clean_exe, clean_run))
-        if answer == "pass":
-            passes += 1
-            print("[PASS] the unmutated engine still passes the harness")
-        else:
-            fails += 1
-            print(f"[FAIL] the unmutated engine does NOT pass ({answer}) - "
-                  f"every mutant result below is meaningless")
 
-        # -- each mutant must be caught --------------------------------------
-        for mutation in MUTATIONS:
-            if run_mutant(work, clean_exe, mutation):
+        def control() -> str:
+            return verdict(*run_harness(clean_exe, clean_run))
+
+        def planted(mutation: tuple):
+            def task() -> tuple[bool, list[str]]:
+                lines: list[str] = []
+                return run_mutant(work, clean_exe, mutation, lines.append), lines
+            return task
+
+        # The control runs first and each mutant after it, in list order,
+        # with --jobs 1; with more, they share the workers, and the lines of
+        # each still print in this order. Closing the results waits for any
+        # task still running before the directory is removed.
+        with contextlib.closing(in_list_order(
+                args.jobs, [control, *map(planted, MUTATIONS)])) as results:
+            answer = next(results)
+            if answer == "pass":
                 passes += 1
+                print("[PASS] the unmutated engine still passes the harness")
             else:
                 fails += 1
+                print(f"[FAIL] the unmutated engine does NOT pass ({answer}) "
+                      f"- every mutant result below is meaningless")
+
+            # -- each mutant must be caught ----------------------------------
+            for caught, lines in results:
+                for line in lines:
+                    print(line)
+                if caught:
+                    passes += 1
+                else:
+                    fails += 1
 
     total = passes + fails
     print(f"\n{total} checks: {passes} PASS, {fails} FAIL")

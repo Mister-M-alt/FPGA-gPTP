@@ -48,10 +48,12 @@ run: gptp_ucode.hex
 	@cd p1run && ../obj_dir/Vengine_sim +not-gm-capable
 
 # Rule 8: prove the checks above are load-bearing. Defects are injected into
-# the real engine RTL and the real micro-code generator, one at a time, and
+# the real engine RTL and the real micro-code generator, one per mutant, and
 # each must make the SAME harness fail; the unmutated build must still pass.
 # Everything is staged into a temporary directory, so nothing is written into
-# the tree.
+# the tree. Since #102 several mutants run at once, each in a directory of
+# its own, at most 8 and no more than the CPUs make may use; the verdicts
+# print in list order. `python3 mutants.py --jobs 1` runs them one by one.
 mutants: gptp_ucode.hex
 	python3 mutants.py
 
