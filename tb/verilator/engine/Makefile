@@ -17,7 +17,7 @@ CPP  = sim_main.cpp
 GEN = $(RTL_DIR)/ucode/gen_gptp_ucode.py
 GENARGS = --clk-hz 2000000 --cease-ms 3000
 
-.PHONY: all run mutants clean
+.PHONY: all run mutants mutants-jobs-test clean
 .DEFAULT_GOAL := all
 all: run mutants
 
@@ -56,6 +56,14 @@ run: gptp_ucode.hex
 # print in list order. `python3 mutants.py --jobs 1` runs them one by one.
 mutants: gptp_ucode.hex
 	python3 mutants.py
+
+# #102: mutants.py runs its mutants concurrently, --jobs of them at once.
+# This test runs it with --jobs 1 and with --jobs 4 and compares what the
+# two print byte for byte, every verdict, its order and the tally. The
+# serial run takes as long as the whole arm did before #102, so `all`
+# leaves the test out.
+mutants-jobs-test:
+	python3 ../../mutation_jobs_test.py mutants.py
 
 gptp_ucode.hex: $(GEN)
 	python3 $< $(GENARGS) -o $@
