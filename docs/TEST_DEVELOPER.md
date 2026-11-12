@@ -83,7 +83,7 @@ That check takes seconds.
 
 The jobs test runs the arm six times.
 
-It takes about six hours.
+It takes about seven hours on sixteen CPUs.
 
 Clean runs return zero.
 

@@ -75,9 +75,10 @@ mutants: gptp_ucode.hex
 # #102, #104: neither running mutants at once nor ccache may change what
 # mutants.py prints. This test runs it six times, at --jobs 1 and --jobs 8,
 # each with ccache off, cold and warm, and compares what every run prints
-# byte for byte, every verdict, its order and the tally. Its serial runs
-# take as long as the whole arm did before #102, about six hours in all, so
-# `all` leaves the test out and runs mutants-order-test instead.
+# byte for byte, every verdict, its order and the tally. Each serial run
+# takes as long as the whole arm did before #102 or longer, and the test
+# about seven hours on sixteen CPUs, so `all` leaves it out and runs
+# mutants-order-test instead.
 mutants-jobs-test:
 	python3 ../../mutation_jobs_test.py mutants.py
 
