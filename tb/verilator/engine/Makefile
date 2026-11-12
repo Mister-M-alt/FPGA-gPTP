@@ -32,9 +32,9 @@ CCACHE_NOHASHDIR ?= 1
 export OBJCACHE CCACHE_NOHASHDIR
 run: export CCACHE_BASEDIR ?= $(abspath ../../..)
 
-.PHONY: all run mutants mutants-jobs-test clean
+.PHONY: all run mutants mutants-jobs-test mutants-order-test clean
 .DEFAULT_GOAL := all
-all: run mutants
+all: run mutants-order-test mutants
 
 # The suite runs THREE times against the same build. Regression images seed
 # the request and Sync counters independently above 16 bits, where an
@@ -72,13 +72,20 @@ run: gptp_ucode.hex
 mutants: gptp_ucode.hex
 	python3 mutants.py
 
-# #102: mutants.py runs its mutants concurrently, --jobs of them at once.
-# This test runs it with --jobs 1 and with --jobs 4 and compares what the
-# two print byte for byte, every verdict, its order and the tally. The
-# serial run takes as long as the whole arm did before #102, so `all`
-# leaves the test out.
+# #102, #104: neither running mutants at once nor ccache may change what
+# mutants.py prints. This test runs it six times, at --jobs 1 and --jobs 8,
+# each with ccache off, cold and warm, and compares what every run prints
+# byte for byte, every verdict, its order and the tally. Its serial runs
+# take as long as the whole arm did before #102, about six hours in all, so
+# `all` leaves the test out and runs mutants-order-test instead.
 mutants-jobs-test:
 	python3 ../../mutation_jobs_test.py mutants.py
+
+# #104: mutants.py's own main at --jobs 1 and --jobs 8, with its builds and
+# harness runs stubbed so that entries finish out of list order; the
+# verdicts must still print in list order. It takes seconds.
+mutants-order-test:
+	python3 ../../mutation_order_test.py mutants.py
 
 gptp_ucode.hex: $(GEN)
 	python3 $< $(GENARGS) -o $@
