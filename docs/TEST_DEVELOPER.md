@@ -20,7 +20,8 @@ Terms are defined in the [glossary](GLOSSARY.md).
 | Python | `tb/check_phc_contract.py` | Guards the PHC and result boundaries |
 | Python | `tb/verilator/*/mutants.py` | Plants defects that suites must catch |
 | Python | `tb/mutation_verdict.py` | Reads each mutant's verdict from suite output |
-| Python | `tb/mutation_jobs_test.py` | Compares serial and concurrent engine mutation output |
+| Python | `tb/mutation_jobs_test.py` | Compares engine mutation output across jobs and caches |
+| Python | `tb/mutation_order_test.py` | Checks engine verdict order with stubbed mutants |
 | Python | `tb/tsngen/run_tsngen.py` | Cross-checks frames against independent protocol decoders |
 | Python | `scripts/check_docs.py` | Checks documentation rules and generated values |
 | Python | `scripts/check_docs_selftest.py` | Plants documentation defects the docs gate must catch |
@@ -46,7 +47,8 @@ No handwritten C harness exists.
 | `make -C tb/verilator/parser` | Frame parsing and refusal paths |
 | `make -C tb/verilator/engine` | Whole-plane protocol behavior |
 | `make -C tb/verilator/engine mutants` | Engine mutation controls |
-| `make -C tb/verilator/engine mutants-jobs-test` | Engine mutation output at one and four jobs |
+| `make -C tb/verilator/engine mutants-jobs-test` | Engine mutation output across jobs and ccache states |
+| `make -C tb/verilator/engine mutants-order-test` | Engine verdict order, with stubbed builds and runs |
 | `make -C tb/verilator/parser mutants` | Parser receive-error, PathTrace and TLV-walk mutation controls |
 | `make -C tb/verilator/gaskets` | Bench MII gasket loopback and its mutation controls |
 | `make -C tb/tsngen` | Independent frame decode; skips without its checkout |
@@ -57,13 +59,31 @@ No handwritten C harness exists.
 
 Bare `make` in parser, engine, gaskets and tsngen adds mutants.
 
-The engine arm runs up to eight mutants at once.
+By default, up to eight engine mutants run at once.
 
 Its `--jobs` option sets that number.
 
 One job keeps the serial order.
 
 Verdicts always print in mutant list order.
+
+The engine's builds use ccache when it is on `PATH`.
+
+Set `OBJCACHE=` to build without it.
+
+The cache stays outside the tree, in ccache's own directory.
+
+A ccache that cannot write its cache fails the build.
+
+Point `CCACHE_DIR` somewhere writable, or set `OBJCACHE=`.
+
+Bare engine `make` also runs the order check.
+
+That check takes seconds.
+
+The jobs test runs the arm six times.
+
+It takes about six hours.
 
 Clean runs return zero.
 
