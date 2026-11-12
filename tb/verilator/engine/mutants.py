@@ -22,7 +22,11 @@ temporary directory, so nothing is written into the tree.
 
 Cost note, recorded rather than hidden: micro-code mutants reuse one build of
 the unmutated RTL, because a generator change moves only the ROM image the
-simulation reads at start-up. RTL mutants are built individually.
+simulation reads at start-up. RTL mutants are built individually. Since
+#104 each build compiles through ccache when it is on PATH, unless
+OBJCACHE says otherwise (`compiler_env`): the Verilator runtime and the
+harness are the same C++ in every build, and a mutant's model is the same
+in every run, so only a model not built before is compiled again.
 
 Each harness run is single-threaded, so since #102 `--jobs N` runs N
 mutants at once. The default is the number of CPUs this process may use,
@@ -70,6 +74,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -589,16 +594,35 @@ def generate_image(srcdir: Path, rundir: Path) -> bool:
     return True
 
 
+def compiler_env() -> dict[str, str]:
+    """#104: the environment a harness build runs in.
+
+    OBJCACHE is verilated.mk's own variable. Unset, it becomes ccache when
+    ccache is on PATH, and stays empty, a plain build, otherwise; set, even
+    empty, it is used as given, so `OBJCACHE=` builds without a cache.
+    CCACHE_NOHASHDIR keeps the build directory out of the cache key. A
+    CCACHE_* setting of the caller's own wins.
+    """
+    env = dict(os.environ)
+    env.setdefault("OBJCACHE", "ccache" if shutil.which("ccache") else "")
+    env.setdefault("CCACHE_NOHASHDIR", "1")
+    return env
+
+
 def build(srcdir: Path, work: Path, tag: str) -> Path | None:
-    """Build the harness against the RTL in `srcdir`; the exe, or None."""
+    """Build the harness against the RTL in `srcdir`; the exe, or None.
+
+    Verilator runs in `srcdir` and is handed the RTL by relative name, so
+    the source names it writes into the model name no temporary directory,
+    and a model's C++ is the same in every run (#104).
+    """
     mdir = work / f"obj_{tag}"
     exe_name = f"Vengine_{tag}"
     out = subprocess.run(
         ["verilator", *VFLAGS, "--Mdir", str(mdir),
          "-CFLAGS", f"-std=c++17 -O2 -I{HERE} -Wall -Wextra",
-         *[str(srcdir / s) for s in RTL_SOURCES],
-         str(HERE / "sim_main.cpp"), "-o", exe_name],
-        capture_output=True, text=True)
+         *RTL_SOURCES, str(HERE / "sim_main.cpp"), "-o", exe_name],
+        cwd=str(srcdir), env=compiler_env(), capture_output=True, text=True)
     exe = mdir / exe_name
     if out.returncode != 0 or not exe.is_file():
         return None

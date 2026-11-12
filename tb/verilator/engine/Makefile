@@ -17,6 +17,21 @@ CPP  = sim_main.cpp
 GEN = $(RTL_DIR)/ucode/gen_gptp_ucode.py
 GENARGS = --clk-hz 2000000 --cease-ms 3000
 
+# #104: Verilator's C++ compiles through ccache when ccache is on PATH, so
+# a translation unit compiled before is not compiled again: the runtime and
+# the harness are the same in every build, and a model is the same in every
+# run. OBJCACHE is verilated.mk's own variable; `make OBJCACHE=` builds
+# without a cache. CCACHE_NOHASHDIR keeps the build directory out of the
+# cache key. mutants.py sets both the same way, and builds in temporary
+# directories from relative source names. The suite builds in the tree, so
+# CCACHE_BASEDIR names this checkout's paths relative to it, and a new
+# checkout still hits. The cache lives where ccache keeps it (CCACHE_DIR,
+# or ~/.cache/ccache), never in the tree. A setting of the caller's own wins.
+OBJCACHE ?= $(if $(shell command -v ccache),ccache)
+CCACHE_NOHASHDIR ?= 1
+export OBJCACHE CCACHE_NOHASHDIR
+run: export CCACHE_BASEDIR ?= $(abspath ../../..)
+
 .PHONY: all run mutants mutants-jobs-test clean
 .DEFAULT_GOAL := all
 all: run mutants
