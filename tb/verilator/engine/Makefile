@@ -17,9 +17,24 @@ CPP  = sim_main.cpp
 GEN = $(RTL_DIR)/ucode/gen_gptp_ucode.py
 GENARGS = --clk-hz 2000000 --cease-ms 3000
 
-.PHONY: all run mutants mutants-jobs-test clean
+# #104: Verilator's C++ compiles through ccache when ccache is on PATH, so
+# a translation unit compiled before is not compiled again: the runtime and
+# the harness are the same in every build, and a model is the same in every
+# run. OBJCACHE is verilated.mk's own variable; `make OBJCACHE=` builds
+# without a cache. CCACHE_NOHASHDIR keeps the build directory out of the
+# cache key. mutants.py sets both the same way, and builds in temporary
+# directories from relative source names. The suite builds in the tree, so
+# CCACHE_BASEDIR names this checkout's paths relative to it, and a new
+# checkout still hits. The cache lives where ccache keeps it (CCACHE_DIR,
+# or ~/.cache/ccache), never in the tree. A setting of the caller's own wins.
+OBJCACHE ?= $(if $(shell command -v ccache),ccache)
+CCACHE_NOHASHDIR ?= 1
+export OBJCACHE CCACHE_NOHASHDIR
+run: export CCACHE_BASEDIR ?= $(abspath ../../..)
+
+.PHONY: all run mutants mutants-jobs-test mutants-order-test clean
 .DEFAULT_GOAL := all
-all: run mutants
+all: run mutants-order-test mutants
 
 # The suite runs THREE times against the same build. Regression images seed
 # the request and Sync counters independently above 16 bits, where an
@@ -57,13 +72,21 @@ run: gptp_ucode.hex
 mutants: gptp_ucode.hex
 	python3 mutants.py
 
-# #102: mutants.py runs its mutants concurrently, --jobs of them at once.
-# This test runs it with --jobs 1 and with --jobs 4 and compares what the
-# two print byte for byte, every verdict, its order and the tally. The
-# serial run takes as long as the whole arm did before #102, so `all`
-# leaves the test out.
+# #102, #104: neither running mutants at once nor ccache may change what
+# mutants.py prints. This test runs it six times, at --jobs 1 and --jobs 8,
+# each with ccache off, cold and warm, and compares what every run prints
+# byte for byte, every verdict, its order and the tally. Each serial run
+# takes as long as the whole arm did before #102 or longer, and the test
+# about seven hours on sixteen CPUs, so `all` leaves it out and runs
+# mutants-order-test instead.
 mutants-jobs-test:
 	python3 ../../mutation_jobs_test.py mutants.py
+
+# #104: mutants.py's own main at --jobs 1 and --jobs 8, with its builds and
+# harness runs stubbed so that entries finish out of list order; the
+# verdicts must still print in list order. It takes seconds.
+mutants-order-test:
+	python3 ../../mutation_order_test.py mutants.py
 
 gptp_ucode.hex: $(GEN)
 	python3 $< $(GENARGS) -o $@
