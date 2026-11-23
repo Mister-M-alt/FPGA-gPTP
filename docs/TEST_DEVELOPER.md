@@ -206,6 +206,10 @@ Values here come from the [protocol constants](INTEGRATION.md#protocol-constants
 - Announces at once on regaining mastership, then once a second.
 - Announces first when a better Announce follows within 1 ms.
 - Follows grandmasters across the B.1.1 range (#107).
+- Runs every mastership on this oscillator, even after windup.
+- Then follows a grandmaster 10 ppm from this oscillator.
+- Grades scaledLastGmFreqChange under 8 ns timestamp noise.
+- Sends no frequency change for an unfollowed grandmaster.
 - Proves its own checks through planted defects.
 
 ### Bench-tag suite

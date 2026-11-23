@@ -302,9 +302,9 @@ Each write-enable stays high for exactly one `clk_i` cycle.
 
 Consumed slave Sync and Follow_Up pairs write corrections.
 
-Mastership also retires any active slave correction.
+Mastership also retires the slave's correction.
 
-That transition writes the integral-only rate, without stepping.
+That transition writes rate 0, this oscillator, without stepping.
 
 Each consumed pair writes exactly one addend pulse.
 
@@ -417,11 +417,9 @@ The trim sums a proportional and an integral term.
 
 That whole trim never exceeds [`RATE_PPM_C`](#protocol-constants) in magnitude.
 
-That bound is the follow range against this oscillator (#107).
-
 B.1.1 bounds each LocalClock by [`LOCAL_CLOCK_PPM_C`](#protocol-constants).
 
-Twice that bound fits inside the envelope.
+Twice that bound fits inside the envelope (#107).
 
 So any conforming grandmaster can be followed.
 
@@ -429,7 +427,33 @@ The suite follows four grandmasters across that range.
 
 Each settles within 0.2 ppm of its rate.
 
+Phase correction gets only what the rate leaves.
+
+That phase authority is `RATE_PPM_C` less the rate's magnitude.
+
+A grandmaster 197 ppm away leaves 3 ppm for phase.
+
+A residual after its first step then closes slowly.
+
+The integrator's earlier estimate sets how slowly.
+
+From this oscillator, 197 ppm took 5 to 17 s.
+
+From a +199 ppm estimate, -199 ppm took 50 s.
+
 The integrator is clamped to the same bound.
+
+It winds toward that bound meanwhile.
+
+A grandmaster beyond [`RATE_PPM_C`](#protocol-constants) cannot be followed.
+
+Its offset grows until it steps, again and again.
+
+Such a grandmaster is outside B.1.1.
+
+A test grandmaster from a drifted test clock can be.
+
+Zero that clock's frequency adjustment before such scenarios.
 
 In addend units the bound is this integer expression:
 
@@ -451,6 +475,8 @@ When consumption stops, the last trim stays applied.
 
 That held trim is inside the bound too.
 
+Becoming grandmaster replaces it with rate 0.
+
 A locked-threshold slew needs at least `STEP_LOCKED_NS_C / RATE_PPM_C` ms.
 
 The master's own rate offset shares that bound.
@@ -462,6 +488,32 @@ A slew can overshoot while its trim rides the bound.
 A master further apart than the bound outruns the trim.
 
 Its offset then grows past the locked threshold and steps.
+
+#### Mastership rate
+
+A mastership runs on this oscillator (#107).
+
+802.1AS-2020 10.1.2.1 defines that ClockMaster.
+
+Its clause 10.2.4.14 states the same.
+
+Without a ClockSource, a grandmaster runs on its LocalClock.
+
+So becoming grandmaster writes rate 0 through PHC word 3.
+
+The time base keeps its phase.
+
+Its frequency steps by the departed grandmaster's rate.
+
+That step is within [`RATE_PPM_C`](#protocol-constants), usually far less.
+
+Milan v1.2 Annex B.1 expects such a change.
+
+The parent's media clock holds over it.
+
+The integrator keeps the slave's estimate through the mastership.
+
+A later slave starts from it, as after a step.
 
 #### Slew-active level
 
@@ -515,7 +567,7 @@ Neither the synchronization flag nor addend magnitude determines it.
 | Missing Follow_Up; [`FU_RTO_MS_C`](#protocol-constants) timeout | Discard pending pair; retain level and rate |
 | Grandmaster identity change | Hold level and rate; restart qualification |
 | Replacement step | Hold through step; clear with its integral-only addend |
-| Becoming grandmaster | Replace active correction with integral-only rate; clear together |
+| Becoming grandmaster | Write rate 0, this oscillator; clear together |
 | Returning to slave duty | Next consumed pair makes the policy decision |
 
 Reset the consumer's retained rate when resetting the engine.
@@ -884,13 +936,23 @@ This plane sends the offset last measured as a slave.
 
 That offset is not extrapolated to the handover.
 
-scaledLastGmFreqChange is the kept trim less the estimate.
+A mastership runs on this oscillator (#107).
 
-The estimate is the slave's integrator, BECOME's PHC word 3.
+So scaledLastGmFreqChange is rate 0 less the slave's estimate.
 
-An active slew keeps the estimate, so it reads zero.
+The estimate is the slave's integrator, in PHC word 3.
+
+With no slave rate since a mastership, it reads zero.
+
+The time base has then not moved.
 
 Unknown values read zero after a reset.
+
+A takeover during a phase transient sends the wound integrator.
+
+A 90 us jump just before it reads the bound.
+
+The departed grandmaster may have run at 60 ppm.
 
 cumulativeScaledRateOffset stays zero for a grandmaster.
 
