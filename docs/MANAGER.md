@@ -60,8 +60,8 @@ The seeded row counts the `--seq-seed 0x200000` image.
 
 | Image | Words used | Free |
 |---|---|---:|
-| Shipping | 1,015 of 1,024 | 9 |
-| Seeded regression | 1,016 of 1,024 | 8 |
+| Shipping | 1,013 of 1,024 | 11 |
+| Seeded regression | 1,014 of 1,024 | 10 |
 
 Used words include thisClock's two data words.
 

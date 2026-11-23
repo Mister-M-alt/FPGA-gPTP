@@ -201,6 +201,10 @@ Values here come from the [protocol constants](INTEGRATION.md#protocol-constants
 - Counts Pdelay responses past the late bound as lost.
 - Keeps asCapable through responses exactly at that bound.
 - Grades clockAccuracy in every Announce, in both images.
+- Sends a master Announce after each timeout instant (#106).
+- Grades ten gaps up to 10 ms past 3 s.
+- Announces at once on regaining mastership, then once a second.
+- Announces first when a better Announce follows within 1 ms.
 - Proves its own checks through planted defects.
 
 ### Bench-tag suite

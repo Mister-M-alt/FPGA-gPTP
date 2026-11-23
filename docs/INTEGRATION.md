@@ -734,6 +734,14 @@ Arrival times decide that order, not queue order.
 
 A stale expiry never ages a refreshed watch.
 
+The expiry's own handler sends the first Announce (#106).
+
+It reaches the wire before any queued Announce.
+
+Later Announces follow one second apart from it.
+
+Figure 10-15 of 802.1AS-2011 states that rule.
+
 So does [`SYNC_RTO_MS_C`](#protocol-constants) without a usable Sync pair.
 
 That needs a grandmaster priority1 below 255.
