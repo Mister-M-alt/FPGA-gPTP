@@ -259,6 +259,15 @@
 //         each is a lost response, and the fifth clears asCapable
 // 56      #100: every Announce carries the image's clockAccuracy: 0x22 by
 //         default, 0xFE in the fourth pass's image
+// 57      #106: a better grandmaster announces 3.000 s to 3.010 s apart, at
+//         several phases against the millisecond tick: in every gap the
+//         port is aged and this plane's master Announce is on the wire after
+//         the instant, before the next Announce re-elects the grandmaster
+//         (Milan v1.2 Table 4.2, 802.1AS-2011 Figures 10-13 and 10-15)
+// 58      #106: on regaining mastership from a grandmaster turned worse, the
+//         first master Announce leaves within 1 ms, then four more each 1 s
+//         after the one before; with a better Announce 1 ms behind the worse
+//         one, the master Announce still leaves first
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255 and
 // --clock-accuracy 0xFE) runs only the phases a self publication passes
@@ -275,6 +284,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 #include <verilated.h>
 #include "VKL_gptp_engine.h"
@@ -465,6 +475,7 @@ class GptpEngineHarness {
     defer_a_whole_interval_to_the_issue_shapes();
     run_the_port_enable_phases();
     run_the_followup_tlv_phases();
+    run_the_mastership_wire_phases();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -7860,6 +7871,170 @@ class GptpEngineHarness {
     expect(self_present ? "#100 the default image announces clockAccuracy 0x22"
                         : "#100 a --clock-accuracy 0xFE image announces 0xFE",
            seen != 0 && wrong == 0, 1);
+  }
+
+  // ======================= #106: mastership graded on the wire ============
+  //! phases 57 and 58, in file order
+  void run_the_mastership_wire_phases() {
+    announce_at_every_timeout_instant();
+    announce_each_second_from_regaining_mastership();
+  }
+
+  //! transmitted frame `i` is a master Announce of this plane: an Announce
+  //! whose sourcePortIdentity and grandmasterIdentity are both thisClock
+  bool is_our_master_announce(size_t i) {
+    const std::vector<uint8_t> &f = txf[i];
+    return f.size() >= 75 && type_of(f) == 0xB && fld64(f, 34) == OUR_CID &&
+           fld64(f, 67) == OUR_CID;
+  }
+
+  //! the indices of this plane's master Announces whose first octet left
+  //! on a cycle in [from, to]
+  std::vector<size_t> master_announces_between(uint64_t from, uint64_t to) {
+    std::vector<size_t> out;
+    for (size_t i = 0; i < txf.size(); i++)
+      if (txsof[i] >= from && txsof[i] <= to && is_our_master_announce(i))
+        out.push_back(i);
+    return out;
+  }
+
+  // ---- 57: #106, a master Announce on the wire at every timeout instant ----
+  // Milan v1.2 4.2.6.2.3 Table 4.2 ages a port 2.7 to 4.5 s after its last
+  // Announce, and the project rules that the timeout wins at the instant,
+  // graded on the wire (#100). The aged port goes to UPDATE with newInfo
+  // (802.1AS-2011 Figure 10-13), and Figure 10-15 then sends an Announce at
+  // once (TRANSMIT_ANNOUNCE ahead of announceSendTime). So with usable Sync
+  // throughout, when a better grandmaster announces 3.000 s to 3.010 s after
+  // its previous Announce, at several phases against the millisecond tick,
+  // this plane's master Announce leaves in every gap after the instant (its
+  // first octet at least 2,999 ms after that previous Announce, the earliest
+  // the millisecond watch ages it) and no later than 1 s after the next
+  // Announce, which then re-elects the grandmaster. The commits alone, which
+  // phase 54 grades, cannot show this: they name thisClock whether or not
+  // the announcement ever reached the wire
+  void announce_at_every_timeout_instant() {
+    const struct { const char *tag; uint64_t phase; uint64_t gap; } gaps[] = {
+        {"#106 3.0 s, a clock after the tick", 0, 3000 * MS_CYC},
+        {"#106 3.0 s, two clocks after the tick", 1, 3000 * MS_CYC},
+        {"#106 3.0 s, nine clocks before a tick", 1990, 3000 * MS_CYC},
+        {"#106 3.00006 s, the lab's tie", 700, 3000 * MS_CYC + 120},
+        {"#106 3.0003 s", 1500, 3000 * MS_CYC + 600},
+        {"#106 3.0005 s", 300, 3000 * MS_CYC + 1000},
+        {"#106 3.001 s", 1000, 3001 * MS_CYC},
+        {"#106 3.002 s", 0, 3002 * MS_CYC},
+        {"#106 3.005 s", 1700, 3005 * MS_CYC},
+        {"#106 3.010 s", 900, 3010 * MS_CYC},
+    };
+    pd_mode = PD_NORMAL;
+    auto_txts = true;
+    expect("#106 timeout instants: runs from a capable plane",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    p100_sync_src = P100_SRC;
+    p100_next_sync = cyc;
+    for (const auto &g : gaps) {
+      char n[128];
+      // restart the watch at the trial's phase, from wherever the last
+      // trial's one-second grading window left the run
+      const uint64_t prev = p100_send_eof_at(
+          p100_announce(50, P100_GM, P100_SRC, 0),
+          p100_at_phase(cyc + 200 * MS_CYC, g.phase));
+      run_svc(6000);
+      snprintf(n, sizeof n, "%s: the grandmaster is elected first", g.tag);
+      expect(n, (dut->pub_flags_o & 3) == FL_PRESENT &&
+                    dut->pub_gm_id_o == P100_GM, 1);
+      const size_t c0 = commit_snaps.size();
+      const uint64_t eof = p100_send_eof_at(
+          p100_announce(50, P100_GM, P100_SRC, 0), prev + g.gap);
+      p100_run_to(eof + 1000 * MS_CYC + 1);
+      snprintf(n, sizeof n, "%s: the port is aged", g.tag);
+      expect(n, p100_commit_naming(c0, OUR_CID) != nullptr, 1);
+      const std::vector<size_t> ours =
+          master_announces_between(prev + 2999 * MS_CYC, eof + 1000 * MS_CYC);
+      if (!ours.empty())
+        printf("INFO %s: master Announce %lld cycles after the next "
+               "Announce's last octet\n", g.tag,
+               static_cast<long long>(txsof[ours.front()]) -
+                   static_cast<long long>(eof));
+      snprintf(n, sizeof n, "%s: a master Announce on the wire after the "
+               "instant", g.tag);
+      expect(n, ours.size(), 1);
+      snprintf(n, sizeof n, "%s: the grandmaster is elected after it", g.tag);
+      expect(n, (dut->pub_flags_o & 3) == FL_PRESENT &&
+                    dut->pub_gm_id_o == P100_GM, 1);
+    }
+    p100_sync_src = 0;
+    run_svc(400000);
+  }
+
+  // ---- 58: #106, Announces once a second from regaining mastership --------
+  // 802.1AS-2011 Figure 10-15: a port whose role becomes MasterPort sends an
+  // Announce at once and then one each announceInterval (1 s, Milan v1.2
+  // Table 4.1), announceSendTime counting from that first one. The elected
+  // grandmaster announces itself worse than this plane, from its own port,
+  // and keeps announcing so once a second with its Sync usable: this plane's
+  // first master Announce leaves within 1 ms of that Announce's last octet,
+  // before the timer could serve any beat armed by it, and the next four
+  // each 1 s after the one before, to the millisecond. Then the race a
+  // millisecond timer loses: a better Announce 1 ms behind the worse one.
+  // The master Announce still leaves first, and the better grandmaster is
+  // then elected and this plane stops announcing
+  void announce_each_second_from_regaining_mastership() {
+    p100_sync_src = P100_SRC;
+    p100_next_sync = cyc;
+    p100_send_eof_at(p100_announce(50, P100_GM, P100_SRC, 0), cyc + 8000);
+    run_svc(6000);
+    expect("#106 regain: the grandmaster is elected first",
+           (dut->pub_flags_o & 3) == FL_PRESENT &&
+               dut->pub_gm_id_o == P100_GM, 1);
+    p100_run_to(cyc + 700 * MS_CYC);
+    const uint64_t worse = p100_send_eof_at(
+        p100_announce(250, P100_GM, P100_SRC, 0), cyc + 8000);
+    for (int k = 1; k <= 5; k++)
+      p100_send_eof_at(p100_announce(250, P100_GM, P100_SRC, 0),
+                       worse + static_cast<uint64_t>(k) * 1000 * MS_CYC);
+    p100_run_to(worse + 4500 * MS_CYC);
+    expect("#106 regain: this plane is master",
+           (dut->pub_flags_o & FL_AMGM) == FL_AMGM &&
+               dut->pub_gm_id_o == OUR_CID, 1);
+    const std::vector<size_t> ours =
+        master_announces_between(worse, worse + 4500 * MS_CYC);
+    if (!ours.empty())
+      printf("INFO #106 regain: first master Announce %llu cycles after the "
+             "worse Announce\n",
+             static_cast<unsigned long long>(txsof[ours.front()] - worse));
+    expect("#106 regain: the first master Announce leaves at once",
+           !ours.empty() && txsof[ours.front()] < worse + MS_CYC, 1);
+    bool each_second = ours.size() == 5;
+    for (size_t k = 1; k < ours.size(); k++) {
+      const uint64_t gap = txsof[ours[k]] - txsof[ours[k - 1]];
+      printf("INFO #106 regain: Announce %zu leaves %llu cycles after the one "
+             "before\n", k, static_cast<unsigned long long>(gap));
+      each_second &= gap + MS_CYC >= 1000 * MS_CYC &&
+                     gap <= 1000 * MS_CYC + MS_CYC;
+    }
+    expect("#106 regain: four more master Announces, each 1 s after the one "
+           "before", each_second, 1);
+    // the race: re-elect, then a worse Announce with a better one 1 ms behind
+    p100_send_eof_at(p100_announce(50, P100_GM, P100_SRC, 0), cyc + 8000);
+    run_svc(6000);
+    expect("#106 regain race: the grandmaster is elected again",
+           (dut->pub_flags_o & 3) == FL_PRESENT &&
+               dut->pub_gm_id_o == P100_GM, 1);
+    p100_run_to(cyc + 600 * MS_CYC);
+    const uint64_t flip = p100_send_eof_at(
+        p100_announce(250, P100_GM, P100_SRC, 0), cyc + 8000);
+    p100_send_eof_at(p100_announce(50, P100_GM, P100_SRC, 0), flip + MS_CYC);
+    p100_run_to(flip + 2500 * MS_CYC);
+    const std::vector<size_t> raced =
+        master_announces_between(flip, flip + 2500 * MS_CYC);
+    expect("#106 regain race: one master Announce leaves before the better "
+           "one is taken", raced.size() == 1 &&
+               txsof[raced.front()] < flip + MS_CYC, 1);
+    expect("#106 regain race: the better grandmaster is elected after it",
+           (dut->pub_flags_o & 3) == FL_PRESENT &&
+               dut->pub_gm_id_o == P100_GM, 1);
+    p100_sync_src = 0;
+    run_svc(400000);
   }
 };
 

@@ -4,6 +4,14 @@
 """gPTP µcode ROM image generator -- v8, the announce qualification and the
 Pdelay_Resp_Follow_Up pairing rounds.
 
+FPGA-gPTP #106, the master announcement on the wire: BECOME used to arm the
+first Announce on a 2 ms beat. An Announce queued at the receipt timeout
+instant, or arriving within those 2 ms, then ran first, re-elected its
+grandmaster and disarmed the beat, so the aged port's mastership never
+reached the wire. SELF now ends in ANNTX, so the handler that takes the role
+sends its first Announce and arms the 1 s cadence from it (802.1AS-2011
+Figure 10-15). Two words fewer.
+
 FPGA-gPTP #100, what this plane's mastership and its receipt rules carry:
 
   * The Follow_Up information TLV of a grandmaster (802.1AS-2011
@@ -1975,8 +1983,9 @@ def prog_becgate(base: int) -> Prog:
 
 def prog_become(base: int) -> Prog:
     """Take the grandmaster role: retire the slave's phase correction, swap
-    the slave's receipt watches for the Sync and Announce transmit
-    cadences, then publish ourselves through SELF."""
+    the slave's Announce receipt watch for the Sync transmit cadence, then
+    publish ourselves through SELF, whose ANNTX tail sends the first
+    Announce and starts the Announce cadence (#106)."""
     p = Prog(base)
     # Retire the slave's phase correction before publishing mastership.
     # Word 3 replaces the trim with the retained rate estimate and clears
@@ -1998,8 +2007,10 @@ def prog_become(base: int) -> Prog:
     e_flags(p, andm=FL_ASCAP_C, orm=FL_AMGM_C | FL_SYNCOK_C)
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_TMR | 1, fmt=FMT_Q)  # sync now
-    p.emit("MOVE", rd=RT, ra=0, imm=2)
-    p.emit("WRST", ra=RT, imm=RG_TMR | 3, fmt=FMT_Q)  # announce now
+    # #106: no Announce beat is armed here. SELF ends in ANNTX, which sends
+    # this mastership's first Announce in this same handler, so it leaves
+    # before any event queued behind the role change (802.1AS-2011 Figure
+    # 10-15, TRANSMIT_ANNOUNCE on newInfo), and arms the 1 s cadence from it
     p.emit("WRST", ra=0, imm=RG_TMR | 2, fmt=FMT_Q)   # stop the watch
     # The port's Sync watches run on (#89). syncReceiptTimeoutTime is the
     # port's, so an expiry after this still marks it (10.3.11). A parked
@@ -2012,7 +2023,17 @@ def prog_become(base: int) -> Prog:
 def prog_self(base: int) -> Prog:
     """Publish ourselves: thisClock as grandmaster and parent, the best
     record back to our own vector and the path {thisClock}, in one COMMIT.
-    BECOME ends here, and so does BECGATE's drop of an elected peer (#82)."""
+    BECOME ends here, and so does BECGATE's drop of an elected peer (#82).
+
+    Then ANNTX (#106). After BECOME it sends the new master's first
+    Announce at once and starts the 1 s cadence from it (802.1AS-2011
+    Figure 10-15: UPDATE's newInfo takes IDLE to TRANSMIT_ANNOUNCE, and
+    announceSendTime counts from that transmission). A deferred beat lost
+    the race to an Announce already queued at the receipt timeout instant,
+    whose handler disarmed it, so no master announcement reached the wire.
+    After the drop, the role gate in ANNTX skips the beat, and the cadence
+    then runs as Figure 10-15's TRANSMIT_PERIODIC does for a port that is
+    not a MasterPort, sending nothing until an adoption disarms it."""
     p = Prog(base)
     p.emit("RDST", rd=RC, imm=RG_SCR | S_CID, fmt=FMT_Q)
     p.emit("WRST", ra=RC, imm=RG_PUB | 0, fmt=FMT_Q)
@@ -2028,7 +2049,7 @@ def prog_self(base: int) -> Prog:
     # transaction: the path {thisClock}, every later entry erased.
     p.emit("WRST", ra=RT, imm=RG_PUB | 6, fmt=FMT_Q)
     p.emit("COMMIT")
-    p.emit("END")
+    p.emit("BR", label=LB["ANNTX"])
     return p
 
 
@@ -2455,6 +2476,10 @@ def prog_leg_anntx(base: int) -> Prog:
     transmit credit. The skipped beat now ends the program rather than
     sitting between the gates and the body, so the gates fall straight
     through into the build and no branch around them is needed.
+
+    Entered from the slot-3 beat and, since #106, from SELF: there it is a
+    new mastership's first Announce, sent at once, and its re-arm starts
+    the cadence one announceInterval after that Announce.
     """
     p = Prog(base)
     p.emit("MOVE", rd=RT, ra=0, imm=1000)
