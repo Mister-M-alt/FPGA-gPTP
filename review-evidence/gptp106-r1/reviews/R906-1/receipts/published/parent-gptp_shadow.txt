@@ -1,0 +1,13 @@
+# parent gptp_shadow at the scratch parent f9f8594417 (gptp-processor a728cc3), Verilator 5.050
+## the standard gate (make: lifecycle, run, mutants)
+107: the counter's addend after the loop 13546 (master +100 ppm)
+107: the counter's addend as grandmaster 0
+327 checks: 327 PASS, 0 FAIL
+mutant lifecycle: PASS (normal/repeat, nine named defects, survivor, build, unread-file and Git-setting acceptance, input/Git-redirect/record/facility refusals, INT/TERM/KILL, unsafe negative controls
+RESULT: PASS
+## the -100 ppm master variant (P107_MASTER_SIGN=-1), run only
+107: the counter's addend after the loop -13383 (master -100 ppm)
+107: the counter's addend as grandmaster 0
+327 checks: 327 PASS, 0 FAIL
+gptp_shadow rc=0 591s
+gptp_shadow-m100 rc=0 37s

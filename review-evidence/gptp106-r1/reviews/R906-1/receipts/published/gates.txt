@@ -1,0 +1,40 @@
+# [A831] round 2 gates, final head a728cc3 (branch 106-107-announce-rate, from 1616fc8f; local, never pushed)
+## processor (gate worktree at a728cc3; host Verilator 5.054)
+  contract rc=0 0s
+  ucpu rc=0 9s
+  parser rc=0 319s
+  engine-run rc=0 919s
+  gaskets rc=0 49s
+  tsngen rc=0 59s
+  bench rc=0 6s
+  lint rc=0 0s
+  docs rc=0 2s
+  DONE
+  engine tallies: 2199/2199 x3 (shipping, request-seeded, Sync-seeded) and 61/61 (priority1 255, clockAccuracy 0xFE)
+  mutation arm: 167 of 167 caught by every check they name, 0 failures, positive control passes (arm-a728cc3.txt)
+## OOC (Vivado 2026.1, 100 MHz)
+  base 1616fc8f (round 1):
+  ucpu LUT=1643 FF=733 BRAM=1.5 DSP=4 WNS=1.941
+  engine LUT=5395 FF=3620 BRAM=1.5 DSP=6 WNS=2.043
+  head a728cc3:
+  ucpu LUT=1643 FF=733 BRAM=1.5 DSP=4 WNS=1.941
+  engine LUT=5375 FF=3617 BRAM=1.5 DSP=6 WNS=2.093
+## parent (scratch parent, gptp-processor at a728cc3; Verilator 5.050)
+  parent f9f8594417 gptp-processor a728cc3 verilator Verilator 5.050 2026-07-01 rev v5.050
+  gptp_shadow rc=0 591s
+  gptp_shadow-m100 rc=0 37s
+  gmstep-takeovers-try1 rc=1 940s
+  milan_dp_gm_steps rc=0 1569s
+  gmstep-takeovers-try2 rc=1 557s
+  gmstep-takeovers rc=0 1055s
+  gmstep-base-takeovers rc=1 1160s
+  milan_dp-gptp rc=0 819s
+  milan_dp-gptp-lat rc=0 938s
+  gmstep-takeovers try 1 and try 2 failed on harness defects in the scratch phase (parent-takeover-gate.txt); the final run is 252/252; gmstep-base-takeovers is the control at 1616fc8f (its two oscillator checks fail, as they must)
+  ratchets at the pin commit: py, sv, cpp idiom rc 0 (parent-ratchets.txt)
+## routes (Vivado 2026.1 through the slot wrapper, at most two at a time; split image, one interface, ExtraTimingOpt)
+  1x1 head: rc 0; #818 floor (WNS >= +0.030, WHS >= 0) met at every corner; Slow WNS +0.276 ns (0 failing), WHS +0.102 ns (0 failing); Fast WNS +1.691 ns (0 failing), WHS +0.036 ns (0 failing); (stricter WHS >= +0.030 line: met); LUT=32455 FF=42624 SLICE=14271 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+  1x1 base: rc 0; #818 floor (WNS >= +0.030, WHS >= 0) met at every corner; Slow WNS +0.158 ns (0 failing), WHS +0.064 ns (0 failing); Fast WNS +1.660 ns (0 failing), WHS +0.033 ns (0 failing); (stricter WHS >= +0.030 line: met); LUT=32777 FF=42628 SLICE=14274 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+  8x8 head: rc 0; #818 floor (WNS >= +0.030, WHS >= 0) met at every corner; Slow WNS +0.244 ns (0 failing), WHS +0.102 ns (0 failing); Fast WNS +1.660 ns (0 failing), WHS +0.036 ns (0 failing); (stricter WHS >= +0.030 line: met); LUT=43586 FF=50886 SLICE=15221 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+  8x8 base: rc 0; #818 floor (WNS >= +0.030, WHS >= 0) met at every corner; Slow WNS +0.064 ns (0 failing), WHS +0.102 ns (0 failing); Fast WNS +1.412 ns (0 failing), WHS +0.027 ns (0 failing); (stricter WHS >= +0.030 line: not met); LUT=42998 FF=50993 SLICE=15680 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+privacy (raw bytes and each compressed member): privacy: 36 objects checked, 0 fail

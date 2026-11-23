@@ -1,0 +1,46 @@
+# the #107 controls and the two changed #100 controls, at d0a0e3b's tree (= a728cc3's code), through the arm's own run_mutant() (mutslice.py)
+-- mutant 136: a mastership keeps the slave's rate
+FAIL #107 takeover: one rate write, this oscillator's within one trim unit got 0000000000000000 exp 0000000000000001
+FAIL slew: mastership runs on this oscillator got 00000000ffe66667 exp 0000000000000000
+FAIL #100 TLV settled: BECOME writes rate 0, this oscillator got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a mastership keeps the slave's rate - breaks "#107 takeover: one rate write, this oscillator's within one trim unit | slew: mastership runs on this oscillator | #100 TLV settled: BECOME writes rate 0, this oscillator"
+-- mutant 137: word 3 applies only during a slew
+FAIL #100 TLV settled: BECOME writes rate 0, this oscillator got 0000000000000000 exp 0000000000000001
+FAIL slew: idle timeout writes only mastership's rate 0 got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV unfollowed: BECOME writes rate 0, and only it got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: word 3 applies only during a slew - breaks "#100 TLV settled: BECOME writes rate 0, this oscillator | slew: idle timeout writes only mastership's rate 0 | #107 TLV unfollowed: BECOME writes rate 0, and only it"
+-- mutant 138: scaledLastGmFreqChange has its sign inverted
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: scaledLastGmFreqChange has its sign inverted - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate | #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate | #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base | #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base"
+-- mutant 139: scaledLastGmFreqChange is the last trim's
+-- mutant 140: scaledLastGmFreqChange is scaled by 2^39
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: scaledLastGmFreqChange is scaled by 2^39 - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate | #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base | #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base"
+-- mutant 141: a mastership leaves the slave rate seen
+FAIL #107 TLV unfollowed: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a mastership leaves the slave rate seen - breaks "#107 TLV unfollowed: scaledLastGmFreqChange is rate 0 less the estimate"
+-- mutant 142: the trim stops short of a grandmaster 100 ppm away
+FAIL #107 a grandmaster +100 ppm: the trim settles within 0.2 ppm of it got 0000000000000000 exp 0000000000000001
+FAIL #107 a grandmaster +100 ppm: its offset stays within 1 us got 0000000000000000 exp 0000000000000001
+FAIL #107 a grandmaster -100 ppm: the trim settles within 0.2 ppm of it got 0000000000000000 exp 0000000000000001
+FAIL #107 a grandmaster -100 ppm: its offset stays within 1 us got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the trim stops short of a grandmaster 100 ppm away - breaks "#107 a grandmaster +100 ppm: the trim settles within 0.2 ppm of it | #107 a grandmaster +100 ppm: its offset stays within 1 us | #107 a grandmaster -100 ppm: the trim settles within 0.2 ppm of it | #107 a grandmaster -100 ppm: its offset stays within 1 us"
+-- mutant 116: scaledLastGmFreqChange is zero
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: scaledLastGmFreqChange is zero - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate"
+-- mutant 117: scaledLastGmFreqChange is the rate written
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: scaledLastGmFreqChange is the rate written - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate | #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate"
+-- mutant 118: a rate unknown since reset is taken as zero
+FAIL #100 TLV: a mastership after a warm reset, no rate written since, carries no phase or frequency change got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a rate unknown since reset is taken as zero - breaks "#100 TLV: a mastership after a warm reset, no rate written since, carries no phase or frequency change"
+-- mutant 139: scaledLastGmFreqChange is the last trim's
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: scaledLastGmFreqChange is the last trim's - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate | #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate"

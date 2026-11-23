@@ -1,0 +1,16 @@
+6	4	docs/HDL_DEVELOPER.md
+88	6	docs/INTEGRATION.md
+2	2	docs/MANAGER.md
+1	1	docs/SOURCE_EVIDENCE.md
+9	0	docs/TEST_DEVELOPER.md
+30	24	hdl/top/KL_gptp_engine.sv
+54	16	hdl/ucode/gen_gptp_ucode.py
+29	29	syn/ooc/work/gptp_ucode.hex
+29	29	tb/tsngen/gptp_ucode.hex
+29	29	tb/verilator/engine/gptp_ucode.hex
+7	6	tb/verilator/engine/mutants.py
+9	16	tb/verilator/engine/p100_mutants.py
+55	0	tb/verilator/engine/p106_mutants.py
+99	0	tb/verilator/engine/p107_mutants.py
+518	30	tb/verilator/engine/sim_main.cpp
+29	29	tb/verilator/ucpu/gptp_ucode.hex

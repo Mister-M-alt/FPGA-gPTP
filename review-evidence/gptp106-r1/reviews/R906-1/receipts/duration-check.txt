@@ -1,0 +1,71 @@
+10:         -GUCODE_HEX_P='"gptp_ucode.hex"' -GCLK_HZ_P=2000000 \
+  8140	  //! eighth pair, then a pair stamped by our own PHC. Returns the offset the
+  8141	  //! plane measures (local minus master, less the modelled link delay)
+  8142	  int64_t p107_pair(int k) {
+  8143	    if (k % 8 == 0) {
+  8144	      Frame a = ptp(0xB, p107_aseq++, 0, 0x0008, 30 + 4 + 16, P107_SRC);
+  8145	      for (int i = 0; i < 10; i++) a.u8(0);
+  8146	      a.u16(0xFFC4); a.u8(0);
+  8147	      a.u8(50); a.u32(OUR_CQ); a.u8(248);
+  8148	      a.u64(P107_GM);
+  8149	      a.u16(1); a.u8(0xA0);
+  8150	      a.u16(0x0008); a.u16(16); a.u64(P107_GM); a.u64(P107_SRC);
+  8151	      send_frame(a.b, phc() + 100);
+  8152	      run(4000);
+  8153	    }
+  8154	    run_svc(250000);
+  8155	    const uint64_t local_rx = phc() + 150;
+  8156	    int64_t err = 0;
+  8157	    if (p107_noise != 0) {
+  8158	      p107_lcg = p107_lcg * 1103515245u + 12345u;
+  8159	      err = static_cast<int64_t>((p107_lcg >> 8) % (2 * p107_noise + 1)) -
+  8160	            static_cast<int64_t>(p107_noise);
+  8161	    }
+  8162	    const uint64_t origin =
+  8163	        p107_master_time() + static_cast<uint64_t>(err);
+  8164	    const uint16_t seq = p107_seq++;
+  8165	    Frame f = ptp(0x0, seq, 0, 0x0208, 10, P107_SRC);
+  8166	    f.ts(0);
+  8167	    send_frame(f.b, local_rx);
+  8168	    run(1000);
+  8169	    send_frame(follow_up(seq, 0, origin, P107_SRC).b, local_rx + 500);
+  8170	    run(4000);
+  8171	    return static_cast<int64_t>(local_rx - origin -
+  8172	                                static_cast<uint64_t>(pdm.d));
+  8184	  //! Follow the #107 master for `pairs` pairs and grade the last 80 (10 s):
+  8185	  //! the mean trim within 0.2 ppm of its rate, every offset within 1 us
+  8186	  bool p107_follow(const char *tag, int pairs) {
+  8187	    char n[128];
+  8188	    size_t from = adj_seen.size();
+  8189	    int64_t worst = 0;
+  8190	    for (int k = 0; k < pairs; k++) {
+  8191	      if (k == pairs - 80) {
+  8192	        from = adj_seen.size();
+  8193	        worst = 0;
+  8194	      }
+  8195	      const int64_t off = p107_pair(k);
+  8196	      const int64_t mag = off < 0 ? -off : off;
+  8301	  // ---- 61: #107, scaledLastGmFreqChange is the time base's change --------
+  8302	  // 802.1AS-2011 10.2.2.3.12 and 10.2.3.6: as grandmaster, lastGmFreqChange
+  8303	  // is the frequency of this plane's time base relative to the grandmaster
+  8304	  // it replaced, and 11.4.4.3.9 carries it scaled by 2^41. With origins
+  8305	  // that carry the board's timestamp error (+-8 ns, the 1 Gb/s symbol
+  8306	  // period), this plane follows a grandmaster 10 ppm fast, then one 10 ppm
+  8307	  // slow, then 10 ppm fast again, each for 30 s, and replaces each. Each
+  8308	  // time, the scaledLastGmFreqChange of three Follow_Ups of the new
+  8309	  // mastership is within 50 % of 2^41 x (0 - the departed grandmaster's
+  8310	  // rate), the grading the qual applies, or within 2,199 (1 ppb) of it
+  8311	  void report_the_frequency_change_of_the_time_base() {
+  8312	    const struct { const char *tag; double ppm; uint32_t seed; } cases[] = {
+  8313	        {"#107 TLV after a grandmaster +10 ppm", 10.0, 7u},
+  8314	        {"#107 TLV after a grandmaster -10 ppm", -10.0, 1234567u},
+  8315	        {"#107 TLV after a grandmaster +10 ppm again", 10.0, 99991u},
+  8316	    };
+  8317	    for (const auto &c : cases) {
+  8318	      char n[160];
+  8319	      p107_noise = 8;
+  8320	      p107_lcg = c.seed;
+  8321	      p107_start(c.ppm);
+  8322	      p107_follow(c.tag, 120);
+  8323	      const size_t mark = txf.size();
+  8324	      p107_stop(c.tag);

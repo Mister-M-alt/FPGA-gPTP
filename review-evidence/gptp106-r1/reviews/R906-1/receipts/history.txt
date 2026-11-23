@@ -1,0 +1,6 @@
+a728cc3ce9d0342aa596c8170fecf1284c0b604c Document the mastership on this oscillator, the phase authority left by the rate and the near-clamp settling times (#107)
+d0a0e3b05c1b4c84e04b425057c004f2bd88cb0b Run each mastership on this oscillator: BECOME writes rate 0 through PHC word 3, which always applies, and scaledLastGmFreqChange is minus the slave's estimate (#107)
+a3347e2e99418026df6829971827a624c4c311ce Point the slew policy's source evidence at its line after the #106 docstring
+7427fc0d027229c0da0a41c94b9e95ad4c3c0e15 Follow grandmasters at +-10 and +-100 ppm against this oscillator within 0.2 ppm and state the follow range (#107)
+105ef8fba8d8e93436db90e87b494081d2f7e764 Document the first Announce at the timeout instant and the ROM budget after #106
+c5b4f8c0194d823ff00f639fdb04efa2b796dfe6 Send a new master's first Announce in the handler that takes the role, graded on the wire at every timeout instant (#106)

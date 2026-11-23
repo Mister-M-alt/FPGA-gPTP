@@ -1,0 +1,80 @@
+# #107 near-clamp settling under D1 = C (documented behaviour, not graded)
+Engine harness at a728cc3's tree with phase 59's cases replaced, each from mastership (rate 0) for 480 pairs (60 s); the estimate the integrator still holds is named. 'every offset within 1 us from t' is the last pair over 1 us, plus one.
+
+X #107 X +10: every offset within 1 us from 2.000 s on
+INFO #107 X +10: master +10.000 ppm, mean trim over the last 10 s +10.0000 ppm, worst offset 1 ns
+X #107 X +197 (estimate +10): every offset within 1 us from 8.750 s on
+INFO #107 X +197 (estimate +10): master +197.000 ppm, mean trim over the last 10 s +197.0000 ppm, worst offset 1 ns
+X #107 X -100: every offset within 1 us from 2.250 s on
+INFO #107 X -100: master -100.000 ppm, mean trim over the last 10 s -100.0000 ppm, worst offset 1 ns
+X #107 X -197 (estimate -100): every offset within 1 us from 5.000 s on
+INFO #107 X -197 (estimate -100): master -197.000 ppm, mean trim over the last 10 s -197.0001 ppm, worst offset 1 ns
+X #107 X +197 (estimate -197): every offset within 1 us from 17.250 s on
+INFO #107 X +197 (estimate -197): master +197.000 ppm, mean trim over the last 10 s +197.0000 ppm, worst offset 1 ns
+X #107 X +199 (estimate +197): every offset within 1 us from 1.125 s on
+INFO #107 X +199 (estimate +197): master +199.000 ppm, mean trim over the last 10 s +199.0000 ppm, worst offset 1 ns
+X #107 X -199 (estimate +199): every offset within 1 us from 50.000 s on
+INFO #107 X -199 (estimate +199): master -199.000 ppm, mean trim over the last 10 s -199.0935 ppm, worst offset 958 ns
+
+first pairs of +197 (estimate -197) and -199 (estimate +199): adj in 2 MHz trim units, 1677722 = +200 ppm
+X #107 X +197 (estimate -197) k=0 off=-1525479 adj=0 steps=32
+X #107 X +197 (estimate -197) k=1 off=-1550611 adj=0 steps=32
+X #107 X +197 (estimate -197) k=2 off=-1575743 adj=0 steps=32
+X #107 X +197 (estimate -197) k=3 off=-1600875 adj=0 steps=32
+X #107 X +197 (estimate -197) k=4 off=-1626100 adj=0 steps=32
+X #107 X +197 (estimate -197) k=5 off=-1651232 adj=0 steps=32
+X #107 X +197 (estimate -197) k=6 off=-1676364 adj=0 steps=32
+X #107 X +197 (estimate -197) k=7 off=-1701496 adj=0 steps=32
+X #107 X +197 (estimate -197) k=8 off=-1727032 adj=-1652552 steps=33
+X #107 X +197 (estimate -197) k=9 off=-50116 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=10 off=-50072 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=11 off=-49689 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=16 off=-47767 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=24 off=-44698 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=32 off=-41629 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=40 off=-38560 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=48 off=-35490 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=56 off=-32421 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=64 off=-29351 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=72 off=-26282 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=80 off=-23213 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=88 off=-20143 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=96 off=-17074 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=104 off=-14004 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=112 off=-10935 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=120 off=-7865 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=128 off=-4796 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=136 off=-1727 adj=1677722 steps=33
+X #107 X +197 (estimate -197) k=144 off=229 adj=1647306 steps=33
+X #107 X +197 (estimate -197) k=152 off=4 adj=1652445 steps=33
+X #107 X +197 (estimate -197) k=160 off=0 adj=1652549 steps=33
+X #107 X +197 (estimate -197) k=168 off=-1 adj=1652617 steps=33
+X #107 X +197 (estimate -197) k=176 off=0 adj=1652550 steps=33
+X #107 X +197 (estimate -197) k=184 off=-1 adj=1652618 steps=33
+X #107 X +197 (estimate -197) k=192 off=0 adj=1652552 steps=33
+X #107 X +197 (estimate -197) k=200 off=1 adj=1652502 steps=33
+X #107 X +197 (estimate -197) k=208 off=0 adj=1652554 steps=33
+X #107 X +197 (estimate -197) k=216 off=0 adj=1652554 steps=33
+X #107 X +197 (estimate -197) k=224 off=0 adj=1652555 steps=33
+X #107 X +197 (estimate -197) k=232 off=0 adj=1652555 steps=33
+X #107 X +197 (estimate -197) k=240 off=0 adj=1652555 steps=33
+X #107 X +197 (estimate -197) k=248 off=0 adj=1652555 steps=33
+X #107 X +197 (estimate -197) k=256 off=0 adj=1652556 steps=33
+X #107 X +197 (estimate -197) k=264 off=0 adj=1652556 steps=33
+X #107 X +197 (estimate -197) k=272 off=-1 adj=1652625 steps=33
+X #107 X +197 (estimate -197) k=280 off=-1 adj=1652610 steps=33
+X #107 X +197 (estimate -197) k=288 off=1 adj=1652492 steps=33
+X #107 X +197 (estimate -197) k=296 off=-1 adj=1652612 steps=33
+X #107 X +197 (estimate -197) k=304 off=1 adj=1652495 steps=33
+X #107 X +197 (estimate -197) k=312 off=-1 adj=1652615 steps=33
+X #107 X +197 (estimate -197) k=320 off=1 adj=1652498 steps=33
+X #107 X +197 (estimate -197) k=328 off=0 adj=1652550 steps=33
+X #107 X +197 (estimate -197) k=336 off=1 adj=1652501 steps=33
+X #107 X +197 (estimate -197) k=344 off=0 adj=1652553 steps=33
+X #107 X +197 (estimate -197) k=352 off=1 adj=1652503 steps=33
+X #107 X +197 (estimate -197) k=360 off=-1 adj=1652622 steps=33
+X #107 X +197 (estimate -197) k=368 off=-1 adj=1652607 steps=33
+X #107 X +197 (estimate -197) k=376 off=0 adj=1652557 steps=33
+X #107 X +197 (estimate -197) k=384 off=-1 adj=1652609 steps=33
+X #107 X +197 (estimate -197) k=392 off=0 adj=1652559 steps=33
+2211 checks: 2211 PASS, 0 FAIL

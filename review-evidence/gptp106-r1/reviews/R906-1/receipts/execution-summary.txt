@@ -1,0 +1,46 @@
+head-engine: 2199 checks: 2199 PASS, 0 FAIL
+
+base-with-head-harness: 2199 checks: 2174 PASS, 25 FAIL
+FAIL slew: idle timeout writes only mastership's rate 0 got 0000000000000000 exp 0000000000000001
+FAIL slew: idle return writes no rate got 00000000000000a4 exp 00000000000000a5
+FAIL slew: idle incapable interval writes only mastership's rate 0 got 0000000000000000 exp 0000000000000001
+FAIL slew: idle capability recovery writes no rate got 00000000000000a8 exp 00000000000000a9
+FAIL slew: missing Sync runs on this oscillator got 00000000ffe66666 exp 0000000000000000
+FAIL slew: mastership runs on this oscillator got 00000000ffe66667 exp 0000000000000000
+FAIL #100 TLV settled: BECOME writes rate 0, this oscillator got 0000000000000000 exp 0000000000000001
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #100 TLV slewing: BECOME writes rate 0, this oscillator got 0000000000000000 exp 0000000000000001
+FAIL #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV unfollowed: BECOME writes rate 0, and only it got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0 s, a clock after the tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0 s, two clocks after the tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0 s, nine clocks before a tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.00006 s, the lab's tie: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0003 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0005 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.001 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.002 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 regain: the first master Announce leaves at once got 0000000000000000 exp 0000000000000001
+FAIL #106 regain race: one master Announce leaves before the better one is taken got 0000000000000000 exp 0000000000000001
+FAIL #107 takeover: one rate write, this oscillator's within one trim unit got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster +10 ppm again: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+
+p106-0: 2199 checks: 2189 PASS, 10 FAIL
+FAIL #106 3.0 s, a clock after the tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0 s, two clocks after the tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0 s, nine clocks before a tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.00006 s, the lab's tie: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0003 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0005 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.001 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.002 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 regain: the first master Announce leaves at once got 0000000000000000 exp 0000000000000001
+FAIL #106 regain race: one master Announce leaves before the better one is taken got 0000000000000000 exp 0000000000000001
+
+p106-1: 2200 checks: 2197 PASS, 3 FAIL
+FAIL wait_tx type 11: timeout
+FAIL D4 the Announce beat retries got 0000000000000000 exp 0000000000000001
+FAIL #106 regain: four more master Announces, each 1 s after the one before got 0000000000000000 exp 0000000000000001
+
