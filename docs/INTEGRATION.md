@@ -831,7 +831,9 @@ A stale expiry never ages a refreshed watch.
 
 The expiry's own handler sends the first Announce (#106).
 
-It reaches the wire before any queued Announce.
+With credit, it reaches the wire before any queued Announce.
+
+Without credit, the next beat tries again, 1 s later.
 
 Later Announces follow one second apart from it.
 
