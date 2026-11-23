@@ -1,0 +1,7 @@
+# parent milan_dp gptp and gptp-lat legs (the gPTP consumer gates), scratch parent with gptp-processor a728cc3, Verilator 5.050
+milan_dp-gptp rc=0 819s
+milan_dp-gptp-lat rc=0 938s
+## gptp
+212 checks: 212 PASS, 0 FAIL
+## gptp-lat
+212 checks: 212 PASS, 0 FAIL

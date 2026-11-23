@@ -1,0 +1,33 @@
+# the parent's code-quality ratchets at parent 2cf4b61406 (854bd72367 with gptp-processor at a728cc3), which scan the processor submodules
+== scripts/check_py_idiom.py
+  wildcard import: 0
+  dynamic eval/exec: 0
+  unparseable source: 0
+  long function: 9 <= 9
+  long module: 10 <= 10
+  unannotated public function: 0 <= 0
+  undocumented public function: 0 <= 0
+  os.path use: 1 <= 1
+  unmanaged open: 0 <= 0
+  too many parameters: 7 <= 7
+  global statement: 0 <= 0
+  over-long line: 0 <= 0
+rc=0
+== scripts/check_sv_idiom.py
+SystemVerilog idiom gate: OK (145 first-party HDL file(s) across the superproject and both processor submodules, every one .sv/.svh; 0 generic `always`; 0 reg <= 0; 0 untyped parameter <= 0; 0 untyped localparam <= 0)
+rc=0
+== scripts/check_cpp_idiom.py
+cpp idiom: 399 first-party translation units, 199 of them C
+  naked new/delete: 0
+  goto: 0
+  unbounded C call: 0
+  c-style cast: 0 <= 0
+  file-scope mutable: 0 <= 0
+  macro constant: 0 <= 0
+  unnamed enum block: 0 <= 0
+  multi-declarator declaration: 0 <= 0
+  long function: 0 <= 0
+  build without warnings: 0 <= 0
+rc=0
+
+tb/verilator/engine/mutants.py: 1000 lines (LONG_MODULE_LINES 1000; at 7427fc0/a3347e2 it was 1002, which would raise 'long module' to 11 against its ratchet of 10)

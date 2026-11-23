@@ -1,0 +1,96 @@
+# routes: AX7101 split image (the shipping default since #960), one interface, ExtraTimingOpt placement (the route-1x1 record's selected directive), integrated flow (synthesis AreaOptimized_high, opt ExploreArea, single-thread synthesis), Vivado 2026.1, xc7a100t-fgg484-2
+base = parent 854bd72367 (gptp-processor 1616fc8f); head = parent 2cf4b61406 (854bd72367 with gptp-processor a728cc3)
+
+## 1x1 head: route rc=0 (2026-11-23T14:59:52+01:00 .. 2026-11-23T15:45:20+01:00)
+head 2cf4b61406cfdd5b51f59823de47820f586480f4 gptp-processor a728cc3ce9d0342aa596c8170fecf1284c0b604c tree: 
+Slow_85C: WNS +0.276 ns (0 failing), WHS +0.102 ns (0 failing)
+Slow_0C: WNS +0.276 ns (0 failing), WHS +0.102 ns (0 failing)
+Fast_85C: WNS +1.691 ns (0 failing), WHS +0.036 ns (0 failing)
+Fast_0C: WNS +1.691 ns (0 failing), WHS +0.036 ns (0 failing)
+issue floors (WNS >= +0.030, WHS >= 0) met at every corner
+ # of fully routed nets............. : 72959 :
+ # of nets with routing errors.......... : 0 :
+LUT=32455 FF=42624 SLICE=14271 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+
+## 1x1 base: route rc=0 (2026-11-23T15:50:23+01:00 .. 2026-11-23T16:36:13+01:00)
+head 854bd7236792ce1adbd10c43b13a6a5002ad3bb6 gptp-processor 1616fc8f062fbf58c35ad31674b5b233207bbdb8 tree: 
+gptp ucode image: f21ce23b4b5a272c
+Slow_85C: WNS +0.158 ns (0 failing), WHS +0.064 ns (0 failing)
+Slow_0C: WNS +0.158 ns (0 failing), WHS +0.064 ns (0 failing)
+Fast_85C: WNS +1.660 ns (0 failing), WHS +0.033 ns (0 failing)
+Fast_0C: WNS +1.660 ns (0 failing), WHS +0.033 ns (0 failing)
+issue floors (WNS >= +0.030, WHS >= 0) met at every corner
+ # of fully routed nets............. : 73404 :
+ # of nets with routing errors.......... : 0 :
+LUT=32777 FF=42628 SLICE=14274 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+
+## 1x1 head - base
+LUT -322  FF -4  SLICE -3  BRAM_TILE +0  RAMB36 +0  RAMB18 +0  DSP +0
+
+## 8x8 head: route rc=0 (2026-11-23T15:06:21+01:00 .. 2026-11-23T16:12:18+01:00)
+head 2cf4b61406cfdd5b51f59823de47820f586480f4 gptp-processor a728cc3ce9d0342aa596c8170fecf1284c0b604c tree: 
+gptp ucode image: 48ffdf5c266ce389
+Slow_85C: WNS +0.244 ns (0 failing), WHS +0.102 ns (0 failing)
+Slow_0C: WNS +0.244 ns (0 failing), WHS +0.102 ns (0 failing)
+Fast_85C: WNS +1.660 ns (0 failing), WHS +0.036 ns (0 failing)
+Fast_0C: WNS +1.660 ns (0 failing), WHS +0.036 ns (0 failing)
+issue floors (WNS >= +0.030, WHS >= 0) met at every corner
+ # of fully routed nets............. : 88839 :
+ # of nets with routing errors.......... : 0 :
+LUT=43586 FF=50886 SLICE=15221 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+
+## 8x8 base: route rc=0 (2026-11-23T16:12:42+01:00 .. 2026-11-23T17:01:15+01:00)
+head 854bd7236792ce1adbd10c43b13a6a5002ad3bb6 gptp-processor 1616fc8f062fbf58c35ad31674b5b233207bbdb8 tree: 
+gptp ucode image: f21ce23b4b5a272c
+Slow_85C: WNS +0.064 ns (0 failing), WHS +0.102 ns (0 failing)
+Slow_0C: WNS +0.064 ns (0 failing), WHS +0.102 ns (0 failing)
+Fast_85C: WNS +1.412 ns (0 failing), WHS +0.027 ns (0 failing)
+Fast_0C: WNS +1.412 ns (0 failing), WHS +0.027 ns (0 failing)
+issue floors (WNS >= +0.030, WHS >= 0) met at every corner
+ # of fully routed nets............. : 89041 :
+ # of nets with routing errors.......... : 0 :
+LUT=42998 FF=50993 SLICE=15680 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+
+## 8x8 head - base
+LUT +588  FF -107  SLICE -459  BRAM_TILE +0  RAMB36 +0  RAMB18 +0  DSP +0
+
+## the gPTP plane's cells, placed (Total LUTs, FFs, RAMB36, RAMB18, DSP), base -> head
+### 1x1
+g_gptp_plane.u_gptp_shadow         LUT  5979 ->  5637 (-342)  FF  5039 ->  5039  RAMB36 3->3  RAMB18 1->1  DSP 6->6
+(g_gptp_plane.u_gptp_shadow)       LUT   877 ->   618 (-259)  FF  1033 ->  1033  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+rx_fifo                            LUT    94 ->    94 (+0)  FF    33 ->    33  RAMB36 1->1  RAMB18 0->0  DSP 0->0
+u_engine                           LUT  4717 ->  4637 (-80)  FF  3610 ->  3610  RAMB36 1->1  RAMB18 1->1  DSP 6->6
+(u_engine)                         LUT   967 ->   962 (-5)  FF  2464 ->  2464  RAMB36 0->0  RAMB18 0->0  DSP 2->2
+u_parser                           LUT   500 ->   499 (-1)  FF   292 ->   292  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+u_timer                            LUT   375 ->   279 (-96)  FF    64 ->    64  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+u_txslot                           LUT   147 ->   314 (+167)  FF    62 ->    62  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+u_ucpu                             LUT  2769 ->  2623 (-146)  FF   728 ->   728  RAMB36 1->1  RAMB18 1->1  DSP 4->4
+u_txret                            LUT   217 ->   215 (-2)  FF   279 ->   279  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+u_txticket                         LUT    32 ->    32 (+0)  FF    54 ->    54  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+### 8x8
+g_gptp_plane.u_gptp_shadow         LUT  5863 ->  6103 (+240)  FF  5037 ->  5038  RAMB36 3->3  RAMB18 1->1  DSP 6->6
+(g_gptp_plane.u_gptp_shadow)       LUT  1778 ->  2113 (+335)  FF  1033 ->  1033  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+u_engine                           LUT  3820 ->  3740 (-80)  FF  3608 ->  3609  RAMB36 1->1  RAMB18 1->1  DSP 6->6
+(u_engine)                         LUT   795 ->   826 (+31)  FF  2462 ->  2463  RAMB36 0->0  RAMB18 0->0  DSP 2->2
+u_parser                           LUT   466 ->   463 (-3)  FF   292 ->   292  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+u_timer                            LUT   224 ->   159 (-65)  FF    64 ->    64  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+u_txslot                           LUT   199 ->   132 (-67)  FF    62 ->    62  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+u_ucpu                             LUT  2138 ->  2163 (+25)  FF   728 ->   728  RAMB36 1->1  RAMB18 1->1  DSP 4->4
+u_txret                            LUT   251 ->   251 (+0)  FF   279 ->   279  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+u_txticket                         LUT    15 ->    15 (+0)  FF    54 ->    54  RAMB36 0->0  RAMB18 0->0  DSP 0->0
+
+## the largest cell moves, 8x8 base -> head (|Total LUTs| >= 80)
+ +1592 KL_mbx_cdc (5558 -> 7150)
+ +1572 u_edit (3746 -> 5318)
+ +1571 (u_edit) (3731 -> 5302)
+ -1342 csr (4107 -> 2765)
+ -1081 milan_datapath (26196 -> 25115)
+  +588 alinx_ax7101 (42998 -> 43586)
+  +335 (g_gptp_plane.u_gptp_shadow) (1778 -> 2113)
+  +240 g_gptp_plane.u_gptp_shadow (5863 -> 6103)
+  +221 (milan_datapath) (4165 -> 4386)
+  -110 chan_map_capture (1341 -> 1231)
+   +93 (peripheral_toAxiLite4_logic_bridge) (278 -> 371)
+   -87 (KL_mbx_cdc) (654 -> 567)
+   +83 crf_rx (230 -> 313)
+   -80 u_engine (3820 -> 3740)

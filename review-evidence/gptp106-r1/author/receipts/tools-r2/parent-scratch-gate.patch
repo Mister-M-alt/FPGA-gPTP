@@ -1,0 +1,358 @@
+diff --git a/tb/verilator/gptp_shadow/sim_main.cpp b/tb/verilator/gptp_shadow/sim_main.cpp
+index 9c5e3a69b0..2403167751 100644
+--- a/tb/verilator/gptp_shadow/sim_main.cpp
++++ b/tb/verilator/gptp_shadow/sim_main.cpp
+@@ -33,6 +33,9 @@
+ 
+ #include <array>
+ #include <cstdint>
++#ifndef P107_MASTER_SIGN
++#define P107_MASTER_SIGN 1
++#endif
+ #include <cstdio>
+ #include <vector>
+ #include <verilated.h>
+@@ -1037,12 +1040,16 @@ class GptpShadowHarness {
+     {
+       // short closed loop: a master 1 ms ahead at +100 ppm in counter
+       // time; one re-base then the addend carries the rate
+-      uint64_t mst_base = phc() + 1000000ull - cyc * 8ull - cyc / 1250ull;
++      // FPGA-gPTP #107 scratch gate: P107_MASTER_SIGN -1 runs the same
++      // loop against a -100 ppm master
++      uint64_t mst_base = phc() + 1000000ull - cyc * 8ull -
++                          static_cast<uint64_t>(P107_MASTER_SIGN * static_cast<int64_t>(cyc / 1250ull));
+       uint16_t sq = 0x200;
+       for (int k = 0; k < 12; k++) {
+         if ((k % 6) == 0) announce(static_cast<uint16_t>(20 + k), 100, GMID);
+         run_svc(250000);
+-        uint64_t origin = mst_base + cyc * 8ull + cyc / 1250ull;
++        uint64_t origin = mst_base + cyc * 8ull +
++                          static_cast<uint64_t>(P107_MASTER_SIGN * static_cast<int64_t>(cyc / 1250ull));
+         Frame f = ptp(0x0, sq, 0, 0x0208, 10);
+         f.ts(0);
+         send_wide(f.b);
+@@ -1055,6 +1062,8 @@ class GptpShadowHarness {
+       }
+       expect("closed loop locked",
+              near(static_cast<int32_t>(dut->pub_offset_o), 0, 300), 1);
++      printf("107: the counter's addend after the loop %d (master %+d00 ppm)\n",
++             static_cast<int>(dut->dbg_phc_adj_o), static_cast<int>(P107_MASTER_SIGN));
+     }
+   }
+ 
+@@ -1323,6 +1332,12 @@ class GptpShadowHarness {
+     }
+     expect("quiet ride to grandmaster",
+            (dut->pub_flags_o & FL_AMGM) ? 1 : 0, 1);
++    // FPGA-gPTP #107 scratch gate (D1 = C): the counter now runs on its
++    // oscillator, the addend 0, whatever rate the slave followed
++    printf("107: the counter's addend as grandmaster %d\n",
++           static_cast<int>(dut->dbg_phc_adj_o));
++    expect("107: as grandmaster the counter runs on its oscillator",
++           static_cast<int>(dut->dbg_phc_adj_o), 0);
+ 
+     // Let the transition's Announce return and dispatch before arming the
+     // selective Sync hold. Otherwise an Announce emitted immediately after
+diff --git a/tb/verilator/milan_dp/sim_gmstep.cpp b/tb/verilator/milan_dp/sim_gmstep.cpp
+index 15b4920c9c..375c3c2eac 100644
+--- a/tb/verilator/milan_dp/sim_gmstep.cpp
++++ b/tb/verilator/milan_dp/sim_gmstep.cpp
+@@ -92,6 +92,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <cmath>
+ #include <cstdint>
+ #include <cstdio>
+ #include <deque>
+@@ -111,6 +112,8 @@ namespace {
+ constexpr uint64_t kPeer = 0x0080E1FFFE112233ULL;
+ constexpr uint64_t kGmA = 0x00AACCFFFE010203ULL;
+ constexpr uint64_t kGmB = 0x00BBDDFFFE040506ULL;
++//! FPGA-gPTP #107 scratch gate: the grandmasters this station takes over from
++constexpr uint64_t kGmC = 0x00CCEEFFFE070800ULL;
+ //! thisClock of this leg's gptp_ucode.hex (the generator's default MAC
+ //! 02:A1:B2:C3:D4:E5). Since FPGA-gPTP #82 the station is its own
+ //! grandmaster from boot and publishes this identity until a peer wins.
+@@ -341,6 +344,7 @@ class GmStepHarness {
+         check_.echo_passes();
+     }
+     int run();
++    void enable_takeovers() { takeovers_ = true; }
+ 
+  private:
+     milan::tb::Model<Vmilan_datapath> model_;
+@@ -354,6 +358,22 @@ class GmStepHarness {
+     uint64_t phc_prev_ = 0;
+     uint64_t gm_epoch_ = kEpochANs;
+     uint64_t media_epoch_ = kEpochANs;         //! the peer talker's own PHC
++    //! #107 gate: each timeline's rate against the fabric clock, from the
++    //! cycle it was set, and its offset there (all zero outside the gate)
++    struct Drift {
++        double ppm = 0;
++        uint64_t from = 0;
++        int64_t base = 0;
++        int64_t at(uint64_t c) const {
++            return base + static_cast<int64_t>(llround(double(c - from) * double(kPhcTickNs) * ppm * 1e-6));
++        }
++    };
++    Drift gm_drift_;
++    Drift media_drift_;
++    bool gm_on_ = true;                        //! the grandmaster sends Sync and Announce
++    uint64_t trace_gm_ = kGmB;                 //! the identity trace_.identity_cyc waits for
++    uint64_t media_switch_cyc_ = 0;            //! the peer follows this station from here
++    bool takeovers_ = false;                   //! run the #107 takeover gate
+     bool slew_probe_ = false;
+     bool slew_origin_override_ = false;
+     int64_t slew_offset_ns_ = 0;
+@@ -431,8 +451,14 @@ class GmStepHarness {
+     unsigned drp_lat_ = 0;
+ 
+     uint64_t phc_ns() const;
+-    uint64_t gm_ns(uint64_t cycle) const { return cycle * kPhcTickNs + gm_epoch_; }
+-    uint64_t media_ns(uint64_t cycle) const { return cycle * kPhcTickNs + media_epoch_; }
++    uint64_t gm_ns(uint64_t cycle) const {
++        return cycle * kPhcTickNs + gm_epoch_ + static_cast<uint64_t>(gm_drift_.at(cycle));
++    }
++    uint64_t media_ns(uint64_t cycle) const {
++        return cycle * kPhcTickNs + media_epoch_ + static_cast<uint64_t>(media_drift_.at(cycle));
++    }
++    void check_takeovers();
++    double phc_ppm_over(uint64_t cycles);
+     void tick();
+     void run_cycles(uint64_t n) { while (n--) tick(); }
+     void memory_drive();
+@@ -561,7 +587,7 @@ void GmStepHarness::observe() {
+     if (!tu && trace_.tu_prev) trace_.tu_fall_cyc = cyc_;
+     //! both are read after the same edge: the bank's identity and the tu every
+     //! talker stamps during the cycle that follows it
+-    if (!trace_.identity_cyc && root->milan_datapath__DOT__gptp_pub_gm_w == kGmB) {
++    if (!trace_.identity_cyc && root->milan_datapath__DOT__gptp_pub_gm_w == trace_gm_) {
+         trace_.identity_cyc = cyc_;
+         trace_.tu_at_identity = tu;
+     }
+@@ -668,11 +694,17 @@ void GmStepHarness::drp_edge() {
+ //! starts only with room before the next one, so the listener's accept
+ //! instant keeps one phase against the media tick.
+ void GmStepHarness::schedule() {
+-    if (peer_on_ && cyc_ >= next_sync_) {
++    if (media_switch_cyc_ && cyc_ >= media_switch_cyc_) {
++        //! #107 gate: the peer now follows this station, phase-continuously,
++        //! at its oscillator's rate
++        media_drift_ = {0.0, cyc_, static_cast<int64_t>(media_ns(cyc_) - cyc_ * kPhcTickNs - media_epoch_)};
++        media_switch_cyc_ = 0;
++    }
++    if (peer_on_ && gm_on_ && cyc_ >= next_sync_) {
+         control_.push_back({Kind::Sync, sync_seq_++, 0, {}, 0, cyc_});
+         next_sync_ = cyc_ + kSyncPeriodCyc;
+     }
+-    if (peer_on_ && cyc_ >= next_announce_) {
++    if (peer_on_ && gm_on_ && cyc_ >= next_announce_) {
+         control_.push_back({Kind::Announce, announce_seq_++, 0, {}, 0, cyc_});
+         next_announce_ = cyc_ + kAnnouncePeriodCyc;
+     }
+@@ -711,6 +743,7 @@ void GmStepHarness::start_frame(Outgoing what) {
+     }
+     if (what.kind == Kind::Sync && media_follows_sync_) {
+         media_epoch_ = gm_epoch_;
++        media_drift_ = gm_drift_;
+         media_follows_sync_ = false;
+         media_step_cyc_ = cyc_;
+     }
+@@ -1416,6 +1449,170 @@ void GmStepHarness::check_slew_connection() {
+     slew_probe_ = false;
+ }
+ 
++//! The PHC's rate against the fabric clock over the next `cycles`, in ppm.
++double GmStepHarness::phc_ppm_over(uint64_t cycles) {
++    const uint64_t c0 = cyc_;
++    const uint64_t p0 = phc_ns();
++    run_cycles(cycles);
++    const double ideal = double(cyc_ - c0) * double(kPhcTickNs);
++    return (double(phc_ns() - p0) - ideal) / ideal * 1e6;
++}
++
++//! FPGA-gPTP #107 scratch gate (D1 = C): a takeover from a grandmaster
++//! +100 ppm and then -100 ppm from this station's oscillator. Each is a
++//! better grandmaster, phase-continuous with the domain's time, which the
++//! peer's media follows; this station follows it for 6 s. Then it falls
++//! silent (its Pdelay answers continue): the 375 ms Sync receipt timeout
++//! makes this station grandmaster, whose time base runs on its oscillator,
++//! and the peer's media follows this station from its first Sync on. Across
++//! the takeover: no PHC step, tu set for the 0.25 s holdover (a quarter
++//! tick in this model, Milan v1.2 B.1.1), no media unlock and no lost
++//! samples (B.1.2): the listener stays locked, every PDU is presented once
++//! in order at one offset, nothing is refused or slipped, and the talker
++//! keeps its cadence with no MEDIA_RESET.
++void GmStepHarness::check_takeovers() {
++    uint16_t seq = 0x7600;
++    uint64_t id = kGmC;
++    //! check_slew_connection leaves the origins on this station's own PHC,
++    //! and check_coincident_restart's settime trials moved that PHC: the
++    //! grandmasters here are independent timelines again, each starting at
++    //! this station's time
++    slew_origin_override_ = false;
++    slew_offset_ns_ = 0;
++    for (const double ppm : {100.0, -100.0}) {
++        char tag[96];
++        char n[192];
++        snprintf(tag, sizeof tag, "107 takeover from %+.0f ppm", ppm);
++        // a better grandmaster at `ppm`, its time the domain's time now
++        const uint64_t c0 = cyc_;
++        gm_drift_ = {ppm, c0, static_cast<int64_t>(phc_ns() - c0 * kPhcTickNs - gm_epoch_)};
++        media_epoch_ = gm_epoch_;
++        media_drift_ = gm_drift_;
++        gm_id_ = id++;
++        gm_priority_ = static_cast<uint8_t>(gm_priority_ - 5);
++        gm_on_ = true;
++        next_announce_ = cyc_;
++        next_sync_ = cyc_ + kSyncPeriodCyc / 2;
++        const RenderCounts follow0 = render_counts();
++        const size_t follow_sent0 = sent_.size();
++        run_cycles(6 * kClkHz);
++        const double before = phc_ppm_over(kClkHz / 2);
++        const RenderGrade fg = grade_presentation(follow_sent0, sent_.size());
++        snprintf(n, sizeof n, "%s: the follow", tag);
++        report_presentation(n, fg);
++        const RenderCounts follow1 = render_counts();
++        printf("107: %s: following, the PHC runs %+.3f ppm; the render stage refused %u, slipped %u\n",
++               tag, before, follow1.refused - follow0.refused, follow1.slips - follow0.slips);
++        snprintf(n, sizeof n, "%s: this station follows the grandmaster within 1 ppm", tag);
++        check_.that(n, before > ppm - 1.0 && before < ppm + 1.0);
++        snprintf(n, sizeof n, "%s: the published grandmaster is the peer's", tag);
++        check_.hex(n, (uint64_t(read(0x628)) << 32) | read(0x624), gm_id_);
++        // snapshots, then silence
++        const auto avb0 = counters(seq++, 0x0009);
++        const auto sout0 = counters(seq++, 0x0006);
++        sin0_accepts_.first = accepts_.size();
++        const auto sin0 = counters(seq++, 0x0005);
++        sin0_accepts_.second = accepts_.size();
++        const RenderCounts render0 = render_counts();
++        const size_t sent0 = sent_.size();
++        const size_t talker0 = talker_.size();
++        trace_ = Trace{};
++        trace_.tu_prev = dut_->rootp->milan_datapath__DOT__clkv_tu_w;
++        snprintf(n, sizeof n, "%s: tu clear before the takeover", tag);
++        check_.dec(n, trace_.tu_prev, 0);
++        trace_gm_ = kThisClock;
++        gm_on_ = false;
++        const uint64_t silent = cyc_;
++        while (!trace_.identity_cyc && cyc_ < silent + kClkHz) tick();
++        snprintf(n, sizeof n, "%s: this station is grandmaster within 375 ms of the last Sync", tag);
++        check_.that(n, trace_.identity_cyc != 0 &&
++                       trace_.identity_cyc - silent <= kClkHz * 375 / 1000 + kSyncPeriodCyc + kClkHz / 100);
++        // the peer hears this station's first Sync and follows it
++        media_switch_cyc_ = cyc_ + kClkHz / 1000;
++        run_cycles(kClkHz / 2);
++        const double after = phc_ppm_over(kClkHz / 2);
++        printf("107: %s: grandmaster after %llu cycles of silence; the PHC then runs %+.3f ppm\n",
++               tag, static_cast<unsigned long long>(trace_.identity_cyc - silent), after);
++        snprintf(n, sizeof n, "%s: as grandmaster the PHC runs on this oscillator, within 0.2 ppm", tag);
++        check_.that(n, after > -0.2 && after < 0.2);
++        snprintf(n, sizeof n, "%s: no PHC step across the takeover", tag);
++        check_.that(n, trace_.step_pulses == 0 && trace_.steps == 0);
++        snprintf(n, sizeof n, "%s: asCapable held every cycle", tag);
++        check_.dec(n, trace_.incapable_cycles, 0);
++        // tu: Milan v1.2 B.1.1, from the commit that names this station
++        snprintf(n, sizeof n, "%s: tu set in the first cycle the bank names this station", tag);
++        check_.dec(n, trace_.tu_at_identity, 1);
++        const uint64_t held = trace_.tu_fall_cyc > trace_.identity_cyc
++                            ? trace_.tu_fall_cyc - trace_.identity_cyc : 0;
++        printf("107: %s: tu held %llu cycles (quarter tick %llu), %llu episodes\n", tag,
++               static_cast<unsigned long long>(held), static_cast<unsigned long long>(kQtickCyc),
++               static_cast<unsigned long long>(trace_.tu_rises));
++        snprintf(n, sizeof n, "%s: tu held at least the 0.25 s holdover", tag);
++        check_.that(n, held >= kQtickCyc);
++        snprintf(n, sizeof n, "%s: tu cleared within the holdover's bound", tag);
++        check_.that(n, held <= 3 * kQtickCyc);
++        snprintf(n, sizeof n, "%s: one tu episode", tag);
++        check_.dec(n, trace_.tu_rises, 1);
++        size_t wrong = 0, in_hold = 0, after_hold = 0;
++        for (size_t i = talker0; i < talker_.size(); ++i) {
++            const TxPdu& q = talker_[i];
++            const bool h = q.cyc > trace_.identity_cyc + kWireSettleCyc
++                        && q.cyc + kWireSettleCyc < trace_.tu_fall_cyc;
++            const bool a = q.cyc > trace_.tu_fall_cyc + kWireSettleCyc;
++            if (!h && !a) continue;
++            in_hold += h;
++            after_hold += a;
++            wrong += q.tu != h;
++        }
++        snprintf(n, sizeof n, "%s: talker PDUs graded inside and after the hold", tag);
++        check_.that(n, in_hold > 100 && after_hold > 100);
++        snprintf(n, sizeof n, "%s: every talker PDU carries the verdict of its instant", tag);
++        check_.dec(n, wrong, 0);
++        // media: no unlock, no lost samples
++        const auto avb1 = counters(seq++, 0x0009);
++        const auto sout1 = counters(seq++, 0x0006);
++        sin1_accepts_.first = accepts_.size();
++        //! a GET_COUNTERS that gets no answer in its window is asked again
++        //! (MEDIA_UNLOCKED counts from reset, so a later answer still
++        //! covers the takeover); each retry is printed
++        std::vector<uint8_t> sin1;
++        for (unsigned attempt = 0; attempt < 4; ++attempt) {
++            const size_t aecp0 = tx_frames_.size();
++            sin1 = counters(seq++, 0x0005);
++            if (counter_word(sin1, 32) != 0) break;
++            size_t aecp_tx = 0;
++            for (size_t i = aecp0; i < tx_frames_.size(); ++i)
++                aecp_tx += tx_frames_[i].size() > 37 && be(tx_frames_[i], 12, 2) == 0x22F0 &&
++                           tx_frames_[i][14] == 0xFB;
++            printf("107: %s: Stream Input GET_COUNTERS attempt %u got no answer (%zu AECP frames sent "
++                   "by this station meanwhile); asking again\n", tag, attempt + 1, aecp_tx);
++        }
++        sin1_accepts_.second = accepts_.size();
++        snprintf(n, sizeof n, "%s: one GPTP_GM_CHANGED", tag);
++        check_.dec(n, counter_word(avb1, 5) - counter_word(avb0, 5), 1);
++        snprintf(n, sizeof n, "%s: no MEDIA_RESET", tag);
++        check_.dec(n, counter_word(sout1, 2) - counter_word(sout0, 2), 0);
++        snprintf(n, sizeof n, "%s: no outgoing mr change", tag);
++        check_.dec(n, mr_toggles_since(talker0), 0);
++        printf("107: %s: the listener and the talker across the takeover\n", tag);
++        grade_the_licence(talker0, sin0, sin1);
++        const RenderGrade g = grade_presentation(sent0, sent_.size());
++        snprintf(n, sizeof n, "%s: across the takeover", tag);
++        report_presentation(n, g);
++        const RenderCounts render1 = render_counts();
++        snprintf(n, sizeof n, "%s: PDUs graded across the takeover", tag);
++        check_.that(n, g.graded > 100);
++        snprintf(n, sizeof n, "%s: every PDU's six events presented once, in order (no lost samples)", tag);
++        check_.dec(n, g.graded - g.presented + g.partial + g.disorder, 0);
++        snprintf(n, sizeof n, "%s: the render stage refused nothing", tag);
++        check_.dec(n, render1.refused - render0.refused, 0);
++        snprintf(n, sizeof n, "%s: the render stage slipped nothing", tag);
++        check_.dec(n, render1.slips - render0.slips, 0);
++        snprintf(n, sizeof n, "%s: every PDU keeps one offset across the takeover", tag);
++        check_.that(n, g.offset_hi - g.offset_lo <= kOffsetSpreadCyc);
++    }
++}
++
+ int GmStepHarness::run() {
+     printf("gmstep: 2 MHz fabric, 8 ns PHC, quarter tick %llu cycles\n",
+            static_cast<unsigned long long>(kQtickCyc));
+@@ -1431,6 +1628,7 @@ int GmStepHarness::run() {
+         check_crf_restart();
+         check_slew_connection();
+         check_coincident_restart();
++        if (takeovers_) check_takeovers();
+     } catch (const std::exception& e) {
+         check_.fail(e.what());
+         printf("NOT RUN: the remaining phases after a bounded transport failure\n");
+@@ -1448,6 +1646,10 @@ int main(int argc, char** argv) {
+     const auto skip = std::find(args.begin(), args.end(), "--no-small-steps");
+     const bool small_steps = skip == args.end();
+     if (!small_steps) args.erase(skip);
++    //! FPGA-gPTP #107 scratch gate: the takeover phase, after every other
++    const auto take = std::find(args.begin(), args.end(), "--takeovers");
++    const bool takeovers = take != args.end();
++    if (takeovers) args.erase(take);
+     const bool option = std::any_of(args.begin(), args.end(),
+                                     [](const std::string& a) { return a.rfind("--", 0) == 0; });
+     if (args.empty() || args.size() > 2 || option) {
+@@ -1473,5 +1675,6 @@ int main(int argc, char** argv) {
+     }
+     printf("gmstep: feed delay %llu cycles\n", static_cast<unsigned long long>(feed_delay));
+     GmStepHarness harness(std::move(image), feed_delay, small_steps);
++    if (takeovers) harness.enable_takeovers();
+     return harness.run();
+ }

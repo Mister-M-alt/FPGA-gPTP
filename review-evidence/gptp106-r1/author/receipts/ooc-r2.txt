@@ -1,0 +1,47 @@
+OOC (xc7a100tfgg484-2, 100 MHz, post-synthesis, Vivado 2026.1), syn/ooc/run.sh through the slot wrapper
+base 1616fc8f (round 1):
+ucpu LUT=1643 FF=733 BRAM=1.5 DSP=4 WNS=1.941
+engine LUT=5395 FF=3620 BRAM=1.5 DSP=6 WNS=2.043
+head a728cc3:
+ucpu LUT=1643 FF=733 BRAM=1.5 DSP=4 WNS=1.941
+engine LUT=5375 FF=3617 BRAM=1.5 DSP=6 WNS=2.093
+critical warnings: head 0
+engine_util.rpt body diff (base vs head, headers excluded):
+18,19c18,19
+< | Slice LUTs*                | 5395 |     0 |          0 |     63400 |  8.51 |
+< |   LUT as Logic             | 4905 |     0 |          0 |     63400 |  7.74 |
+---
+> | Slice LUTs*                | 5375 |     0 |          0 |     63400 |  8.48 |
+> |   LUT as Logic             | 4885 |     0 |          0 |     63400 |  7.71 |
+23,24c23,24
+< | Slice Registers            | 3620 |     0 |          0 |    126800 |  2.85 |
+< |   Register as Flip Flop    | 3620 |     0 |          0 |    126800 |  2.85 |
+---
+> | Slice Registers            | 3617 |     0 |          0 |    126800 |  2.85 |
+> |   Register as Flip Flop    | 3617 |     0 |          0 |    126800 |  2.85 |
+28c28
+< | Unique Control Sets        |   99 |       |          0 |     15850 |  0.62 |
+---
+> | Unique Control Sets        |   97 |       |          0 |     15850 |  0.61 |
+51c51
+< | 3544  |          Yes |       Reset |            - |
+---
+> | 3541  |          Yes |       Reset |            - |
+146,151c146,150
+< | FDRE     | 3544 |        Flop & Latch |
+< | LUT6     | 2147 |                 LUT |
+< | LUT5     | 1551 |                 LUT |
+< | LUT2     |  662 |                 LUT |
+< | LUT4     |  620 |                 LUT |
+< | LUT3     |  483 |                 LUT |
+---
+> | FDRE     | 3541 |        Flop & Latch |
+> | LUT6     | 2139 |                 LUT |
+> | LUT5     | 1572 |                 LUT |
+> | LUT4     |  667 |                 LUT |
+> | LUT2     |  623 |                 LUT |
+153c152,153
+< | CARRY4   |  226 |          CarryLogic |
+---
+> | LUT3     |  458 |                 LUT |
+> | CARRY4   |  219 |          CarryLogic |

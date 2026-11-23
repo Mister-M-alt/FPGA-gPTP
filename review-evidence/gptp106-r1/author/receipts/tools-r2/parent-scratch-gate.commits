@@ -1,0 +1,3 @@
+000aef1c42 Scratch #107 gate: ask an unanswered Stream Input GET_COUNTERS again, and print it (not for push)
+bc4e204e08 Scratch #107 gate: start each takeover grandmaster from this station's time, origins off the slew override (not for push)
+f9f8594417 Scratch #107 gate: gmstep takeovers from +-100 ppm grandmasters and a -100 ppm gptp_shadow loop (not for push)

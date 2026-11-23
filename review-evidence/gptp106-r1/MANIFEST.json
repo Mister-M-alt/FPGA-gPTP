@@ -1,1 +1,230 @@
-[]
+[
+  {
+    "file": "author/HANDOFF-r2.md",
+    "original_sha256": "06af783a449a2dc0273fd13100e0d71883f983d1ad07d2b08a1dda6866a33c90",
+    "published_sha256": "0e588ddc478f8a1a60a164c616df7ce8e529ed6dcb4745fd43e637c756bf28bb",
+    "path_redacted": true
+  },
+  {
+    "file": "author/PR-BODY.md",
+    "original_sha256": "2d317291c5d7e1a937ff7eae7effa7dc1adaa74d1e3e4ea5ea3518bfca9e48c2",
+    "published_sha256": "2d317291c5d7e1a937ff7eae7effa7dc1adaa74d1e3e4ea5ea3518bfca9e48c2",
+    "path_redacted": false
+  },
+  {
+    "file": "author/REVIEW-READY.md",
+    "original_sha256": "5afab46b711869ee2204f41d02d896dc3bed105d8c9a1df63ede71e3139c7c77",
+    "published_sha256": "5afab46b711869ee2204f41d02d896dc3bed105d8c9a1df63ede71e3139c7c77",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/INDEX.md",
+    "original_sha256": "6c4cc0dc353d4d634aca119f38d8417cbe1c0aa735dfa5ae86bba4aca2bf2411",
+    "published_sha256": "6c4cc0dc353d4d634aca119f38d8417cbe1c0aa735dfa5ae86bba4aca2bf2411",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/arm-a728cc3.txt",
+    "original_sha256": "b03865713200b37ff5e7a661464a876c870a77f9198045152bea3313e6bee2e8",
+    "published_sha256": "b03865713200b37ff5e7a661464a876c870a77f9198045152bea3313e6bee2e8",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/controls-107-first-run.txt",
+    "original_sha256": "b4f4a11f82eb3839707bdc75d61a83e92ecf0b349d450f42aa14c16c537d625e",
+    "published_sha256": "b4f4a11f82eb3839707bdc75d61a83e92ecf0b349d450f42aa14c16c537d625e",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/gates-processor.txt",
+    "original_sha256": "f376c751d1f21f16d4b7683976b51ac2950b1e7ddcd192b80a0172eec150b115",
+    "published_sha256": "f376c751d1f21f16d4b7683976b51ac2950b1e7ddcd192b80a0172eec150b115",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/gates.txt",
+    "original_sha256": "fbeb706b15e96ba434da408ec3171c7ec4785e18c81cf70ce2aa11ef5986eaab",
+    "published_sha256": "fbeb706b15e96ba434da408ec3171c7ec4785e18c81cf70ce2aa11ef5986eaab",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/near-clamp-C.txt",
+    "original_sha256": "89f99cbee1dbce1331ad2e2d705039a71f7e6edae71e162afd0ea28955cf8cb7",
+    "published_sha256": "89f99cbee1dbce1331ad2e2d705039a71f7e6edae71e162afd0ea28955cf8cb7",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/ooc-r2.txt",
+    "original_sha256": "bb9b4e50620e030c2273cb2e8d3cdea0d4587ab228081d5144daff9fd2f80e13",
+    "published_sha256": "bb9b4e50620e030c2273cb2e8d3cdea0d4587ab228081d5144daff9fd2f80e13",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/parent-gm_steps.txt",
+    "original_sha256": "708ee7d1590a5eec1ddf4e29548a62f2dce07209bf36136d878f6135a5e829fa",
+    "published_sha256": "708ee7d1590a5eec1ddf4e29548a62f2dce07209bf36136d878f6135a5e829fa",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/parent-gptp_shadow.txt",
+    "original_sha256": "1fff4473020d3420328ed944323fd915925f59cc91226ea0b1e3fd1b68cfb5f3",
+    "published_sha256": "1fff4473020d3420328ed944323fd915925f59cc91226ea0b1e3fd1b68cfb5f3",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/parent-milan_dp-gptp.txt",
+    "original_sha256": "5cb34ec2947999b8c35b43d8980d6f93c380a542cacbd4f9d86081db25466fea",
+    "published_sha256": "5cb34ec2947999b8c35b43d8980d6f93c380a542cacbd4f9d86081db25466fea",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/parent-ratchets.txt",
+    "original_sha256": "56a667ca0401fc50091c6e0a08e3b6c18bbd3784a1f4f3ccc51e5b8236077649",
+    "published_sha256": "56a667ca0401fc50091c6e0a08e3b6c18bbd3784a1f4f3ccc51e5b8236077649",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/parent-takeover-gate.txt",
+    "original_sha256": "253b9e4f161bd18d42fbf9d16f3a3afee7960b85da0fe7f68110aa457951f52c",
+    "published_sha256": "253b9e4f161bd18d42fbf9d16f3a3afee7960b85da0fe7f68110aa457951f52c",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/routes.txt",
+    "original_sha256": "fbf4dee3ebb73de3088dfba05ac7628007203a2d616a1efd8fa2fb2dc0679225",
+    "published_sha256": "fbf4dee3ebb73de3088dfba05ac7628007203a2d616a1efd8fa2fb2dc0679225",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/armslice.sh",
+    "original_sha256": "d037f4c6e62c0b1c12a6a0b12d3faf68ad33de14466ddd2c10d1cc9da6b8719d",
+    "published_sha256": "ead536a2f1c43789cbb7d6998383f01970158bcc599891ff3547691c8c6e7fe5",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/dpgptp.sh",
+    "original_sha256": "527a67473a45a4d898b21f84963f9f7735095dcc461b93005c612e6c32851f98",
+    "published_sha256": "325e857b1f2391974c87d4ca680a9b0fc89d20593a542744641d07108468125d",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/gmsteps.sh",
+    "original_sha256": "ea9f300c1d082ee5299080c3dabfea490c2f922e55eaa819050d236a44e3ab0f",
+    "published_sha256": "cdbd5b9debc17fec7aeecff47b2215b06321e11ec14797cace40bba3f9ff90dc",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/gmtake.sh",
+    "original_sha256": "7b108aa2e54aecfd1c04635748b15b8e603816f254043d2db1c3bb5638c15cf4",
+    "published_sha256": "2ec480d6624252d509393a064f96ba193122679446bd60566f734f0603fe5960",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/gmtake2.sh",
+    "original_sha256": "f782ba24eaf9968dd6bc38eebd414440a8e3d1e662c9f2faa7c9b5d7757feb20",
+    "published_sha256": "f782ba24eaf9968dd6bc38eebd414440a8e3d1e662c9f2faa7c9b5d7757feb20",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/leg4.sh",
+    "original_sha256": "825b7ae456e9984f9f0968f5b5e62b4526257a3ca04c513cc5c4869d7d24011b",
+    "published_sha256": "825b7ae456e9984f9f0968f5b5e62b4526257a3ca04c513cc5c4869d7d24011b",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/mutslice.py",
+    "original_sha256": "c18ee67adcda42c361e60b1c579e1a4f029d162eab96337d08bc2ba0be25bec5",
+    "published_sha256": "41345791f7975d27eb50fb583917571188b79bc74fe6f0f3f35270dcd5794533",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/oocsum.sh",
+    "original_sha256": "9f39a6aad68782ecefa519d2d7dd308d008ac7db33aa6e2f8daabdc5b508dc56",
+    "published_sha256": "9f39a6aad68782ecefa519d2d7dd308d008ac7db33aa6e2f8daabdc5b508dc56",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/penv.sh",
+    "original_sha256": "84a8a566e41e80bf5219e3caae5fbc3f0438789e27ff1c1cae68c1055ed85cfc",
+    "published_sha256": "4fa63b4dbe43896d495d9ff8b64c69c92a79d3f8500618ee0f6a4f70bbdd63b2",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/privcheck.py",
+    "original_sha256": "f362b8825bfcdc14d7c4e26c46b0ce6a208c455451df2381f4ad969d2fa59155",
+    "published_sha256": "f362b8825bfcdc14d7c4e26c46b0ce6a208c455451df2381f4ad969d2fa59155",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/lane/shadow2.sh",
+    "original_sha256": "8e01e30a246254c913b89a23e6176964095e5bea2bacafe0c09084f42525cdfe",
+    "published_sha256": "57d583d991283199c69a5f0556dc8c700371196455edaf67d0ad05e1ba54e928",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/near-clamp-experiment.patch",
+    "original_sha256": "02596336827c571eb126ec9bc786d07169ede8a3190a8719e700d5a10587534a",
+    "published_sha256": "7d9922938038467be00d2fab456d6979b023d171fbe4f8d9b358d205479462d7",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/parent-scratch-gate.commits",
+    "original_sha256": "02936a1c49b8f6a35103e777be1f07ee858cfa2d01bd1d907515bd915adc0c6b",
+    "published_sha256": "02936a1c49b8f6a35103e777be1f07ee858cfa2d01bd1d907515bd915adc0c6b",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/parent-scratch-gate.patch",
+    "original_sha256": "e5c66577b69da99aa2965409a0776457d62672b0c6af2d84004f19eb99ab393c",
+    "published_sha256": "e5c66577b69da99aa2965409a0776457d62672b0c6af2d84004f19eb99ab393c",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/route/clone.sh",
+    "original_sha256": "2eb4a808fbfafad80349d479bfc881a84766c1eb8b671073c88166640c27527f",
+    "published_sha256": "1080d4e5363a63c0e9b6e1efd06b7379e979dfb644216c717a7b9b26d56220c7",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/route/paths3.py",
+    "original_sha256": "ef9b054cb331a57b96158202cd986d37466adfdb5703022058ee6eb8f85dbaf0",
+    "published_sha256": "ef9b054cb331a57b96158202cd986d37466adfdb5703022058ee6eb8f85dbaf0",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/route/prep.sh",
+    "original_sha256": "e45db4f3022f50c44fa00085293f79013f7ccbef322c7a7ea6e9644acb6f8c4f",
+    "published_sha256": "f34d7ff1139e76337a091230336b7dde977dea03cfb71f0ec22090e52e9189c2",
+    "path_redacted": true
+  },
+  {
+    "file": "author/receipts/tools-r2/route/route.sh",
+    "original_sha256": "e0f5ddfb259857219951681e274acb9d6e2084e33557ddc209be0467e2305697",
+    "published_sha256": "e0f5ddfb259857219951681e274acb9d6e2084e33557ddc209be0467e2305697",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/route/routes_receipt.sh",
+    "original_sha256": "8361221be999a5aab8664187a1ca179b53cab1ceb1753466b7b88dd51b8eaf97",
+    "published_sha256": "8361221be999a5aab8664187a1ca179b53cab1ceb1753466b7b88dd51b8eaf97",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/route/signoff.py",
+    "original_sha256": "2900ae1a5485933c787e7376f816e69539b6cbd4b6a83160b5a5856572c999ec",
+    "published_sha256": "2900ae1a5485933c787e7376f816e69539b6cbd4b6a83160b5a5856572c999ec",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/route/util.sh",
+    "original_sha256": "fa24cec1c58bcab78d4a30ecabee36543da59fa405a6f0f9b2408f236a140d9c",
+    "published_sha256": "fa24cec1c58bcab78d4a30ecabee36543da59fa405a6f0f9b2408f236a140d9c",
+    "path_redacted": false
+  },
+  {
+    "file": "author/receipts/tools-r2/route/worst10.py",
+    "original_sha256": "9df1ffbe2684251ce72ab0341231d59ad90fcc0f6cdfaa6beb578f7a7b6ee1ab",
+    "published_sha256": "9df1ffbe2684251ce72ab0341231d59ad90fcc0f6cdfaa6beb578f7a7b6ee1ab",
+    "path_redacted": false
+  }
+]

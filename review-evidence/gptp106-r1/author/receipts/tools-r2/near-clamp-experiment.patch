@@ -1,0 +1,53 @@
+--- $LANES/gptp106-107/tb/verilator/engine/sim_main.cpp	2026-11-23 13:53:54.834134234 +0100
++++ sim_main.cpp	2026-11-23 14:19:09.786018427 +0100
+@@ -8183,6 +8183,7 @@
+ 
+   //! Follow the #107 master for `pairs` pairs and grade the last 80 (10 s):
+   //! the mean trim within 0.2 ppm of its rate, every offset within 1 us
++  int x_last_bad = -1;
+   bool p107_follow(const char *tag, int pairs) {
+     char n[128];
+     size_t from = adj_seen.size();
+@@ -8195,7 +8196,15 @@
+       const int64_t off = p107_pair(k);
+       const int64_t mag = off < 0 ? -off : off;
+       worst = mag > worst ? mag : worst;
++      if (mag > 1000) x_last_bad = k;
++      if (getenv("A831_X") && (k < 12 || k % 8 == 0))
++        printf("X %s k=%d off=%lld adj=%d steps=%zu\n", tag, k, (long long)off,
++               (int)static_cast<int32_t>(last_adj()), steps_seen.size());
+     }
++    if (getenv("A831_X"))
++      printf("X %s: every offset within 1 us from %.3f s on\n", tag,
++             (x_last_bad + 1) * 0.125);
++    x_last_bad = -1;
+     const double mean = mean_trim_ppm_since(from);
+     printf("INFO %s: master %+.3f ppm, mean trim over the last 10 s %+.4f ppm, "
+            "worst offset %lld ns\n", tag, p107_rate, mean,
+@@ -8231,10 +8240,13 @@
+   // is within 0.2 ppm of the grandmaster's rate and the offset within 1 us
+   void follow_grandmasters_across_the_b11_range() {
+     const struct { const char *tag; double ppm; } cases[] = {
+-        {"#107 a grandmaster +10 ppm", 10.0},
+-        {"#107 a grandmaster -10 ppm", -10.0},
+-        {"#107 a grandmaster +100 ppm", 100.0},
+-        {"#107 a grandmaster -100 ppm", -100.0},
++        {"#107 X +10", 10.0},
++        {"#107 X +197 (estimate +10)", 197.0},
++        {"#107 X -100", -100.0},
++        {"#107 X -197 (estimate -100)", -197.0},
++        {"#107 X +197 (estimate -197)", 197.0},
++        {"#107 X +199 (estimate +197)", 199.0},
++        {"#107 X -199 (estimate +199)", -199.0},
+     };
+     pd_mode = PD_NORMAL;
+     auto_txts = true;
+@@ -8242,7 +8254,7 @@
+            wait_flags(FL_ASCAP | FL_AMGM, FL_ASCAP | FL_AMGM, 8000000ull), 1);
+     for (const auto &c : cases) {
+       p107_start(c.ppm);
+-      p107_follow(c.tag, 120);
++      p107_follow(c.tag, 480);
+       p107_stop(c.tag);
+     }
+   }

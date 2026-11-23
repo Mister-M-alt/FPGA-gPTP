@@ -1,0 +1,125 @@
+# parent takeover gate (D1 = C): milan_dp gmstep with every phase, then the scratch #107 takeover phase (--takeovers), scratch parent 000aef1c42 with gptp-processor a728cc3, Verilator 5.050
+The phase: a better grandmaster +100 ppm (then -100 ppm) from this station's oscillator, starting at this station's time, the peer's media following it; 6 s of follow; then it falls silent (Pdelay answers continue); the 375 ms Sync receipt timeout makes this station grandmaster; the peer's media follows this station 1 ms later. Graded across the takeover window (silence to +1 s and the counter reads). The follow lines are reported, not graded.
+Model: 2 MHz fabric, 8 ns PHC, CLKV quarter tick 131072 cycles (the 0.25 s holdover, compressed); the CRF servo is not modelled (sim_gmstep.cpp banner), so media lock is the Stream Input's MEDIA_UNLOCKED counter and the render stage's presentation.
+
+gmstep-takeovers-try1 rc=1 940s
+gmstep-takeovers-try2 rc=1 557s
+gmstep-takeovers rc=0 1055s
+## final run
+RENDER: 107 takeover from +100 ppm: the follow: 51968 PDUs graded, 51967 presented once in order, 0 refused, 1 in part, 0 out of order; send-to-presentation 3928..3969 cycles
+107: 107 takeover from +100 ppm: following, the PHC runs +100.000 ppm; the render stage refused 0, slipped 2
+  [ ok ] 107 takeover from +100 ppm: this station follows the grandmaster within 1 ppm
+  [ ok ] 107 takeover from +100 ppm: the published grandmaster is the peer's got=0xcceefffe070800 exp=0xcceefffe070800
+  [ ok ] 107 takeover from +100 ppm: tu clear before the takeover got=0 exp=0
+  [ ok ] 107 takeover from +100 ppm: this station is grandmaster within 375 ms of the last Sync
+107: 107 takeover from +100 ppm: grandmaster after 609137 cycles of silence; the PHC then runs +0.000 ppm
+  [ ok ] 107 takeover from +100 ppm: as grandmaster the PHC runs on this oscillator, within 0.2 ppm
+  [ ok ] 107 takeover from +100 ppm: no PHC step across the takeover
+  [ ok ] 107 takeover from +100 ppm: asCapable held every cycle got=0 exp=0
+  [ ok ] 107 takeover from +100 ppm: tu set in the first cycle the bank names this station got=1 exp=1
+107: 107 takeover from +100 ppm: tu held 165528 cycles (quarter tick 131072), 1 episodes
+  [ ok ] 107 takeover from +100 ppm: tu held at least the 0.25 s holdover
+  [ ok ] 107 takeover from +100 ppm: tu cleared within the holdover's bound
+  [ ok ] 107 takeover from +100 ppm: one tu episode got=1 exp=1
+  [ ok ] 107 takeover from +100 ppm: talker PDUs graded inside and after the hold
+  [ ok ] 107 takeover from +100 ppm: every talker PDU carries the verdict of its instant got=0 exp=0
+  [ ok ] 107 takeover from +100 ppm: one GPTP_GM_CHANGED got=1 exp=1
+  [ ok ] 107 takeover from +100 ppm: no MEDIA_RESET got=0 exp=0
+  [ ok ] 107 takeover from +100 ppm: no outgoing mr change got=0 exp=0
+107: 107 takeover from +100 ppm: the listener and the talker across the takeover
+  [ ok ] licence: the talker gate is open after the event got=0x8 exp=0x8
+  [ ok ] licence: no talker sequence gap across the event got=0 exp=0
+TALKER: 4088 PDUs over 2624766 cycles to the window end (baseline rate: 4088), longest pause 808, last PDU 270 cycles before the end
+  [ ok ] licence: the talker never pauses beyond four of its intervals
+  [ ok ] licence: the talker keeps its baseline rate within 1%
+LISTENER: counters valid 0xfff / 0xfff, EARLY_TIMESTAMP +0, LATE_TIMESTAMP +0, FRAMES_RX +10500 (accepts seen 10479..10521)
+  [ ok ] licence: both Stream Input answers carry MEDIA_UNLOCKED and FRAMES_RX got=0x802 exp=0x802
+  [ ok ] licence: FRAMES_RX advances by the PDUs the listener accepted
+  [ ok ] licence: the listener stays locked (MEDIA_UNLOCKED unchanged) got=0 exp=0
+RENDER: 107 takeover from +100 ppm: across the takeover: 10468 PDUs graded, 10468 presented once in order, 0 refused, 0 in part, 0 out of order; send-to-presentation 3928..3928 cycles
+  [ ok ] 107 takeover from +100 ppm: PDUs graded across the takeover
+  [ ok ] 107 takeover from +100 ppm: every PDU's six events presented once, in order (no lost samples) got=0 exp=0
+  [ ok ] 107 takeover from +100 ppm: the render stage refused nothing got=0 exp=0
+  [ ok ] 107 takeover from +100 ppm: the render stage slipped nothing got=0 exp=0
+  [ ok ] 107 takeover from +100 ppm: every PDU keeps one offset across the takeover
+RENDER: 107 takeover from -100 ppm: the follow: 51968 PDUs graded, 51968 presented once in order, 0 refused, 0 in part, 0 out of order; send-to-presentation 3928..3928 cycles
+107: 107 takeover from -100 ppm: following, the PHC runs -100.125 ppm; the render stage refused 0, slipped 0
+  [ ok ] 107 takeover from -100 ppm: this station follows the grandmaster within 1 ppm
+  [ ok ] 107 takeover from -100 ppm: the published grandmaster is the peer's got=0xcceefffe070801 exp=0xcceefffe070801
+  [ ok ] 107 takeover from -100 ppm: tu clear before the takeover got=0 exp=0
+  [ ok ] 107 takeover from -100 ppm: this station is grandmaster within 375 ms of the last Sync
+107: 107 takeover from -100 ppm: grandmaster after 608471 cycles of silence; the PHC then runs +0.000 ppm
+  [ ok ] 107 takeover from -100 ppm: as grandmaster the PHC runs on this oscillator, within 0.2 ppm
+  [ ok ] 107 takeover from -100 ppm: no PHC step across the takeover
+  [ ok ] 107 takeover from -100 ppm: asCapable held every cycle got=0 exp=0
+  [ ok ] 107 takeover from -100 ppm: tu set in the first cycle the bank names this station got=1 exp=1
+107: 107 takeover from -100 ppm: tu held 254168 cycles (quarter tick 131072), 1 episodes
+  [ ok ] 107 takeover from -100 ppm: tu held at least the 0.25 s holdover
+  [ ok ] 107 takeover from -100 ppm: tu cleared within the holdover's bound
+  [ ok ] 107 takeover from -100 ppm: one tu episode got=1 exp=1
+  [ ok ] 107 takeover from -100 ppm: talker PDUs graded inside and after the hold
+  [ ok ] 107 takeover from -100 ppm: every talker PDU carries the verdict of its instant got=0 exp=0
+107: 107 takeover from -100 ppm: Stream Input GET_COUNTERS attempt 1 got no answer (0 AECP frames sent by this station meanwhile); asking again
+107: 107 takeover from -100 ppm: Stream Input GET_COUNTERS attempt 2 got no answer (0 AECP frames sent by this station meanwhile); asking again
+  [ ok ] 107 takeover from -100 ppm: one GPTP_GM_CHANGED got=1 exp=1
+  [ ok ] 107 takeover from -100 ppm: no MEDIA_RESET got=0 exp=0
+  [ ok ] 107 takeover from -100 ppm: no outgoing mr change got=0 exp=0
+107: 107 takeover from -100 ppm: the listener and the talker across the takeover
+  [ ok ] licence: the talker gate is open after the event got=0x8 exp=0x8
+  [ ok ] licence: no talker sequence gap across the event got=0 exp=0
+TALKER: 5334 PDUs over 3424540 cycles to the window end (baseline rate: 5334), longest pause 667, last PDU 259 cycles before the end
+  [ ok ] licence: the talker never pauses beyond four of its intervals
+  [ ok ] licence: the talker keeps its baseline rate within 1%
+LISTENER: counters valid 0xfff / 0xfff, EARLY_TIMESTAMP +0, LATE_TIMESTAMP +0, FRAMES_RX +13698 (accepts seen 10476..13719)
+  [ ok ] licence: both Stream Input answers carry MEDIA_UNLOCKED and FRAMES_RX got=0x802 exp=0x802
+  [ ok ] licence: FRAMES_RX advances by the PDUs the listener accepted
+  [ ok ] licence: the listener stays locked (MEDIA_UNLOCKED unchanged) got=0 exp=0
+RENDER: 107 takeover from -100 ppm: across the takeover: 13666 PDUs graded, 13666 presented once in order, 0 refused, 0 in part, 0 out of order; send-to-presentation 3928..3928 cycles
+  [ ok ] 107 takeover from -100 ppm: PDUs graded across the takeover
+  [ ok ] 107 takeover from -100 ppm: every PDU's six events presented once, in order (no lost samples) got=0 exp=0
+  [ ok ] 107 takeover from -100 ppm: the render stage refused nothing got=0 exp=0
+  [ ok ] 107 takeover from -100 ppm: the render stage slipped nothing got=0 exp=0
+  [ ok ] 107 takeover from -100 ppm: every PDU keeps one offset across the takeover
+simulated_cycles=86972296
+== gmstep: checks: 252   failures: 0 ==
+RESULT: PASS
+
+## earlier tries (harness defects in the scratch phase, fixed; the takeover checks themselves passed in both)
+try 1: the phase began with check_slew_connection's origin override still set and the PHC moved by check_coincident_restart's settime trials, so this station never followed the new grandmaster and its media was refused: 8 failures, none in the takeover checks proper
+  [FAIL] 107 takeover from +100 ppm: this station follows the grandmaster within 1 ppm
+  [FAIL] 107 takeover from +100 ppm: every PDU's six events presented once, in order (no lost samples) got=10468 exp=0
+  [FAIL] 107 takeover from +100 ppm: the render stage refused nothing got=10500 exp=0
+  [FAIL] 107 takeover from -100 ppm: this station follows the grandmaster within 1 ppm
+  [FAIL] licence: both Stream Input answers carry MEDIA_UNLOCKED and FRAMES_RX got=0x0 exp=0x802
+  [FAIL] licence: FRAMES_RX advances by the PDUs the listener accepted
+  [FAIL] licence: the listener stays locked (MEDIA_UNLOCKED unchanged) got=3735928559 exp=0
+  [FAIL] 107 takeover from -100 ppm: every PDU's six events presented once, in order (no lost samples) got=12044 exp=0
+try 2: one Stream Input GET_COUNTERS unanswered within 400,000 cycles after the -100 ppm takeover (marker values), so its three counter checks failed; the final run asks again and prints each retry
+  [FAIL] licence: both Stream Input answers carry MEDIA_UNLOCKED and FRAMES_RX got=0x0 exp=0x802
+  [FAIL] licence: FRAMES_RX advances by the PDUs the listener accepted
+  [FAIL] licence: the listener stays locked (MEDIA_UNLOCKED unchanged) got=3735928559 exp=0
+
+## control: the same harness at the base pin (parent 854bd72367, gptp-processor 1616fc8f, the mastership keeping the slave's rate)
+gmstep-base-takeovers rc=1 1160s
+RENDER: 107 takeover from +100 ppm: the follow: 51968 PDUs graded, 51965 presented once in order, 1 refused, 2 in part, 0 out of order; send-to-presentation 3928..4303 cycles
+107: 107 takeover from +100 ppm: following, the PHC runs +100.000 ppm; the render stage refused 0, slipped 13
+107: 107 takeover from +100 ppm: grandmaster after 609108 cycles of silence; the PHC then runs +100.000 ppm
+  [FAIL] 107 takeover from +100 ppm: as grandmaster the PHC runs on this oscillator, within 0.2 ppm
+107: 107 takeover from +100 ppm: tu held 165557 cycles (quarter tick 131072), 1 episodes
+107: 107 takeover from +100 ppm: the listener and the talker across the takeover
+LISTENER: counters valid 0xfff / 0xfff, EARLY_TIMESTAMP +0, LATE_TIMESTAMP +0, FRAMES_RX +10500 (accepts seen 10479..10521)
+RENDER: 107 takeover from +100 ppm: across the takeover: 10468 PDUs graded, 10468 presented once in order, 0 refused, 0 in part, 0 out of order; send-to-presentation 3928..3928 cycles
+RENDER: 107 takeover from -100 ppm: the follow: 51968 PDUs graded, 51968 presented once in order, 0 refused, 0 in part, 0 out of order; send-to-presentation 3928..3928 cycles
+107: 107 takeover from -100 ppm: following, the PHC runs -99.875 ppm; the render stage refused 0, slipped 0
+107: 107 takeover from -100 ppm: grandmaster after 608442 cycles of silence; the PHC then runs -99.875 ppm
+  [FAIL] 107 takeover from -100 ppm: as grandmaster the PHC runs on this oscillator, within 0.2 ppm
+107: 107 takeover from -100 ppm: tu held 254197 cycles (quarter tick 131072), 1 episodes
+107: 107 takeover from -100 ppm: Stream Input GET_COUNTERS attempt 1 got no answer (0 AECP frames sent by this station meanwhile); asking again
+107: 107 takeover from -100 ppm: Stream Input GET_COUNTERS attempt 2 got no answer (0 AECP frames sent by this station meanwhile); asking again
+107: 107 takeover from -100 ppm: the listener and the talker across the takeover
+LISTENER: counters valid 0xfff / 0xfff, EARLY_TIMESTAMP +0, LATE_TIMESTAMP +0, FRAMES_RX +13698 (accepts seen 10476..13719)
+RENDER: 107 takeover from -100 ppm: across the takeover: 13666 PDUs graded, 13666 presented once in order, 0 refused, 0 in part, 0 out of order; send-to-presentation 3928..3928 cycles
+== gmstep: checks: 252   failures: 2 ==
+RESULT: FAIL
+
+Reading: at the base the two oscillator checks fail (the PHC keeps +100.000 / -99.875 ppm as grandmaster) and nothing else in the phase does, so the gate tells the two policies apart. The Stream Input GET_COUNTERS that goes unanswered twice after the -100 ppm takeover (no AECP frame from this station for about 0.4 s) happens at the base as well: it is not from #107. The follow's slips (head 2, base 13, both in the +100 ppm GM change, before any takeover) are the GM change into a grandmaster 100 ppm away, reported only.
