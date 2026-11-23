@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: CERN-OHL-W-2.0
 """The #107 controls of the engine mutation arm (`mutants.py`).
 
-FPGA-gPTP #107: this plane follows grandmasters across 802.1AS-2020
-B.1.1's range, and a mastership runs on this oscillator (10.1.2.1,
-10.2.4.14). BECOME's PHC word-3 write carries rate 0 in its low word, which
-the engine always applies, and the integrator in its high word, which is
-the frequency change scaledLastGmFreqChange sends (11.4.4.3.9). Each
-control here lists, after its issue number, every named check it must
-fail. `mutants.py` runs them with the rest of the arm.
+FPGA-gPTP #107: this plane follows grandmasters up to +-100 ppm from this
+oscillator, and a mastership runs on this oscillator (802.1AS-2020
+10.1.2.1, 10.2.4.14). BECOME's PHC word-3 write carries rate 0 in its
+low word, which the engine always applies, and the integrator in its
+high word, which is the frequency change scaledLastGmFreqChange sends
+(11.4.4.3.9). Each control here lists, after its issue number, every
+named check it must fail. `mutants.py` runs them with the rest of the
+arm.
 
 The table lives in its own module so that the arm stays under the parent
 repository's module length ratchet. It is data only.

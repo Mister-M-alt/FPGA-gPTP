@@ -8102,7 +8102,7 @@ class GptpEngineHarness {
   // ========================= #107: rates against this oscillator ===========
   //! phases 59 to 61, in file order
   void run_the_rate_phases() {
-    follow_grandmasters_across_the_b11_range();
+    follow_grandmasters_at_10_and_100_ppm();
     run_on_this_oscillator_after_a_takeover();
     report_the_frequency_change_of_the_time_base();
   }
@@ -8222,14 +8222,18 @@ class GptpEngineHarness {
     return m;
   }
 
-  // ---- 59: #107, grandmasters across 802.1AS-2020 B.1.1's range ----------
-  // B.1.1 bounds every LocalClock to +-100 ppm of TAI, so a slave whose own
-  // oscillator is in bounds must follow a grandmaster up to 200 ppm from it.
-  // This plane's whole trim is clamped to RATE_PPM_C, +-200 ppm. Against
-  // this plane's oscillator, grandmasters at +10, -10, +100 and -100 ppm in
-  // turn, each from mastership: within 30 s the mean trim of the last 10 s
-  // is within 0.2 ppm of the grandmaster's rate and the offset within 1 us
-  void follow_grandmasters_across_the_b11_range() {
+  // ---- 59: #107, grandmasters 10 and 100 ppm from this oscillator --------
+  // #107 asks for +-100 ppm. This plane's whole trim is clamped to the
+  // envelope ppm_addend(RATE_PPM_C, clk), +-200.000048 ppm at this suite's
+  // 2 MHz. 802.1AS-2020 B.1.1 bounds each LocalClock to +-100 ppm of TAI, so
+  // a LocalClock 100 ppm slow following a grandmaster 100 ppm fast needs
+  // +200.020002 ppm, just beyond that envelope; this phase does not grade
+  // that corner (docs/INTEGRATION.md, Rate envelope). Against this plane's
+  // oscillator, grandmasters at +10, -10, +100 and -100 ppm in turn, each
+  // from mastership, each for 120 Sync pairs, grading the last 80 pairs: the
+  // mean trim is within 0.2 ppm of the grandmaster's rate and the offset
+  // within 1 us
+  void follow_grandmasters_at_10_and_100_ppm() {
     const struct { const char *tag; double ppm; } cases[] = {
         {"#107 a grandmaster +10 ppm", 10.0},
         {"#107 a grandmaster -10 ppm", -10.0},
@@ -8238,7 +8242,7 @@ class GptpEngineHarness {
     };
     pd_mode = PD_NORMAL;
     auto_txts = true;
-    expect("#107 B.1.1 range: runs from a capable master",
+    expect("#107 follow: runs from a capable master",
            wait_flags(FL_ASCAP | FL_AMGM, FL_ASCAP | FL_AMGM, 8000000ull), 1);
     for (const auto &c : cases) {
       p107_start(c.ppm);
@@ -8279,7 +8283,7 @@ class GptpEngineHarness {
              "trim unit", tag);
     expect(n, adj_seen.size() == a0 + 1 && rate <= 1 && rate >= -1, 1);
     // documented, not graded: the change reported is the integrator's,
-    // which the jump wound (no anti-windup, the 2026-11-23 ruling)
+    // which the jump wound (no anti-windup: #107, the servo unchanged)
     tx_seen = mark;
     size_t idx = 0;
     const std::vector<uint8_t> fu = wait_tx(0x8, 800000, &idx);
@@ -8304,8 +8308,9 @@ class GptpEngineHarness {
   // it replaced, and 11.4.4.3.9 carries it scaled by 2^41. With origins
   // that carry the board's timestamp error (+-8 ns, the 1 Gb/s symbol
   // period), this plane follows a grandmaster 10 ppm fast, then one 10 ppm
-  // slow, then 10 ppm fast again, each for 30 s, and replaces each. Each
-  // time, the scaledLastGmFreqChange of three Follow_Ups of the new
+  // slow, then 10 ppm fast again,
+  // each for 120 Sync pairs, grading the last 80 pairs, and replaces each.
+  // Each time, the scaledLastGmFreqChange of three Follow_Ups of the new
   // mastership is within 50 % of 2^41 x (0 - the departed grandmaster's
   // rate), the grading the qual applies, or within 2,199 (1 ppb) of it
   void report_the_frequency_change_of_the_time_base() {
