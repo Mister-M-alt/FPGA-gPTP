@@ -205,6 +205,7 @@ Values here come from the [protocol constants](INTEGRATION.md#protocol-constants
 - Grades ten gaps up to 10 ms past 3 s.
 - Announces at once on regaining mastership, then once a second.
 - Announces first when a better Announce follows within 1 ms.
+- Follows grandmasters across the B.1.1 range (#107).
 - Proves its own checks through planted defects.
 
 ### Bench-tag suite

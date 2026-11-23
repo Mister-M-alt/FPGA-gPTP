@@ -417,6 +417,18 @@ The trim sums a proportional and an integral term.
 
 That whole trim never exceeds [`RATE_PPM_C`](#protocol-constants) in magnitude.
 
+That bound is the follow range against this oscillator (#107).
+
+B.1.1 bounds each LocalClock by [`LOCAL_CLOCK_PPM_C`](#protocol-constants).
+
+Twice that bound fits inside the envelope.
+
+So any conforming grandmaster can be followed.
+
+The suite follows four grandmasters across that range.
+
+Each settles within 0.2 ppm of its rate.
+
 The integrator is clamped to the same bound.
 
 In addend units the bound is this integer expression:

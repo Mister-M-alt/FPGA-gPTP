@@ -268,6 +268,11 @@
 //         first master Announce leaves within 1 ms, then four more each 1 s
 //         after the one before; with a better Announce 1 ms behind the worse
 //         one, the master Announce still leaves first
+// 59      #107: grandmasters at +10, -10, +100 and -100 ppm against this
+//         plane's oscillator, each from mastership: the mean trim of the
+//         last 10 s settles within 0.2 ppm of the grandmaster's rate and the
+//         offset stays within 1 us (802.1AS-2020 B.1.1: two LocalClocks each
+//         within 100 ppm of TAI)
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255 and
 // --clock-accuracy 0xFE) runs only the phases a self publication passes
@@ -476,6 +481,7 @@ class GptpEngineHarness {
     run_the_port_enable_phases();
     run_the_followup_tlv_phases();
     run_the_mastership_wire_phases();
+    run_the_rate_phases();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -8035,6 +8041,152 @@ class GptpEngineHarness {
                dut->pub_gm_id_o == P100_GM, 1);
     p100_sync_src = 0;
     run_svc(400000);
+  }
+
+  // ========================= #107: rates against this oscillator ===========
+  //! phase 59
+  void run_the_rate_phases() {
+    follow_grandmasters_across_the_b11_range();
+  }
+
+  //! the #107 grandmaster, announcing from its own port
+  static constexpr uint64_t P107_GM = 0x00A107FFFE000001ull;
+  static constexpr uint64_t P107_SRC = 0x00A107FFFE000002ull;
+  //! one ppm of this suite's 2 MHz clock in trim units, 2^24 * 1000 / 2e6
+  static constexpr double UNITS_PER_PPM = 8388.608;
+  //! The #107 master: its time is p107_base plus 500 ns per cycle, `rate`
+  //! ppm fast against this plane's oscillator, plus a deterministic
+  //! timestamp error of up to +-p107_noise ns on each origin
+  uint64_t p107_base = 0;
+  double p107_rate = 0.0;
+  uint64_t p107_noise = 0;
+  uint32_t p107_lcg = 12345u;
+  uint16_t p107_seq = 0xB001;
+  uint16_t p107_aseq = 0xB101;
+
+  uint64_t p107_master_time() const {
+    return p107_base + cyc * 500ull +
+           static_cast<uint64_t>(llround(static_cast<double>(cyc) * 500.0 *
+                                         p107_rate * 1e-6));
+  }
+
+  //! Start the #107 master `ppm` fast, 1.5 ms ahead of this plane's time,
+  //! so its first pair steps
+  void p107_start(double ppm) {
+    p107_rate = ppm;
+    p107_base = 0;
+    p107_base = phc() + 1500000ull - p107_master_time() + p107_base;
+  }
+
+  //! One 125 ms interval of the #107 master: service, a fresh Announce every
+  //! eighth pair, then a pair stamped by our own PHC. Returns the offset the
+  //! plane measures (local minus master, less the modelled link delay)
+  int64_t p107_pair(int k) {
+    if (k % 8 == 0) {
+      Frame a = ptp(0xB, p107_aseq++, 0, 0x0008, 30 + 4 + 16, P107_SRC);
+      for (int i = 0; i < 10; i++) a.u8(0);
+      a.u16(0xFFC4); a.u8(0);
+      a.u8(50); a.u32(OUR_CQ); a.u8(248);
+      a.u64(P107_GM);
+      a.u16(1); a.u8(0xA0);
+      a.u16(0x0008); a.u16(16); a.u64(P107_GM); a.u64(P107_SRC);
+      send_frame(a.b, phc() + 100);
+      run(4000);
+    }
+    run_svc(250000);
+    const uint64_t local_rx = phc() + 150;
+    int64_t err = 0;
+    if (p107_noise != 0) {
+      p107_lcg = p107_lcg * 1103515245u + 12345u;
+      err = static_cast<int64_t>((p107_lcg >> 8) % (2 * p107_noise + 1)) -
+            static_cast<int64_t>(p107_noise);
+    }
+    const uint64_t origin =
+        p107_master_time() + static_cast<uint64_t>(err);
+    const uint16_t seq = p107_seq++;
+    Frame f = ptp(0x0, seq, 0, 0x0208, 10, P107_SRC);
+    f.ts(0);
+    send_frame(f.b, local_rx);
+    run(1000);
+    send_frame(follow_up(seq, 0, origin, P107_SRC).b, local_rx + 500);
+    run(4000);
+    return static_cast<int64_t>(local_rx - origin -
+                                static_cast<uint64_t>(pdm.d));
+  }
+
+  //! the mean trim of the addend pulses from index `from` on, in ppm
+  double mean_trim_ppm_since(size_t from) const {
+    double sum = 0.0;
+    size_t n = 0;
+    for (size_t i = from; i < adj_seen.size(); i++, n++)
+      sum += static_cast<double>(static_cast<int32_t>(adj_seen[i]));
+    return n ? sum / static_cast<double>(n) / UNITS_PER_PPM : 1e9;
+  }
+
+  //! Follow the #107 master for `pairs` pairs and grade the last 80 (10 s):
+  //! the mean trim within 0.2 ppm of its rate, every offset within 1 us
+  bool p107_follow(const char *tag, int pairs) {
+    char n[128];
+    size_t from = adj_seen.size();
+    int64_t worst = 0;
+    for (int k = 0; k < pairs; k++) {
+      if (k == pairs - 80) {
+        from = adj_seen.size();
+        worst = 0;
+      }
+      const int64_t off = p107_pair(k);
+      const int64_t mag = off < 0 ? -off : off;
+      worst = mag > worst ? mag : worst;
+    }
+    const double mean = mean_trim_ppm_since(from);
+    printf("INFO %s: master %+.3f ppm, mean trim over the last 10 s %+.4f ppm, "
+           "worst offset %lld ns\n", tag, p107_rate, mean,
+           static_cast<long long>(worst));
+    snprintf(n, sizeof n, "%s: the grandmaster is elected", tag);
+    expect(n, (dut->pub_flags_o & 3) == FL_PRESENT &&
+                  dut->pub_gm_id_o == P107_GM, 1);
+    snprintf(n, sizeof n, "%s: the trim settles within 0.2 ppm of it", tag);
+    const bool settled = mean - p107_rate <= 0.2 && p107_rate - mean <= 0.2;
+    expect(n, settled, 1);
+    snprintf(n, sizeof n, "%s: its offset stays within 1 us", tag);
+    expect(n, worst <= 1000, 1);
+    return settled;
+  }
+
+  //! Stop the #107 master: no more Sync or Announce, so the Sync receipt
+  //! timeout ages it and this plane takes the role. Returns whether it did
+  bool p107_stop(const char *tag) {
+    char n[128];
+    snprintf(n, sizeof n, "%s: this plane is master after the timeout", tag);
+    const bool m = wait_flags(FL_AMGM, FL_AMGM, 1200000ull);
+    expect(n, m, 1);
+    run_svc(20000);
+    return m;
+  }
+
+  // ---- 59: #107, grandmasters across 802.1AS-2020 B.1.1's range ----------
+  // B.1.1 bounds every LocalClock to +-100 ppm of TAI, so a slave whose own
+  // oscillator is in bounds must follow a grandmaster up to 200 ppm from it.
+  // This plane's whole trim is clamped to RATE_PPM_C, +-200 ppm. Against
+  // this plane's oscillator, grandmasters at +10, -10, +100 and -100 ppm in
+  // turn, each from mastership: within 30 s the mean trim of the last 10 s
+  // is within 0.2 ppm of the grandmaster's rate and the offset within 1 us
+  void follow_grandmasters_across_the_b11_range() {
+    const struct { const char *tag; double ppm; } cases[] = {
+        {"#107 a grandmaster +10 ppm", 10.0},
+        {"#107 a grandmaster -10 ppm", -10.0},
+        {"#107 a grandmaster +100 ppm", 100.0},
+        {"#107 a grandmaster -100 ppm", -100.0},
+    };
+    pd_mode = PD_NORMAL;
+    auto_txts = true;
+    expect("#107 B.1.1 range: runs from a capable master",
+           wait_flags(FL_ASCAP | FL_AMGM, FL_ASCAP | FL_AMGM, 8000000ull), 1);
+    for (const auto &c : cases) {
+      p107_start(c.ppm);
+      p107_follow(c.tag, 120);
+      p107_stop(c.tag);
+    }
   }
 };
 
