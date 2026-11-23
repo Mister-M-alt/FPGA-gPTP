@@ -1,0 +1,20 @@
+# merge probe: head a728cc3 into main 7cfd6a025698de9e3536006eefb46f0fb114692a (fetched 2026-11-23), git merge-tree --write-tree, scratch clone only
+merge-base 1616fc8f062fbf58c35ad31674b5b233207bbdb8
+2620ac24e45b72770ac5bc3a26e1f5ac4adeb424
+tb/verilator/engine/mutants.py
+
+Auto-merging docs/TEST_DEVELOPER.md
+Auto-merging tb/verilator/engine/mutants.py
+CONFLICT (content): Merge conflict in tb/verilator/engine/mutants.py
+merge-tree rc=1
+mutants.py lines: base 999, head 1000, main 863
+main commits since base:
+7cfd6a0 Merge pull request #105 from Mister-M-alt/104-ccache-idiom
+860e474 Give the engine jobs test's runtime as about seven hours on sixteen CPUs (#104)
+ad06db3 Document the engine builds' ccache, its OBJCACHE= switch and the two order tests in the test guide (#104)
+a73258c Compare the engine arm's output at --jobs 1 and 8 with ccache off, cold and warm byte for byte, and check its verdict order inside make all (#104)
+80d1df4 Compile the engine suite's and mutants' Verilator builds through ccache when it is on PATH, OBJCACHE= to turn it off, with no build path in the cache key (#104)
+60a2e3d Annotate and document the engine mutation arm's public functions and move its path controls to path_mutants.py, under 1,000 lines (#104)
+a64be73 Merge pull request #103 from Mister-M-alt/102-parallel-mutants
+97d83a7 Compare the engine mutation arm's --jobs 1 and --jobs 4 output byte for byte (#102)
+ab89c60 Run the engine mutation arm's mutants concurrently, --jobs N at once, printed in list order (#102)

@@ -1,0 +1,9 @@
+# review clone state after all probes (probes ran only in scratch exports)
+HEAD a728cc3ce9d0342aa596c8170fecf1284c0b604c tree d99b9b065b9acebdae5d39519023b785e249222c
+status entries (incl. ignored/untracked): 0
+worktree vs index: identical
+index vs HEAD: identical
+index entries: 117; ls-tree entries: 117
+index modes/blobs equal HEAD's tree
+working-file blob hashes checked: 117
+gitlinks (mode 160000): 0; .gitmodules present: no

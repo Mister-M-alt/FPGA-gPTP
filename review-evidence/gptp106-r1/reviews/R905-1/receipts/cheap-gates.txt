@@ -1,0 +1,12 @@
+# cheap gates at head a728cc3 (scratch export), Verilator: Verilator 5.050 2026-07-01 rev v5.050
+contract rc=0 PHC interface contract: PASS
+lint rc=0 0 warnings/errors
+docs rc=0
+EXACT hdl/top/KL_gptp_engine.sv#L1283 (Registered policy slew level): 2'd3: begin
+EXACT hdl/ucode/gen_gptp_ucode.py#L1116 (Registered policy slew level): def prog_leg_slew(base: int) -> Prog:
+EXACT hdl/wire/KL_gptp_rx_parser.sv#L521 (Ignored receive flag bits): 11'(OFF_FLAGS0_C + 1): flags_r <= acc_nxt_w[15:0];
+source evidence: 20 exact, 0 findings
+python3 scripts/check_source_evidence.py --selftest
+source evidence selftest: PASS (7 arms)
+ucpu rc=0 768 checks: 768 PASS, 0 FAIL
+tsngen rc=0 4 checks: 4 PASS, 0 FAIL

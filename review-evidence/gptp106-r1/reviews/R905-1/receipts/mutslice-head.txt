@@ -1,0 +1,65 @@
+selected 15 controls of 167 arm controls (+probes)
+[PASS] positive control: pass
+-- control 0: the first master Announce waits for a beat: CAUGHT
+FAIL #106 3.0 s, a clock after the tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.00006 s, the lab's tie: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.001 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 regain: the first master Announce leaves at once got 0000000000000000 exp 0000000000000001
+FAIL #106 regain race: one master Announce leaves before the better one is taken got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the first master Announce waits for a beat - breaks "#106 3.0 s, a clock after the tick: a master Announce on the wire after the instant | #106 3.00006 s, the lab's tie: a master Announce on the wire after the instant | #106 3.001 s: a master Announce on the wire after the instant | #106 regain: the first master Announce leaves at once | #106 regain race: one master Announce leaves before the better one is taken"
+-- control 1: the first master Announce starts no cadence: CAUGHT
+FAIL #106 regain: four more master Announces, each 1 s after the one before got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the first master Announce starts no cadence - breaks "#106 regain: four more master Announces, each 1 s after the one before"
+-- control 2: a mastership keeps the slave's rate: CAUGHT
+FAIL #107 takeover: one rate write, this oscillator's within one trim unit got 0000000000000000 exp 0000000000000001
+FAIL slew: mastership runs on this oscillator got 00000000ffe66667 exp 0000000000000000
+FAIL #100 TLV settled: BECOME writes rate 0, this oscillator got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a mastership keeps the slave's rate - breaks "#107 takeover: one rate write, this oscillator's within one trim unit | slew: mastership runs on this oscillator | #100 TLV settled: BECOME writes rate 0, this oscillator"
+-- control 3: word 3 applies only during a slew: CAUGHT
+FAIL #100 TLV settled: BECOME writes rate 0, this oscillator got 0000000000000000 exp 0000000000000001
+FAIL slew: idle timeout writes only mastership's rate 0 got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV unfollowed: BECOME writes rate 0, and only it got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: word 3 applies only during a slew - breaks "#100 TLV settled: BECOME writes rate 0, this oscillator | slew: idle timeout writes only mastership's rate 0 | #107 TLV unfollowed: BECOME writes rate 0, and only it"
+-- control 4: scaledLastGmFreqChange has its sign inverted: CAUGHT
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: scaledLastGmFreqChange has its sign inverted - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate | #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate | #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base | #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base"
+-- control 5: scaledLastGmFreqChange is the last trim's: CAUGHT
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: scaledLastGmFreqChange is the last trim's - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate | #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate"
+-- control 6: scaledLastGmFreqChange is scaled by 2^39: CAUGHT
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: scaledLastGmFreqChange is scaled by 2^39 - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate | #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base | #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base"
+-- control 7: a mastership leaves the slave rate seen: CAUGHT
+FAIL #107 TLV unfollowed: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a mastership leaves the slave rate seen - breaks "#107 TLV unfollowed: scaledLastGmFreqChange is rate 0 less the estimate"
+-- control 8: the trim stops short of a grandmaster 100 ppm away: CAUGHT
+FAIL #107 a grandmaster +100 ppm: the trim settles within 0.2 ppm of it got 0000000000000000 exp 0000000000000001
+FAIL #107 a grandmaster +100 ppm: its offset stays within 1 us got 0000000000000000 exp 0000000000000001
+FAIL #107 a grandmaster -100 ppm: the trim settles within 0.2 ppm of it got 0000000000000000 exp 0000000000000001
+FAIL #107 a grandmaster -100 ppm: its offset stays within 1 us got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the trim stops short of a grandmaster 100 ppm away - breaks "#107 a grandmaster +100 ppm: the trim settles within 0.2 ppm of it | #107 a grandmaster +100 ppm: its offset stays within 1 us | #107 a grandmaster -100 ppm: the trim settles within 0.2 ppm of it | #107 a grandmaster -100 ppm: its offset stays within 1 us"
+-- control 9: scaledLastGmFreqChange is the rate written: CAUGHT
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: scaledLastGmFreqChange is the rate written - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate | #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate"
+-- control 10: a rate unknown since reset is taken as zero: CAUGHT
+FAIL #100 TLV: a mastership after a warm reset, no rate written since, carries no phase or frequency change got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a rate unknown since reset is taken as zero - breaks "#100 TLV: a mastership after a warm reset, no rate written since, carries no phase or frequency change"
+-- control 11: R905 probe: slave rate seen on any addend pulse: CAUGHT
+FAIL #107 TLV unfollowed: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: R905 probe: slave rate seen on any addend pulse - breaks "#107 TLV unfollowed: scaledLastGmFreqChange is rate 0 less the estimate"
+-- control 12: R905 probe: BECOME's high word is zero: CAUGHT
+FAIL #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate got 0000000000000000 exp 0000000000000001
+FAIL #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: R905 probe: BECOME's high word is zero - breaks "#100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate | #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base"
+-- control 13: R905 probe: the first master Announce waits 1 ms: NOT CAUGHT
+[FAIL] mutant 'R905 probe: the first master Announce waits 1 ms' missed its named check(s): #106 regain race: one master Announce leaves before the better one is taken
+-- control 14: R905 probe: BECOME clears the integrator: NOT CAUGHT
+[FAIL] mutant 'R905 probe: BECOME clears the integrator' missed its named check(s): #107
+SLICE 15 controls: 13 caught, 2 not caught; positive control pass

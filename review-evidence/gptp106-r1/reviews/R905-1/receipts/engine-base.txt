@@ -1,0 +1,8 @@
+# engine suite at base 1616fc8f (scratch export, its own harness), pinned Verilator 5.050; rc=0
+2098 checks: 2098 PASS, 0 FAIL
+-- again, with the request counter seeded above 16 bits --
+2098 checks: 2098 PASS, 0 FAIL
+-- again, with the Sync counter seeded above 16 bits --
+2098 checks: 2098 PASS, 0 FAIL
+-- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+61 checks: 61 PASS, 0 FAIL

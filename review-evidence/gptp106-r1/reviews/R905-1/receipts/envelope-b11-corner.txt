@@ -1,0 +1,8 @@
+RATE_PPM_C = 200, LOCAL_CLOCK_PPM_C = 100
+B.1.1 corner: (1 + 100 ppm) / (1 - 100 ppm) - 1 = 200.020002 ppm
+clk 100000000 Hz: ilim 33554 units = 199.997425 ppm; corner exceeds it by +0.022577 ppm (+22.577 ns/s of offset growth)
+  offset reaches STEP_LOCKED_NS_C (100000 ns) after 4429 s, then steps again
+clk 125000000 Hz: ilim 26844 units = 200.003386 ppm; corner exceeds it by +0.016616 ppm (+16.616 ns/s of offset growth)
+  offset reaches STEP_LOCKED_NS_C (100000 ns) after 6018 s, then steps again
+clk 2000000 Hz: ilim 1677722 units = 200.000048 ppm; corner exceeds it by +0.019954 ppm (+19.954 ns/s of offset growth)
+  offset reaches STEP_LOCKED_NS_C (100000 ns) after 5011 s, then steps again

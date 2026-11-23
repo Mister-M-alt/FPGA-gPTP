@@ -1,0 +1,125 @@
+== R905 probe: the first master Announce waits 1 ms: verdict caught, rc 1, 42 FAIL lines
+FAIL D1 response Follow_Up sent   got 0000000000000000 exp 0000000000000001
+FAIL D1 response stalled at its first byte got 0000000000000000 exp 0000000000000001
+FAIL D1 second result waits for the first to dispatch got 0000000000000000 exp 0000000000000001
+FAIL D1 face stays closed while a result is owed got 0000000000000001 exp 0000000000000000
+FAIL D1 response Follow_Up sent   got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 0: timeout
+FAIL D1: Sync outstanding         got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 2: timeout
+FAIL D2a: request outstanding     got 0000000000000000 exp 0000000000000001
+FAIL D2a neighbour request answered got 0000000000000000 exp 0000000000000001
+FAIL D2a lost response retired its own claim got 0000000000000000 exp 0000000000000001
+FAIL D2a lost response left the frozen pair alone value got 0000000000000259 exp 000000000000012d
+FAIL D2a lost response left the frozen pair alone moved got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 2: timeout
+FAIL D2b: request outstanding     got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 0: timeout
+FAIL D2b: Sync outstanding        got 0000000000000000 exp 0000000000000001
+FAIL D2b lost Sync left the recorded t1 alone value got 0000000000000259 exp 00000000000002bc
+FAIL D2b lost Sync left the recorded t1 alone moved got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 0: timeout
+FAIL D2b lost Sync retired its own claim got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 2: timeout
+FAIL D2c: request outstanding     got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 2: timeout
+FAIL D2d: request outstanding     got 0000000000000000 exp 0000000000000001
+FAIL D2d unclaimed lost result retires nothing value got 0000000000000259 exp 00000000000001f5
+FAIL D2d unclaimed lost result retires nothing moved got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 2: timeout
+FAIL D3a: request outstanding     got 0000000000000000 exp 0000000000000001
+FAIL D3a the pair computes from its own operands value got 0000000000000259 exp 0000000000000191
+FAIL D3a the pair computes from its own operands moved got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 2: timeout
+FAIL D3b: request outstanding     got 0000000000000000 exp 0000000000000001
+FAIL D3b a zero t1 completes its exchange moved got 0000000000000000 exp 0000000000000001
+FAIL wait_tx type 2: timeout
+FAIL D3c: request outstanding     got 0000000000000000 exp 0000000000000001
+FAIL D3c a real exchange after reset still computes value got 000000000000015f exp 0000000000000285
+FAIL #106 3.0 s, a clock after the tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0 s, two clocks after the tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0 s, nine clocks before a tick: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.00006 s, the lab's tie: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+FAIL #106 3.0005 s: a master Announce on the wire after the instant got 0000000000000000 exp 0000000000000001
+2191 checks: 2149 PASS, 42 FAIL
+== R905 probe: BECOME clears the integrator: verdict caught, rc 1, 79 FAIL lines
+FAIL receipt timeout, same GM, +150 us: addend matches the mirror got 0000000000000000 exp 00000000fff3332d
+FAIL link-up +15 us: addend matches the mirror got 00000000fff0a3d0 exp 00000000ffe66666
+FAIL link-up +25 us: addend matches the mirror got 0000000000000000 exp 00000000ffef5c21
+FAIL link-up +25 us: the step writes the bare estimate got 0000000000000000 exp 00000000ffef5c21
+FAIL link-up -15 us: addend matches the mirror got 00000000000f5c31 exp 00000000fffeb852
+FAIL link-up -25 us: addend matches the mirror got 0000000000000000 exp 00000000fff3332e
+FAIL link-up -25 us: the step writes the bare estimate got 0000000000000000 exp 00000000fff3332e
+FAIL link-up +20 us: addend matches the mirror got 00000000ffeb8515 exp 00000000ffe66666
+FAIL link-up -20 us: addend matches the mirror got 0000000000147aec exp 0000000000028f60
+FAIL link-up +20 us + 1 ns: addend matches the mirror got 0000000000000000 exp 00000000fff3332f
+FAIL link-up +20 us + 1 ns: the step writes the bare estimate got 0000000000000000 exp 00000000fff3332f
+FAIL link-up -20 us - 1 ns: addend matches the mirror got 0000000000000000 exp 00000000fff3332f
+FAIL link-up -20 us - 1 ns: the step writes the bare estimate got 0000000000000000 exp 00000000fff3332f
+FAIL locked +110 us: addend matches the mirror got 0000000000000001 exp 00000000fffd70af
+FAIL locked -110 us: addend matches the mirror got 0000000000000001 exp 00000000fffd70af
+FAIL closed loop pair 0: addend matches the mirror got 0000000000000000 exp 00000000fffeb85f
+FAIL integrator survives the step got 0000000000000000 exp 0000000000000001
+FAIL closed loop pair 1: addend matches the mirror got 0000000000124a31 exp 0000000000110290
+FAIL closed loop pair 2: addend matches the mirror got 0000000000169aae exp 000000000015530d
+FAIL closed loop pair 3: addend matches the mirror got 0000000000165bd6 exp 0000000000151435
+FAIL closed loop pair 4: addend matches the mirror got 0000000000152175 exp 000000000013d9d4
+FAIL closed loop pair 5: addend matches the mirror got 0000000000140742 exp 000000000012bfa1
+FAIL closed loop pair 6: addend matches the mirror got 0000000000133b2e exp 000000000011f38d
+FAIL closed loop pair 7: addend matches the mirror got 000000000012b55b exp 0000000000116dba
+FAIL closed loop pair 8: addend matches the mirror got 0000000000125fb3 exp 0000000000111812
+FAIL closed loop pair 9: addend matches the mirror got 0000000000123041 exp 000000000010e8a0
+FAIL closed loop pair 10: addend matches the mirror got 0000000000121402 exp 000000000010cc61
+FAIL closed loop pair 11: addend matches the mirror got 00000000001202c6 exp 000000000010bb25
+FAIL closed loop pair 12: addend matches the mirror got 000000000011f8f2 exp 000000000010b151
+FAIL closed loop pair 13: addend matches the mirror got 000000000011f31d exp 000000000010ab7c
+FAIL closed loop pair 14: addend matches the mirror got 000000000011f01a exp 000000000010a879
+FAIL closed loop pair 15: addend matches the mirror got 000000000011ee12 exp 000000000010a671
+FAIL closed loop pair 16: addend matches the mirror got 000000000011ecf5 exp 000000000010a554
+FAIL closed loop pair 17: addend matches the mirror got 000000000011ec3d exp 000000000010a49c
+FAIL closed loop pair 18: addend matches the mirror got 000000000011ebea exp 000000000010a449
+FAIL closed loop pair 19: addend matches the mirror got 000000000011ebeb exp 000000000010a44a
+FAIL closed loop pair 20: addend matches the mirror got 000000000011ebdb exp 000000000010a43a
+FAIL closed loop pair 21: addend matches the mirror got 000000000011eb76 exp 000000000010a3d5
+FAIL closed loop pair 22: addend matches the mirror got 000000000011eb76 exp 000000000010a3d5
+FAIL closed loop pair 23: addend matches the mirror got 000000000011ebba exp 000000000010a419
+FAIL failover, +150 us: addend matches the mirror got 0000000000000000 exp 00000000000e633c
+FAIL link-up after asCapable returns, -25 us: addend matches the mirror got 0000000000000000 exp 0000000000019669
+FAIL warm-reset link-up: first pair: addend matches the mirror got 00000000fffced90 exp 00000000fffe83f9
+FAIL warm-reset link-up: +25 us: addend matches the mirror got 00000000fff78d4c exp 00000000fff923b5
+FAIL slew: arithmetic remains the PI policy got 0000000000000000 exp 00000000fff923b5
+FAIL slew: arithmetic remains the PI policy got 0000000000000000 exp 00000000fff923b5
+FAIL slew: arithmetic remains the PI policy got 00000000ffffe5ca exp 00000000fff9097f
+FAIL slew: arithmetic remains the PI policy got 00000000000013aa exp 00000000fff9375f
+FAIL slew: arithmetic remains the PI policy got 0000000000000001 exp 00000000fff923b6
+FAIL slew: arithmetic remains the PI policy got 0000000000000000 exp 00000000fff923b6
+FAIL slew: arithmetic remains the PI policy got 00000000ffffe5ca exp 00000000fff90980
+FAIL slew: arithmetic remains the PI policy got 00000000000013aa exp 00000000fff93760
+FAIL slew: arithmetic remains the PI policy got 0000000000000001 exp 00000000fff923b7
+FAIL slew: arithmetic remains the PI policy got 0000000000000000 exp 00000000fff923b7
+FAIL slew: arithmetic remains the PI policy got 00000000ffffe5ca exp 00000000fff90981
+FAIL slew: arithmetic remains the PI policy got 00000000ffffdef9 exp 00000000fff902b0
+FAIL slew: arithmetic remains the PI policy got 00000000ffffd89f exp 00000000fff8fc56
+FAIL slew: arithmetic remains the PI policy got 00000000000006c3 exp 00000000fff92a7a
+FAIL slew: arithmetic remains the PI policy got 00000000fffff2e7 exp 00000000fff9169e
+FAIL slew: arithmetic remains the PI policy got 0000000000000d1e exp 00000000fff930d5
+FAIL slew: arithmetic remains the PI policy got 00000000ffffec5a exp 00000000fff91011
+FAIL slew: arithmetic remains the PI policy got 00000000000010aa exp 00000000fff93461
+FAIL slew: arithmetic remains the PI policy got 00000000fffffcce exp 00000000fff92085
+FAIL slew: arithmetic remains the PI policy got 00000000fffffcce exp 00000000fff92085
+FAIL slew: arithmetic remains the PI policy got 0000000000000000 exp 00000000ffe66666
+FAIL slew: arithmetic remains the PI policy got 0000000000000000 exp 00000000ffe66666
+FAIL slew: arithmetic remains the PI policy got 0000000000051ebb exp 00000000ffeb8521
+FAIL slew: arithmetic remains the PI policy got 00000000000147af exp 00000000ffe7ae15
+FAIL slew: arithmetic remains the PI policy got 00000000000147af exp 00000000ffe7ae15
+FAIL slew: arithmetic remains the PI policy got 00000000000147af exp 00000000ffe7ae15
+FAIL slew: arithmetic remains the PI policy got 00000000fffc28f5 exp 00000000ffe66666
+FAIL slew: arithmetic remains the PI policy got 0000000000000000 exp 00000000ffe66667
+FAIL slew: arithmetic remains the PI policy got 0000000000000000 exp 00000000ffe66667
+FAIL slew: arithmetic remains the PI policy got 00000000ffee1473 exp 00000000ffe66666
+FAIL slew: arithmetic remains the PI policy got 00000000ffecccc5 exp 00000000ffe66666
+FAIL slew: arithmetic remains the PI policy got 00000000fff0a3d1 exp 00000000ffe66666
+FAIL slew: arithmetic remains the PI policy got 00000000fff5c28c exp 00000000ffeb8521
+FAIL slew: arithmetic remains the PI policy got 00000000fff1eb80 exp 00000000ffe7ae15
+FAIL slew: arithmetic remains the PI policy got 00000000fff1eb80 exp 00000000ffe7ae15
+2260 checks: 2181 PASS, 79 FAIL

@@ -1,0 +1,34 @@
+1x1 image, head - base: LUT -322  FF -4  SLICE -3
+  1x1 g_gptp_plane.u_gptp_shadow LUT 5979 -> 5637
+  1x1 (g_gptp_plane.u_gptp_shadow) LUT 877 -> 618
+  1x1 u_engine LUT 4717 -> 4637
+  1x1 (u_engine) LUT 967 -> 962
+  1x1 u_timer LUT 375 -> 279
+  1x1 u_txslot LUT 147 -> 314
+  1x1 u_ucpu LUT 2769 -> 2623
+8x8 image, head - base: LUT +588  FF -107  SLICE -459
+  8x8 g_gptp_plane.u_gptp_shadow LUT 5863 -> 6103
+  8x8 (g_gptp_plane.u_gptp_shadow) LUT 1778 -> 2113
+  8x8 u_engine LUT 3820 -> 3740
+  8x8 (u_engine) LUT 795 -> 826
+  8x8 u_timer LUT 224 -> 159
+  8x8 u_txslot LUT 199 -> 132
+  8x8 u_ucpu LUT 2138 -> 2163
+8x8 largest moves (|LUT| >= 80):
+  KL_mbx_cdc                                     5558 ->   7150 (+1592)
+  u_edit                                         3746 ->   5318 (+1572)
+  (u_edit)                                       3731 ->   5302 (+1571)
+  csr                                            4107 ->   2765 (-1342)
+  milan_datapath                                26196 ->  25115 (-1081)
+  alinx_ax7101                                  42998 ->  43586 (+588)
+  (g_gptp_plane.u_gptp_shadow)                   1778 ->   2113 (+335)
+  g_gptp_plane.u_gptp_shadow                     5863 ->   6103 (+240)
+  (milan_datapath)                               4165 ->   4386 (+221)
+  chan_map_capture                               1341 ->   1231 (-110)
+  (peripheral_toAxiLite4_logic_bridge)            278 ->    371 (+93)
+  (KL_mbx_cdc)                                    654 ->    567 (-87)
+  crf_rx                                          230 ->    313 (+83)
+  u_engine                                       3820 ->   3740 (-80)
+u_edit + csr = +1572 -1342 = +230 LUT
+image +588 LUT = engine cell -80 (changed RTL) + +668 in cells whose RTL is unchanged
+of which u_edit + csr +230, other untouched cells +438
