@@ -4,6 +4,15 @@
 """gPTP µcode ROM image generator -- v8, the announce qualification and the
 Pdelay_Resp_Follow_Up pairing rounds.
 
+FPGA-gPTP #107, the rate of this plane's mastership: a grandmaster without
+a ClockSource runs on its LocalClock (802.1AS-2020 10.1.2.1, 10.2.4.14), so
+BECOME no longer keeps the slave's rate. Its PHC word-3 write carries rate
+0, this oscillator, in its low word, which the engine always applies, and
+the integrator in its high word. The integrator is the negated rate
+estimate, so it is the frequency change of the time base, the
+scaledLastGmFreqChange the engine sends (10.2.8.2.1 l), 11.4.4.3.9). The
+same three words as before.
+
 FPGA-gPTP #106, the master announcement on the wire: BECOME used to arm the
 first Announce on a 2 ms beat. An Announce queued at the receipt timeout
 instant, or arriving within those 2 ms, then ran first, re-elected its
@@ -19,8 +28,9 @@ FPGA-gPTP #100, what this plane's mastership and its receipt rules carry:
     from region 6 (RG_TLV): gmTimeBaseIndicator counts BECOME's PHC
     word-3 write, the one entry into mastership; lastGmPhaseChange is the
     offset of the last Sync consumed as a slave (10.2.9, Figure 10-6);
-    scaledLastGmFreqChange is the trim the PHC keeps less the rate
-    estimate word 3 carries. cumulativeScaledRateOffset stays zero.
+    scaledLastGmFreqChange was the trim the PHC kept less the rate
+    estimate word 3 carried (since #107, rate 0 less that estimate).
+    cumulativeScaledRateOffset stays zero.
   * The announce receipt watch (timer slot 2) is announceReceiptTimeout
     times the received interval (10.3.9.1). The engine scales BTCA's
     3000 ms arm by 2^logMessageInterval and counts it from the Announce's
@@ -1987,15 +1997,18 @@ def prog_become(base: int) -> Prog:
     publish ourselves through SELF, whose ANNTX tail sends the first
     Announce and starts the Announce cadence (#106)."""
     p = Prog(base)
-    # Retire the slave's phase correction before publishing mastership.
-    # Word 3 replaces the trim with the retained rate estimate and clears
-    # the slew verdict on that same PHC write, just as a step's rate tail.
-    # #100: this write is also the engine's mark of a new mastership, for
-    # the Follow_Up TLV: it counts gmTimeBaseIndicator and takes the
-    # frequency change against the estimate it carries. Keep it BECOME's
-    # alone, once per mastership
+    # Retire the slave's correction before publishing mastership. #107:
+    # the time base returns to this oscillator. Word 3's low word is the
+    # rate, here 0, which replaces the trim and clears the slew verdict on
+    # that same PHC write. Its high word is the frequency change, rate 0
+    # less the slave's estimate: the integrator itself, as the trim is its
+    # negation. #100: this write is also the engine's mark of a new
+    # mastership, for the Follow_Up TLV: it counts gmTimeBaseIndicator and
+    # keeps that change. Keep it BECOME's alone, once per mastership. The
+    # integrator stays, so a later slave starts from the estimate, as
+    # after a step
     p.emit("RDST", rd=RT, imm=RG_SCR | S_INTG, fmt=FMT_Q)
-    p.emit("ALU", rd=RT, ra=R0, rb=RT, cnd=ALU_SUB)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SHL, imm=32)
     p.emit("WRST", ra=RT, imm=RG_PHC | 3, fmt=FMT_Q)
     # no peer is elected: gmPresent is the engine's, from the image. The
     # grandmaster's own time is the domain's time, so the master role is

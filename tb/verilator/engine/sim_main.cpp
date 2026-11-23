@@ -247,8 +247,9 @@
 // 52      #100: the Follow_Up information TLV of each mastership
 //         (802.1AS-2011 10.2.8.2.1 j) to l), 11.4.4.3): gmTimeBaseIndicator
 //         counts masterships, lastGmPhaseChange is the last slave offset,
-//         scaledLastGmFreqChange the kept trim less the rate estimate, after
-//         a lock on a master 100 ppm fast
+//         scaledLastGmFreqChange rate 0 less the rate estimate (#107), after
+//         a lock on a master 100 ppm fast; zero for a grandmaster lost
+//         before any pair
 // 53      #100: the announce receipt watch from the received interval
 //         (10.3.9.1): logMessageInterval 1 ages at 6 s, -1 at 1.5 s
 // 54      #100: Announces exactly 3.0 s apart age the port, whatever the
@@ -273,6 +274,13 @@
 //         last 10 s settles within 0.2 ppm of the grandmaster's rate and the
 //         offset stays within 1 us (802.1AS-2020 B.1.1: two LocalClocks each
 //         within 100 ppm of TAI)
+// 60      #107: a grandmaster +60 ppm jumps 90 us and leaves two pairs later:
+//         the mastership's rate is this oscillator's within one trim unit,
+//         and a grandmaster 10 ppm from this oscillator is then followed
+//         within 0.2 ppm (802.1AS-2020 10.1.2.1, 10.2.4.14)
+// 61      #107: under +-8 ns origin noise, after grandmasters at +10, -10
+//         and +10 ppm, scaledLastGmFreqChange is within 50 % of the time
+//         base's change (or 1 ppb), the qual's grading (11.4.4.3.9)
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255 and
 // --clock-accuracy 0xFE) runs only the phases a self publication passes
@@ -3380,6 +3388,14 @@ class GptpEngineHarness {
   void steer_on_the_first_peer_sync() {
     const size_t s0 = steps_seen.size();
     const size_t a0 = adj_seen.size();
+    p10_steps0 = s0;
+    p10_rates0 = a0;
+    // #107: until a peer's Sync is consumed, the only rates written are the
+    // masterships', each this oscillator's, and nothing has stepped
+    bool all_zero = true;
+    for (const uint64_t a : adj_seen) all_zero &= a == 0;
+    expect("before any peer Sync, every rate written is mastership's rate 0",
+           all_zero && s0 == 0, 1);
     expect("sync-ok low before sync", dut->pub_flags_o & FL_SYNCOK, 0);
     TRX = 20000000000ull;
     ORIGIN = 19999000000ull;
@@ -3410,6 +3426,10 @@ class GptpEngineHarness {
            svm.stepped && steered_as_mirror(s0, a0), 1);
   }
 
+  //! the step and rate pulses recorded when phase 10 starts
+  size_t p10_steps0 = 0;
+  size_t p10_rates0 = 0;
+
   // ---- 11: a Follow_Up later than 125 ms pairs with nothing -------------
   // the lone pair's origin is skewed -777 ns so a wrong pairing would
   // move the published offset instead of reproducing it
@@ -3426,7 +3446,7 @@ class GptpEngineHarness {
     expect("late FU dropped", static_cast<uint32_t>(dut->pub_offset_o),
            static_cast<uint32_t>(OFF));
     expect("late FU never steers", steps_seen.size() + adj_seen.size(),
-           2);                                     // phase 10's step + its -I
+           p10_steps0 + p10_rates0 + 2);           // phase 10's step + its -I
     TRX2 = TRX + 2000000000ull;
     ORIGIN2 = ORIGIN + 1999000000ull;
     {
@@ -6787,23 +6807,25 @@ class GptpEngineHarness {
     // An idle receipt lapse must not arm the completion qualifier. Check
     // both the lapse itself and fresh consumed pairs, including every edge.
     // The lapse ages the grandmaster (#89); its Sync and Announce then
-    // elect it again, and nothing on that round trip may move the level
+    // elect it again, and nothing on that round trip may move the level.
+    // #107: the mastership between writes one rate, this oscillator's
     const size_t idle_edges = slew_edges.size();
-    const size_t idle_rates = adj_seen.size();
+    const size_t idle_rates = adj_seen.size() + 1;
     run_svc(800000); // 400 ms exceeds the 375 ms Sync receipt watch
     expect("slew: idle timeout ages the grandmaster", dut->pub_flags_o & FL_AMGM,
            FL_AMGM);
     expect("slew: idle timeout stays asCapable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
     expect("slew: idle timeout stays inactive", dut->phc_slew_active_o, 0);
     expect("slew: idle timeout has no level edge", slew_edges.size(), idle_edges);
-    expect("slew: idle timeout leaves the rate alone", adj_seen.size(), idle_rates);
+    expect("slew: idle timeout writes only mastership's rate 0",
+           adj_seen.size() == idle_rates && last_adj() == 0, 1);
     expect("slew: idle timeout's grandmaster returns",
            reelect_after_the_sync_receipt_timeout(slew_seq++, 0x750A,
                                                   phc() + 1000000, GMID, 0,
                                                   PEER_CID), 1);
     expect("slew: idle return stays inactive", dut->phc_slew_active_o, 0);
     expect("slew: idle return has no level edge", slew_edges.size(), idle_edges);
-    expect("slew: idle return leaves the rate alone", adj_seen.size(), idle_rates);
+    expect("slew: idle return writes no rate", adj_seen.size(), idle_rates);
     slew_probe("slew: in-band pair after idle timeout stays inactive", 0, false);
     slew_probe("slew: second pair after idle timeout stays inactive", 100, false);
 
@@ -6821,8 +6843,10 @@ class GptpEngineHarness {
   void keep_slew_inactive_across_capability_loss() {
     // Losing capability while tracking must also leave qualification unarmed.
     // Bad and good Pdelay exchanges drive the entire loss/recovery on the wire.
+    // #107: the Sync receipt timeout of the interval makes this plane
+    // master while it is still capable, which writes this oscillator's rate
     const size_t idle_cap_edges = slew_edges.size();
-    const size_t idle_cap_rates = adj_seen.size();
+    const size_t idle_cap_rates = adj_seen.size() + 1;
     expect("slew: idle capability loss starts inactive", dut->phc_slew_active_o, 0);
     expect("slew: idle capability loss starts asCapable",
            dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
@@ -6833,7 +6857,8 @@ class GptpEngineHarness {
     expect("slew: idle incapable interval stays incapable", dut->pub_flags_o & FL_ASCAP, 0);
     expect("slew: idle incapable interval stays inactive", dut->phc_slew_active_o, 0);
     expect("slew: idle incapable interval has no level edge", slew_edges.size(), idle_cap_edges);
-    expect("slew: idle incapable interval leaves the rate alone", adj_seen.size(), idle_cap_rates);
+    expect("slew: idle incapable interval writes only mastership's rate 0",
+           adj_seen.size() == idle_cap_rates && last_adj() == 0, 1);
     pd_mode = PD_NORMAL;
     expect("slew: idle capability recovers",
            wait_flags(FL_ASCAP, FL_ASCAP, 5000000), 1);
@@ -6841,7 +6866,7 @@ class GptpEngineHarness {
     expect("slew: idle capability recovery selects slave duty", dut->pub_flags_o & FL_AMGM, 0);
     expect("slew: idle capability recovery stays inactive", dut->phc_slew_active_o, 0);
     expect("slew: idle capability recovery has no level edge", slew_edges.size(), idle_cap_edges);
-    expect("slew: idle capability recovery leaves the rate alone", adj_seen.size(), idle_cap_rates);
+    expect("slew: idle capability recovery writes no rate", adj_seen.size(), idle_cap_rates);
     slew_probe("slew: in-band pair after asCapable recovery stays inactive", 0, false, false, true);
     slew_probe("slew: second in-band pair after asCapable recovery stays inactive", 100, false);
     expect("slew: idle capability recovery pairs have no level edge", slew_edges.size(), idle_cap_edges);
@@ -6884,15 +6909,15 @@ class GptpEngineHarness {
     expect("slew: late Follow_Up cannot retire the rate", adj_seen.size(), lapse_rates);
     // The Sync stays missing: the receipt timeout ages the grandmaster
     // (#89), and mastership retires the active correction exactly as a
-    // degraded parent's does below: one integral-only rate, one falling edge
+    // degraded parent's does below: one rate, this oscillator's (#107), and
+    // one falling edge
     run_svc(800000);
     expect("slew: missing Sync ages the grandmaster", dut->pub_flags_o & FL_AMGM,
            FL_AMGM);
     expect("slew: missing Sync retires the correction", dut->phc_slew_active_o, 0);
     expect("slew: missing Sync writes one replacement rate", adj_seen.size(),
            lapse_rates + 1);
-    expect("slew: missing Sync keeps the integral-only rate", last_adj(),
-           adj_bits(-svm.intg));
+    expect("slew: missing Sync runs on this oscillator", last_adj(), 0);
     expect("slew: missing Sync has one falling edge", slew_edges.size(),
            lapse_edges + 1);
     expect("slew: missing Sync's grandmaster returns",
@@ -6918,7 +6943,7 @@ class GptpEngineHarness {
     expect("slew: parent degradation returns to GM", dut->pub_flags_o & FL_AMGM, FL_AMGM);
     expect("slew: mastership retires the phase correction", dut->phc_slew_active_o, 0);
     expect("slew: mastership writes one replacement rate", adj_seen.size(), master_rates + 1);
-    expect("slew: mastership keeps the integral-only rate", last_adj(), adj_bits(-svm.intg));
+    expect("slew: mastership runs on this oscillator", last_adj(), 0);
     expect("slew: mastership has one falling edge", slew_edges.size(), master_edges + 1);
     if (slew_edges.size() > master_edges && adj_seen.size() > master_rates)
       expect("slew: mastership clears with its rate", slew_edges.back().cycle, adj_cyc.back());
@@ -7544,13 +7569,15 @@ class GptpEngineHarness {
   // frequency change; and each later one moves the indicator by one,
   // carries as lastGmPhaseChange the offset of the last Sync this plane
   // consumed as a slave (Figure 10-6, clockSourcePhaseOffset), and as
-  // scaledLastGmFreqChange the trim the PHC keeps less the rate estimate
-  // the slave held (11.4.4.3.9), zero while no rate has been written since
-  // reset, when the PHC's rate is not known. A slave of a master 100 ppm
-  // fast locks on it, so the estimate is that rate. It loses the
-  // grandmaster settled 60 ns off, when the PHC keeps its last trim, and
-  // again slewing 1,500 ns ahead of it, when BECOME writes the estimate
-  // itself as the trim
+  // scaledLastGmFreqChange the change of the time base's frequency
+  // (11.4.4.3.9). #107: a mastership runs on this oscillator, so that is
+  // rate 0 less the rate estimate the slave held, and BECOME writes rate 0
+  // whatever the slew level. It is zero while no slave rate has been
+  // written since reset, when the PHC's rate is not known, or since the
+  // last mastership, when the time base has not moved. A slave of a master
+  // 100 ppm fast locks on it, so the estimate is that rate. It loses the
+  // grandmaster settled 60 ns off, and again slewing 1,500 ns ahead of it.
+  // Then it elects that grandmaster and loses it before any pair
   void carry_the_mastership_change_in_the_follow_up_tlv() {
     TlvFields first{};
     bool found = false;
@@ -7581,6 +7608,38 @@ class GptpEngineHarness {
     p100_mst_base = phc() - cyc * 500ull - cyc / 20ull;
     lose_the_grandmaster_and_grade_the_tlv("#100 TLV settled", 24, 60);
     lose_the_grandmaster_and_grade_the_tlv("#100 TLV slewing", 4, -1500);
+    lose_an_unfollowed_grandmaster_and_grade_the_tlv(-1500);
+  }
+
+  //! #107: from a master, the #100 master's usable pair and Announce
+  //! elect it, and then it sends nothing: no pair is consumed as a slave,
+  //! so no rate is written, and the Sync receipt timeout ages it. The time
+  //! base never left this oscillator, so the mastership carries no
+  //! frequency change, though the integrator still holds the 100 ppm
+  //! estimate; the phase change is still the last offset, `last_off`
+  void lose_an_unfollowed_grandmaster_and_grade_the_tlv(int64_t last_off) {
+    const char *tag = "#107 TLV unfollowed";
+    char n[128];
+    TlvFields before{};
+    const bool had = last_follow_up_before(txf.size(), &before);
+    p100_usable_pair(P100_SRC);
+    send_frame(p100_announce(50, P100_GM, P100_SRC, 0).b, phc() + 100);
+    run_svc(6000);
+    snprintf(n, sizeof n, "%s: the grandmaster is elected", tag);
+    expect(n, (dut->pub_flags_o & 3) == FL_PRESENT &&
+                  dut->pub_gm_id_o == P100_GM, 1);
+    const size_t a0 = adj_seen.size();
+    const size_t mark = txf.size();
+    snprintf(n, sizeof n, "%s: the sync receipt timeout makes it master", tag);
+    expect(n, wait_flags(FL_AMGM, FL_AMGM, 900000ull), 1);
+    snprintf(n, sizeof n, "%s: BECOME writes rate 0, and only it", tag);
+    expect(n, adj_seen.size() == a0 + 1 && last_adj() == 0, 1);
+    printf("INFO %s: the integrator holds %lld trim units\n", tag,
+           static_cast<long long>(svm.intg));
+    snprintf(n, sizeof n, "%s: the integrator still holds an estimate", tag);
+    expect(n, svm.intg != 0, 1);
+    grade_the_tlv_of_this_mastership(tag, mark, had ? before.tbi + 1u : ~0u,
+                                     last_off, 0);
   }
 
   //! From a master, the #100 master's usable pair clears any aged mark
@@ -7626,17 +7685,14 @@ class GptpEngineHarness {
     const bool slewing = dut->phc_slew_active_o;
     snprintf(n, sizeof n, "%s: the slew level is as scripted", tag);
     expect(n, slewing, last_off < -100 || last_off > 100);
-    const int64_t kept = static_cast<int32_t>(last_adj());
-    const int64_t units = slewing ? 0 : kept + svm.intg;
+    // #107: rate 0 less the estimate -svm.intg, whatever the slew level
+    const int64_t units = svm.intg;
     const size_t a0 = adj_seen.size();
     const size_t mark = txf.size();
     snprintf(n, sizeof n, "%s: the sync receipt timeout makes it master", tag);
     expect(n, wait_flags(FL_AMGM, FL_AMGM, 900000ull), 1);
-    snprintf(n, sizeof n, "%s: BECOME keeps the trim or writes the estimate",
-             tag);
-    expect(n, slewing ? adj_seen.size() == a0 + 1 &&
-                            last_adj() == adj_bits(-svm.intg)
-                      : adj_seen.size() == a0, 1);
+    snprintf(n, sizeof n, "%s: BECOME writes rate 0, this oscillator", tag);
+    expect(n, adj_seen.size() == a0 + 1 && last_adj() == 0, 1);
     grade_the_tlv_of_this_mastership(tag, mark, had ? before.tbi + 1u : ~0u,
                                      last_off, units);
   }
@@ -7698,8 +7754,8 @@ class GptpEngineHarness {
     expect(n, same_tbi && tbi <= 0xFFFFu, 1);
     snprintf(n, sizeof n, "%s: lastGmPhaseChange is the last offset", tag);
     expect(n, same_phase, 1);
-    snprintf(n, sizeof n, "%s: scaledLastGmFreqChange is the kept trim less "
-             "the estimate", tag);
+    snprintf(n, sizeof n, "%s: scaledLastGmFreqChange is rate 0 less the "
+             "estimate", tag);
     expect(n, near_freq && (units == 0) == (want == 0), 1);
   }
 
@@ -8044,9 +8100,11 @@ class GptpEngineHarness {
   }
 
   // ========================= #107: rates against this oscillator ===========
-  //! phase 59
+  //! phases 59 to 61, in file order
   void run_the_rate_phases() {
     follow_grandmasters_across_the_b11_range();
+    run_on_this_oscillator_after_a_takeover();
+    report_the_frequency_change_of_the_time_base();
   }
 
   //! the #107 grandmaster, announcing from its own port
@@ -8187,6 +8245,109 @@ class GptpEngineHarness {
       p107_follow(c.tag, 120);
       p107_stop(c.tag);
     }
+  }
+
+  // ---- 60: #107, a mastership runs on this oscillator --------------------
+  // A grandmaster without a ClockSource runs on its LocalClock (802.1AS-2020
+  // 10.1.2.1, 10.2.4.14), so a plane that takes the role leaves the rate it
+  // followed. The qual's board kept its +200 ppm rail instead: its slave was
+  // still correcting a phase step when its grandmaster left, and the
+  // integrator such a step winds is not the grandmaster's frequency. A test
+  // machine that then follows the board, and derives a grandmaster 10 ppm
+  // from its own clock, puts that grandmaster beyond the +-200 ppm trim.
+  // Here this plane follows a grandmaster 60 ppm fast, which then jumps
+  // 90 us ahead (a locked slew) and stops two pairs later: the rate of the
+  // mastership is this oscillator's, within one trim unit, whatever the
+  // integrator holds, and a grandmaster 10 ppm from this oscillator is then
+  // followed within 0.2 ppm
+  void run_on_this_oscillator_after_a_takeover() {
+    const char *tag = "#107 takeover";
+    char n[128];
+    p107_start(60.0);
+    p107_follow(tag, 120);
+    p107_base += 90000;
+    p107_pair(1);
+    p107_pair(2);
+    const size_t a0 = adj_seen.size();
+    const size_t mark = txf.size();
+    p107_stop(tag);
+    const int64_t rate = static_cast<int32_t>(phc_adj);
+    printf("INFO %s: the mastership's rate %+lld trim units (%zu rate "
+           "writes at the takeover)\n", tag, static_cast<long long>(rate),
+           adj_seen.size() - a0);
+    snprintf(n, sizeof n, "%s: one rate write, this oscillator's within one "
+             "trim unit", tag);
+    expect(n, adj_seen.size() == a0 + 1 && rate <= 1 && rate >= -1, 1);
+    // documented, not graded: the change reported is the integrator's,
+    // which the jump wound (no anti-windup, the 2026-11-23 ruling)
+    tx_seen = mark;
+    size_t idx = 0;
+    const std::vector<uint8_t> fu = wait_tx(0x8, 800000, &idx);
+    if (fu.size() >= FU_FREQ_AT + 4 && idx >= mark)
+      printf("INFO %s: scaledLastGmFreqChange %d (the integrator %+.4f ppm), "
+             "the grandmaster's own change %lld\n", tag, tlv_of(fu).freq,
+             -static_cast<double>(tlv_of(fu).freq) * 125.0 / 32768.0 /
+                 UNITS_PER_PPM,
+             static_cast<long long>(scaled_freq_of(
+                 llround(-60.0 * UNITS_PER_PPM))));
+    run_svc(2000000);
+    p107_start(10.0);
+    p107_follow("#107 takeover, then a grandmaster 10 ppm from this "
+                "oscillator", 120);
+    p107_stop("#107 takeover, then a grandmaster 10 ppm from this "
+              "oscillator");
+  }
+
+  // ---- 61: #107, scaledLastGmFreqChange is the time base's change --------
+  // 802.1AS-2011 10.2.2.3.12 and 10.2.3.6: as grandmaster, lastGmFreqChange
+  // is the frequency of this plane's time base relative to the grandmaster
+  // it replaced, and 11.4.4.3.9 carries it scaled by 2^41. With origins
+  // that carry the board's timestamp error (+-8 ns, the 1 Gb/s symbol
+  // period), this plane follows a grandmaster 10 ppm fast, then one 10 ppm
+  // slow, then 10 ppm fast again, each for 30 s, and replaces each. Each
+  // time, the scaledLastGmFreqChange of three Follow_Ups of the new
+  // mastership is within 50 % of 2^41 x (0 - the departed grandmaster's
+  // rate), the grading the qual applies, or within 2,199 (1 ppb) of it
+  void report_the_frequency_change_of_the_time_base() {
+    const struct { const char *tag; double ppm; uint32_t seed; } cases[] = {
+        {"#107 TLV after a grandmaster +10 ppm", 10.0, 7u},
+        {"#107 TLV after a grandmaster -10 ppm", -10.0, 1234567u},
+        {"#107 TLV after a grandmaster +10 ppm again", 10.0, 99991u},
+    };
+    for (const auto &c : cases) {
+      char n[160];
+      p107_noise = 8;
+      p107_lcg = c.seed;
+      p107_start(c.ppm);
+      p107_follow(c.tag, 120);
+      const size_t mark = txf.size();
+      p107_stop(c.tag);
+      const double want = -c.ppm * UNITS_PER_PPM * 32768.0 / 125.0;
+      tx_seen = mark;
+      int seen = 0;
+      bool near = true;
+      int32_t first = 0;
+      for (int k = 0; k < 3; k++) {
+        size_t idx = 0;
+        const std::vector<uint8_t> fu = wait_tx(0x8, 800000, &idx);
+        if (fu.size() < FU_FREQ_AT + 4 || idx < mark) continue;
+        const TlvFields t = tlv_of(fu);
+        if (seen++ == 0) first = t.freq;
+        const double d = static_cast<double>(t.freq) - want;
+        const double tol = 0.5 * (want < 0 ? -want : want);
+        near &= (d <= tol && d >= -tol) || (d <= 2199.0 && d >= -2199.0);
+      }
+      printf("INFO %s: the grandmaster's change %+.0f, scaledLastGmFreqChange"
+             " %d\n", c.tag, want, first);
+      snprintf(n, sizeof n, "%s: three Follow_Ups of the new mastership",
+               c.tag);
+      expect(n, seen, 3);
+      snprintf(n, sizeof n, "%s: scaledLastGmFreqChange is the change of the "
+               "time base", c.tag);
+      expect(n, near, 1);
+      run_svc(2000000);
+    }
+    p107_noise = 0;
   }
 };
 
