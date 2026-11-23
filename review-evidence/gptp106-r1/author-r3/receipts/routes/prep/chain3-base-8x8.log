@@ -1,0 +1,4 @@
+/data-2/milan/tmp/gptp106-a831/r3-base-8x8-aslh: baseline_implementation.tcl written; the gate's bound() accepts it as the AltSpreadLogic_high comparison of /data-2/milan/tmp/gptp106-a831/r3-base-8x8/split/gateware
+base 8x8 aslh rc=0 2026-11-23T21:10:03+01:00 .. 2026-11-23T21:30:22+01:00
+/data-2/milan/tmp/gptp106-a831/r3-base-8x8-eto: baseline_implementation.tcl written; the gate's bound() accepts it as the ExtraTimingOpt comparison of /data-2/milan/tmp/gptp106-a831/r3-base-8x8/split/gateware
+base 8x8 eto rc=0 2026-11-23T21:30:22+01:00 .. 2026-11-23T21:50:38+01:00

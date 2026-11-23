@@ -1,0 +1,77 @@
+# repeat3: repeatability of the route comparison
+
+## (1) synthesis, round 2 against round 3 (same inputs; synth.maxThreads 1)
+base 1x1 alinx_ax7101_utilization_synth.rpt: identical, 111 table rows
+base 1x1 alinx_ax7101_utilization_hierarchical_synth.rpt: identical, 121 table rows
+    synthesised: LUT=34470 FF=42818 RAMB36=62 RAMB18=36 DSP=11
+base 8x8 alinx_ax7101_utilization_synth.rpt: identical, 111 table rows
+base 8x8 alinx_ax7101_utilization_hierarchical_synth.rpt: identical, 114 table rows
+    synthesised: LUT=44942 FF=51086 RAMB36=78 RAMB18=33 DSP=11
+head 1x1 alinx_ax7101_utilization_synth.rpt: identical, 111 table rows
+head 1x1 alinx_ax7101_utilization_hierarchical_synth.rpt: identical, 119 table rows
+    synthesised: LUT=34228 FF=42807 RAMB36=62 RAMB18=36 DSP=11
+head 8x8 alinx_ax7101_utilization_synth.rpt: identical, 111 table rows
+head 8x8 alinx_ax7101_utilization_hierarchical_synth.rpt: identical, 113 table rows
+    synthesised: LUT=45557 FF=50977 RAMB36=78 RAMB18=33 DSP=11
+
+## (2) placement, round 3's ExtraTimingOpt comparison against round 2's ExtraTimingOpt route
+base 1x1: routed utilisation identical; corners identical; hierarchy identical (171 rows)
+base 8x8: routed utilisation identical; corners identical; hierarchy identical (160 rows)
+head 1x1: routed utilisation identical; corners identical; hierarchy identical (171 rows)
+head 8x8: routed utilisation identical; corners identical; hierarchy identical (160 rows)
+
+## (3) the synthesised images, base against head (round 3; each directive's placement starts here)
+### 1x1: image LUT 34470 -> 34228 (-242), FF 42818 -> 42807 (-11), RAMB36 +0, RAMB18 +0, DSP +0
+Vivado's rows whose LUTs moved by 40 or more (rows nest: a cell's row includes its children's):
+    -326    6348 -> 6022   alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow
+    -271   21022 -> 20751  alinx_ax7101/milan_datapath
+    -255     879 -> 624    alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow (own)
+    +174     200 -> 374    alinx_ax7101/milan_datapath/chan_map_render
+    +170     149 -> 319    alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_txslot
+    +168    2118 -> 2286   alinx_ax7101/KL_mbx (own)
+    -143    2929 -> 2786   alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_ucpu
+    -119    2451 -> 2332   alinx_ax7101/milan_datapath/csr
+    -117     982 -> 865    alinx_ax7101/milan_datapath/chan_map_capture
+     -95     378 -> 283    alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_timer
+     -85      85 -> 0      alinx_ax7101/KL_mbx/u_maap_tx
+     +77    4322 -> 4399   alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51
+     +76     233 -> 309    alinx_ax7101/milan_datapath/crf_rx
+     -71    5039 -> 4968   alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine
+     -65      65 -> 0      alinx_ax7101/KL_mbx/u_acmp_rx
+     +62     183 -> 245    alinx_ax7101/milan_datapath/ts_counter
+     -47     580 -> 533    alinx_ax7101/milan_datapath/avtp_rx_parser
+     +47     985 -> 1032   alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/peripheral_toAxiLite4_logic_bridge
+     -45     231 -> 186    alinx_ax7101/KL_mbx_cdc (own)
+     -44    1918 -> 1874   alinx_ax7101/KL_mbx/u_rx
+### 8x8: image LUT 44942 -> 45557 (+615), FF 51086 -> 50977 (-109), RAMB36 +0, RAMB18 +0, DSP +0
+Vivado's rows whose LUTs moved by 40 or more (rows nest: a cell's row includes its children's):
+   +1520    5723 -> 7243   alinx_ax7101/KL_mbx_cdc
+   +1503    3875 -> 5378   alinx_ax7101/KL_mbx_cdc/u_edit
+   +1502    3860 -> 5362   alinx_ax7101/KL_mbx_cdc/u_edit (own)
+   -1232    4152 -> 2920   alinx_ax7101/milan_datapath/csr
+    -943   27322 -> 26379  alinx_ax7101/milan_datapath
+    +306    4325 -> 4631   alinx_ax7101/milan_datapath (own)
+    +304    1851 -> 2155   alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow (own)
+    +187    6182 -> 6369   alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow
+    +108     325 -> 433    alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/peripheral_toAxiLite4_logic_bridge (own)
+    -103    1345 -> 1242   alinx_ax7101/milan_datapath/chan_map_capture
+     +96    4081 -> 4177   alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51
+     -92    4016 -> 3924   alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine
+     +91     745 -> 836    alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/peripheral_toAxiLite4_logic_bridge
+     +88     231 -> 319    alinx_ax7101/milan_datapath/crf_rx
+     -87     665 -> 578    alinx_ax7101/KL_mbx_cdc (own)
+     -87      87 -> 0      alinx_ax7101/KL_mbx/u_acmp_rx
+     -74     518 -> 444    alinx_ax7101/milan_datapath/avtp_rx_parser
+     +74     506 -> 580    alinx_ax7101/KL_mbx_cdc/u_pub
+     -70      70 -> 0      alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/rx_fifo
+     -68     203 -> 135    alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_txslot
+     -67     164 -> 97     alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/splited_wc_hub_hub_logic_hub/streamArbiter_12
+     +65     365 -> 430    alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/splited_wc_hub_hub_logic_hub (own)
+     -63     228 -> 165    alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_timer
+     +62       0 -> 62     alinx_ax7101/milan_datapath/tone_gen_media
+     -57     309 -> 252    alinx_ax7101/milan_datapath/crf_tx
+     -56     715 -> 659    alinx_ax7101/milan_datapath/stream_table
+     +52     210 -> 262    alinx_ax7101/milan_datapath/ts_counter
+     -52     772 -> 720    alinx_ax7101/milan_datapath/talker_diag
+     -50    5643 -> 5593   alinx_ax7101/KL_mbx
+     -45     189 -> 144    alinx_ax7101/milan_datapath/g_sp_ctrl.ctrl_split (own)

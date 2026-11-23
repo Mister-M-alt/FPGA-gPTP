@@ -1,0 +1,20 @@
+# envelope: the trim envelope per clock against IEEE 802.1AS-2020 B.1.1's two corners, from the generator at 331e27d (hdl/ucode/gen_gptp_ucode.py, unchanged since a728cc3)
+# B.1.1 (802.1AS-2020 Annex B): "The fractional frequency offset of the LocalClock relative to the TAI frequency ... shall be within +-100 ppm."
+$ python3 -I tools/envelope.py hdl/ucode/gen_gptp_ucode.py
+RATE_PPM_C 200, LOCAL_CLOCK_PPM_C 100, STEP_LOCKED_NS_C 100000
+corner, grandmaster 100 ppm fast of a LocalClock 100 ppm slow: (1 + 100 ppm) / (1 - 100 ppm) - 1 = +200.020002 ppm
+corner, grandmaster 100 ppm slow of a LocalClock 100 ppm fast: (1 - 100 ppm) / (1 + 100 ppm) - 1 = -199.980002 ppm
+clk 50000000 Hz (the parent's images, milan_clk_hz): ilim 67109 units = +-200.000405 ppm
+  fast corner beyond it by 0.019597 ppm: the offset grows 19.597 ns/s and reaches STEP_LOCKED_NS_C after 5103 s, then steps again
+  slow corner inside it, leaving 0.020403 ppm for phase
+clk 100000000 Hz (the generator's default): ilim 33554 units = +-199.997425 ppm
+  fast corner beyond it by 0.022577 ppm: the offset grows 22.577 ns/s and reaches STEP_LOCKED_NS_C after 4429 s, then steps again
+  slow corner inside it, leaving 0.017423 ppm for phase
+clk 125000000 Hz: ilim 26844 units = +-200.003386 ppm
+  fast corner beyond it by 0.016616 ppm: the offset grows 16.616 ns/s and reaches STEP_LOCKED_NS_C after 6018 s, then steps again
+  slow corner inside it, leaving 0.023384 ppm for phase
+clk 2000000 Hz (the engine suite's): ilim 1677722 units = +-200.000048 ppm
+  fast corner beyond it by 0.019954 ppm: the offset grows 19.954 ns/s and reaches STEP_LOCKED_NS_C after 5011 s, then steps again
+  slow corner inside it, leaving 0.020046 ppm for phase
+
+# the clocks: 50 MHz is milan_clk_hz of the parent's AX7101 configs (configs/endstation_ax7101_1x1_tdm8.yaml:44, endstation_ax7101_8x8.yaml:56), which its builder passes as --clk-hz; 100 MHz is the generator's --clk-hz default; 2 MHz is the engine suite's (tb/verilator/engine/Makefile GENARGS); 125 MHz is the further clock R905-1's receipt lists

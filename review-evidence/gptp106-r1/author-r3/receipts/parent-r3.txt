@@ -1,0 +1,123 @@
+# parent consumer gates, scratch parent branch gptp106-107-r3 (854bd72367 + one commit pinning gptp-processor at 331e27d; local, never pushed), pinned Verilator 5.050
+$ git log --oneline -2; git submodule status gptp-processor
+3611d0d2ad Pin gptp-processor at 331e27d for the #106/#107 round-3 consumer gate (scratch, not for push)
+854bd72367 Merge PR #960: Flip the AX7101 default to the Mark II split, VERSION major 3 (#665)
+ 331e27de137a1d4f7acd4f3f2cc7e373b6e8e869 gptp-processor (he
+
+## summary (tools/parent3.sh: chains A, B and R; each leg's directory cleaned first)
+chain R: parent 3611d0d2ad gptp-processor 331e27d verilator Verilator 5.050 2026-07-01 rev v5.050 2026-11-23T20:45:59+01:00
+ratchet-py rc=0 15s
+ratchet-sv rc=0 1s
+ratchet-cpp rc=0 4s
+arm module: 865 lines
+chain R DONE 2026-11-23T20:46:19+01:00
+ratchet-sh rc=0
+chain A: parent 3611d0d2ad gptp-processor 331e27d verilator Verilator 5.050 2026-07-01 rev v5.050 2026-11-23T20:46:41+01:00
+chain B: parent 3611d0d2ad gptp-processor 331e27d verilator Verilator 5.050 2026-07-01 rev v5.050 2026-11-23T20:46:42+01:00
+gptp_shadow rc=0 540s
+milan_dp-gptp rc=0 820s
+gptp_plane rc=0 1089s
+milan_dp-gptp-lat rc=0 878s
+gptp_txts rc=0 225s
+gptp_tables rc=0 933s
+clkvalid rc=0 44s
+chain A DONE 2026-11-23T21:33:52+01:00
+milan_dp_gptp stopped by me at simulated_seconds=6.50, 4237 s after it started (about 10 min of wall time per simulated second at this load), before its default run ended: NOT RUN to completion; a session task cannot hold it past 2 h 2026-11-23T22:25:45+01:00
+gm_steps: parent 3611d0d2ad gptp-processor 331e27d Verilator 5.050 2026-07-01 rev v5.050 2026-11-23T22:25:51+01:00
+milan_dp_gm_steps rc=0 1085s
+
+## tallies
+### gptp_shadow
+326 checks: 326 PASS, 0 FAIL
+RESULT: PASS
+[ ok ] lines: 9, [FAIL]/FAIL lines: 0
+### gptp_plane
+31 checks: 31 PASS, 0 FAIL
+== phc_step: checks: 62   failures: 0 ==
+RESULT: PASS
+[ ok ] lines: 0, [FAIL]/FAIL lines: 0
+### gptp_txts
+== gptp_txts: checks: 95   failures: 0 ==
+RESULT: PASS
+== gptp_txts: checks: 95   failures: 0 ==
+RESULT: PASS
+== gptp_txts: checks: 95   failures: 0 ==
+RESULT: PASS
+RESULT: PASS
+[ ok ] lines: 13, [FAIL]/FAIL lines: 0
+### gptp_tables
+== gptp_tables: checks: 36   failures: 0 ==
+RESULT: PASS
+RESULT: PASS
+[ ok ] lines: 26, [FAIL]/FAIL lines: 0
+### clkvalid
+== clkvalid: checks: 22  failures: 0 ==
+== clkvalid: checks: 19  failures: 0 ==
+== clkvalid: checks: 14  failures: 0 ==
+[ ok ] lines: 0, [FAIL]/FAIL lines: 0
+### milan_dp-gptp
+212 checks: 212 PASS, 0 FAIL
+[ ok ] lines: 0, [FAIL]/FAIL lines: 0
+### milan_dp-gptp-lat
+212 checks: 212 PASS, 0 FAIL
+[ ok ] lines: 0, [FAIL]/FAIL lines: 0
+### milan_dp_gm_steps
+== gmstep: checks: 196   failures: 0 ==
+RESULT: PASS
+[PASS] the unmutated gateware still passes the gmstep leg (--no-small-steps)
+[PASS] control caught: the PHC re-base restart term is restored - breaks "restart: a PHC-only step leaves outgoing mr unchanged"
+[PASS] control caught: the source-change term is removed - breaks "source control: a real source change toggles mr once"
+[PASS] control caught: selected CRF mr propagation is removed - breaks "CRF control: selected CRF mr propagates exactly once"
+[PASS] control caught: the grandmaster identity empties the render stage - breaks "render: every PDU not presented was refused by the stage and counted once"
+[PASS] control caught: the step empties the render stage - breaks "render: every PDU not presented was refused by the stage and counted once"
+6 checks: 6 PASS, 0 FAIL
+[ ok ] lines: 196, [FAIL]/FAIL lines: 0
+
+### milan_dp_gptp (ax1x1gptp; not run to completion, see the summary): its last lines
+PROGRESS simulated_seconds=6.00 rx_aaf=48000 tx_aaf=47999
+PROGRESS simulated_seconds=6.25 rx_aaf=50000 tx_aaf=49999
+PROGRESS simulated_seconds=6.50 rx_aaf=52000 tx_aaf=51999
+[ ok ] lines before it was stopped: 81, failures: 0
+
+## ratchets at the pin commit
+### check_py_idiom.py
+py idiom: 683 first-party modules, 332569 lines
+  bare except: 0
+  mutable default argument: 0
+  shell invocation: 0
+  shadowed builtin: 0
+  wildcard import: 0
+  dynamic eval/exec: 0
+  unparseable source: 0
+  long function: 9 <= 9
+  long module: 10 <= 10
+  unannotated public function: 0 <= 0
+  undocumented public function: 0 <= 0
+  os.path use: 1 <= 1
+  unmanaged open: 0 <= 0
+  too many parameters: 7 <= 7
+  global statement: 0 <= 0
+  over-long line: 0 <= 0
+### check_sv_idiom.py
+SystemVerilog idiom gate: OK (145 first-party HDL file(s) across the superproject and both processor submodules, every one .sv/.svh; 0 generic `always`; 0 reg <= 0; 0 untyped parameter <= 0; 0 untyped localparam <= 0)
+### check_cpp_idiom.py
+cpp idiom: 399 first-party translation units, 199 of them C
+  naked new/delete: 0
+  goto: 0
+  unbounded C call: 0
+  c-style cast: 0 <= 0
+  file-scope mutable: 0 <= 0
+  macro constant: 0 <= 0
+  unnamed enum block: 0 <= 0
+  multi-declarator declaration: 0 <= 0
+  long function: 0 <= 0
+  build without warnings: 0 <= 0
+### check_sh_idiom.py
+sh idiom: 24 first-party scripts
+  backtick substitution: 0
+  cd without a failure path: 0
+  branch on $?: 0
+  shebang without the executable bit: 0
+  no strict mode: 5 <= 5
+  unquoted expansion: 3 <= 3
+  top-heavy long script: 0 <= 0

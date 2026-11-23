@@ -1,0 +1,4 @@
+start 2026-11-23T20:09:56+01:00 end 2026-11-23T21:09:55+01:00 rc 0
+vivado-slot: slot 0 ($VIVADO_LOCK), MemAvailable 67 GB, 2026-11-23T20:09:56+01:00
+/data-2/milan/tmp/gptp106-a831/r3-base-8x8/split/gateware rc=0
+place_design -directive ExtraPostPlacementOpt

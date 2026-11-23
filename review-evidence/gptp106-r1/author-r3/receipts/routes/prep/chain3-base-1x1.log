@@ -1,0 +1,5 @@
+base 1x1 EPPO rc=0 2026-11-23T21:50:58+01:00 .. 2026-11-23T22:35:25+01:00
+/data-2/milan/tmp/gptp106-a831/r3-base-1x1-aslh: baseline_implementation.tcl written; the gate's bound() accepts it as the AltSpreadLogic_high comparison of /data-2/milan/tmp/gptp106-a831/r3-base-1x1/split/gateware
+base 1x1 aslh rc=0 2026-11-23T22:35:25+01:00 .. 2026-11-23T22:46:55+01:00
+/data-2/milan/tmp/gptp106-a831/r3-base-1x1-eto: baseline_implementation.tcl written; the gate's bound() accepts it as the ExtraTimingOpt comparison of /data-2/milan/tmp/gptp106-a831/r3-base-1x1/split/gateware
+base 1x1 eto rc=0 2026-11-23T22:46:55+01:00 .. 2026-11-23T22:55:59+01:00

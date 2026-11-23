@@ -1,0 +1,129 @@
+# merge: origin/main (7cfd6a0, #102 and #104) into 106-107-announce-rate, one merge commit 331e27d
+$ git log --oneline -1 331e27d; git rev-parse 331e27d^1 331e27d^2; git merge-base 309292f 7cfd6a0
+331e27d Merge main (#102, #104: the engine mutation arm runs mutants at once through ccache) into 106-107-announce-rate, keeping the #106 and #107 controls and their named checks
+309292f58bcf15fa579b421d45a990b46b29c341
+7cfd6a025698de9e3536006eefb46f0fb114692a
+1616fc8f062fbf58c35ad31674b5b233207bbdb8
+
+## the one conflict: tb/verilator/engine/mutants.py, two hunks (docs/TEST_DEVELOPER.md, Makefile and the new files merged without one)
+hunk 1, the imports: the branch's p106/p107 tables against main's new path_mutants table. Resolved: all three.
+hunk 2, the all-named-checks rule: the branch's #106/#107 prefixes against main's say() (its concurrent arm prints through say). Resolved: main's say() and layout with the branch's two prefixes.
+
+## the resolved file against main: exactly the branch's own changes to mutants.py
+$ git diff 7cfd6a0 331e27d -- tb/verilator/engine/mutants.py
+diff --git a/tb/verilator/engine/mutants.py b/tb/verilator/engine/mutants.py
+index 1d44ef1..bee38bb 100644
+--- a/tb/verilator/engine/mutants.py
++++ b/tb/verilator/engine/mutants.py
+@@ -87,11 +87,12 @@ HDL = (HERE / "../../../hdl").resolve()
+ sys.path.insert(0, str((HERE / "../../").resolve()))
+ 
+ from mutation_verdict import TALLY, verdict  # noqa: E402
+-
+ sys.path.insert(0, str(HERE))
+ from receipt_mutants import GENERATOR, RECEIPT_MUTATIONS  # noqa: E402
+ from port_mutants import PORT_MUTATIONS  # noqa: E402
+ from p100_mutants import P100_MUTATIONS  # noqa: E402
++from p106_mutants import P106_MUTATIONS  # noqa: E402
++from p107_mutants import P107_MUTATIONS  # noqa: E402
+ from path_mutants import PATH_MUTATIONS  # noqa: E402
+ 
+ #: the RTL the suite builds, in the order the Makefile lists it
+@@ -538,6 +539,7 @@ MUTATIONS = [
+     *RECEIPT_MUTATIONS,
+     *PORT_MUTATIONS,                                  # #94: port_mutants.py
+     *P100_MUTATIONS,                                  # #100: p100_mutants.py
++    *P106_MUTATIONS, *P107_MUTATIONS,                 # p106/p107_mutants.py
+     ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
+      "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
+      "                 disp_ready_w && !disp_valid_r;",
+@@ -685,11 +687,11 @@ def named_verdict(answer: str, breaks: str, output: str,
+             answer = "missed its named check"
+         else:
+             say(named[0])
+-    # #82, #84, #85, #87 to #91, #94 and #100 controls must fail every
+-    # check they name, for the same reason: each of those checks needs its
+-    # own failing defect.
++    # The controls of these issues must fail every check they name, for the
++    # same reason: each of those checks needs its own failing defect.
+     if breaks.startswith(("#82 ", "#84 ", "#85 ", "#87 ", "#88 ", "#89 ",
+-                          "#90 ", "#91 ", "#94 ", "#100 ", P1_PREFIX)) and answer == "caught":
++                          "#90 ", "#91 ", "#94 ", "#100 ", "#106 ", "#107 ",
++                          P1_PREFIX)) and answer == "caught":
+         failed = [line for line in output.splitlines()
+                   if line.startswith("FAIL ")]
+         missed = [want for want in breaks.split(" | ")
+
+## the branch's own changes to mutants.py before the merge (1616fc8f..309292f), for comparison
+diff --git a/tb/verilator/engine/mutants.py b/tb/verilator/engine/mutants.py
+index e6e2845..cf8ca6e 100644
+--- a/tb/verilator/engine/mutants.py
++++ b/tb/verilator/engine/mutants.py
+@@ -71,11 +71,12 @@ HDL = (HERE / "../../../hdl").resolve()
+ sys.path.insert(0, str((HERE / "../../").resolve()))
+ 
+ from mutation_verdict import TALLY, verdict  # noqa: E402
+-
+ sys.path.insert(0, str(HERE))
+ from receipt_mutants import GENERATOR, RECEIPT_MUTATIONS  # noqa: E402
+ from port_mutants import PORT_MUTATIONS  # noqa: E402
+ from p100_mutants import P100_MUTATIONS  # noqa: E402
++from p106_mutants import P106_MUTATIONS  # noqa: E402
++from p107_mutants import P107_MUTATIONS  # noqa: E402
+ 
+ #: the RTL the suite builds, in the order the Makefile lists it
+ RTL_SOURCES = (
+@@ -535,6 +536,7 @@ MUTATIONS = [
+     *RECEIPT_MUTATIONS,
+     *PORT_MUTATIONS,                                  # #94: port_mutants.py
+     *P100_MUTATIONS,                                  # #100: p100_mutants.py
++    *P106_MUTATIONS, *P107_MUTATIONS,                 # p106/p107_mutants.py
+     ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
+      "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
+      "                 disp_ready_w && !disp_valid_r;",
+@@ -889,11 +891,10 @@ def named_verdict(answer: str, breaks: str, output: str) -> str:
+             answer = "missed its named check"
+         else:
+             print(named[0])
+-    # #82, #84, #85, #87 to #91, #94 and #100 controls must fail every
+-    # check they name, for the same reason: each of those checks needs its
+-    # own failing defect.
+-    if breaks.startswith(("#82 ", "#84 ", "#85 ", "#87 ", "#88 ", "#89 ",
+-                          "#90 ", "#91 ", "#94 ", "#100 ", P1_PREFIX)) and answer == "caught":
++    # The controls of these issues must fail every check they name, for the
++    # same reason: each of those checks needs its own failing defect.
++    if breaks.startswith(("#82 ", "#84 ", "#85 ", "#87 ", "#88 ", "#89 ", "#90 ", "#91 ",
++                          "#94 ", "#100 ", "#106 ", "#107 ", P1_PREFIX)) and answer == "caught":
+         failed = [line for line in output.splitlines()
+                   if line.startswith("FAIL ")]
+         missed = [want for want in breaks.split(" | ")
+
+## the module-length rule (parent scripts/check_py_idiom.py: a module over 1000 lines is long)
+1616fc8f mutants.py 999 lines
+a728cc3 mutants.py 1000 lines
+7cfd6a0 mutants.py 863 lines
+331e27d mutants.py 865 lines
+
+## the merged arm's table: 167 controls, P106 2 P107 7 PATH 21
+
+## main's order test on the merged arm (make -C tb/verilator/engine mutants-order-test)
+PASS --jobs 8 prints 168 [PASS] lines in list order
+PASS --jobs 8 tallies 168 checks
+PASS --jobs 8 gives each of the 168 entries its own run directory (got 168)
+PASS --jobs 8: the entries finished out of list order
+PASS --jobs 1 and --jobs 8 print the same bytes
+10 checks: 10 PASS, 0 FAIL
+
+## what the parent builds from this repository: hdl/ only (the route scripts read 12 gptp-processor/hdl files; the builder runs hdl/ucode/gen_gptp_ucode.py)
+hdl tree a728cc3 e0d11b2f39e0304817df69c267eb7367cb66031c, 331e27d e0d11b2f39e0304817df69c267eb7367cb66031c
+$ git diff --stat a728cc3 331e27d
+ docs/INTEGRATION.md                 |  57 ++++-
+ docs/TEST_DEVELOPER.md              |  32 ++-
+ tb/mutation_jobs_test.py            | 238 +++++++++++++++++++
+ tb/mutation_order_test.py           | 147 ++++++++++++
+ tb/verilator/engine/Makefile        |  41 +++-
+ tb/verilator/engine/mutants.py      | 453 +++++++++++++-----------------------
+ tb/verilator/engine/p107_mutants.py |  15 +-
+ tb/verilator/engine/path_mutants.py | 279 ++++++++++++++++++++++
+ tb/verilator/engine/sim_main.cpp    |  31 +--
+ 9 files changed, 962 insertions(+), 331 deletions(-)

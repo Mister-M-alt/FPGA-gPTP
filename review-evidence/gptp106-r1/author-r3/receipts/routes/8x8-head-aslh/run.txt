@@ -1,0 +1,4 @@
+start 2026-11-23T21:22:09+01:00 end 2026-11-23T21:50:32+01:00 rc 0
+vivado-slot: slot 1 (/tmp/milan-vivado-slot-1.lock), MemAvailable 61 GB, 2026-11-23T21:22:09+01:00
+/data-2/milan/tmp/gptp106-a831/r3-head-8x8-aslh rc=0
+place_design -directive AltSpreadLogic_high

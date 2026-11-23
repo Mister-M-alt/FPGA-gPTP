@@ -1,0 +1,129 @@
+# routes3: the #818 route sets, base 1616fc8f and head, both shapes
+floors (pp_resource_baseline.json route-1x1): WNS >= +0.030 ns, WHS >= +0.000 ns at every signoff corner
+figures: routed = baseline_utilization.rpt (the gate's record); placed = alinx_ax7101_utilization_place.rpt
+
+## 1x1 base
+EPPO  ExtraPostPlacementOpt  Slow_0C +0.099/+0.102  Slow_85C +0.099/+0.102  Fast_0C +1.687/+0.036  Fast_85C +1.687/+0.036  route status clean  floors met
+      routed LUT=32647 FF=42628 SLICE=13479 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11   placed LUT=32647 FF=42628 SLICE=13479 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+ASLH  AltSpreadLogic_high    Slow_0C +0.136/+0.064  Slow_85C +0.136/+0.064  Fast_0C +1.660/+0.033  Fast_85C +1.660/+0.033  route status clean  floors met
+      routed LUT=32794 FF=42628 SLICE=14275 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11   placed LUT=32794 FF=42628 SLICE=14275 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+ETO   ExtraTimingOpt         Slow_0C +0.158/+0.064  Slow_85C +0.158/+0.064  Fast_0C +1.660/+0.033  Fast_85C +1.660/+0.033  route status clean  floors met
+      routed LUT=32777 FF=42628 SLICE=14274 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11   placed LUT=32777 FF=42628 SLICE=14274 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+best() selects ExtraTimingOpt (worst-corner WNS +0.158 ns); it meets the floors at every corner
+
+## 1x1 head
+EPPO  ExtraPostPlacementOpt  Slow_0C +0.161/+0.092  Slow_85C +0.161/+0.092  Fast_0C +1.687/+0.032  Fast_85C +1.687/+0.032  route status clean  floors met
+      routed LUT=32398 FF=42621 SLICE=13501 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11   placed LUT=32398 FF=42621 SLICE=13501 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+ASLH  AltSpreadLogic_high    Slow_0C +0.190/+0.102  Slow_85C +0.190/+0.102  Fast_0C +1.691/+0.036  Fast_85C +1.691/+0.036  route status clean  floors met
+      routed LUT=32466 FF=42623 SLICE=14261 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11   placed LUT=32466 FF=42623 SLICE=14261 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+ETO   ExtraTimingOpt         Slow_0C +0.276/+0.102  Slow_85C +0.276/+0.102  Fast_0C +1.691/+0.036  Fast_85C +1.691/+0.036  route status clean  floors met
+      routed LUT=32455 FF=42624 SLICE=14271 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11   placed LUT=32455 FF=42624 SLICE=14271 BRAM_TILE=80 RAMB36=62 RAMB18=36 DSP=11
+best() selects ExtraTimingOpt (worst-corner WNS +0.276 ns); it meets the floors at every corner
+
+## 8x8 base
+EPPO  ExtraPostPlacementOpt  Slow_0C +0.073/+0.102  Slow_85C +0.073/+0.102  Fast_0C +1.636/+0.034  Fast_85C +1.636/+0.034  route status clean  floors met
+      routed LUT=43022 FF=50995 SLICE=15624 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11   placed LUT=43022 FF=50995 SLICE=15624 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+ASLH  AltSpreadLogic_high    Slow_0C +0.006/+0.102  Slow_85C +0.006/+0.102  Fast_0C +1.412/+0.036  Fast_85C +1.412/+0.036  route status clean  floors NOT met
+      routed LUT=43000 FF=50993 SLICE=15686 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11   placed LUT=43000 FF=50993 SLICE=15686 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+ETO   ExtraTimingOpt         Slow_0C +0.064/+0.102  Slow_85C +0.064/+0.102  Fast_0C +1.412/+0.027  Fast_85C +1.412/+0.027  route status clean  floors met
+      routed LUT=42998 FF=50993 SLICE=15680 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11   placed LUT=42998 FF=50993 SLICE=15680 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+best() selects ExtraPostPlacementOpt (worst-corner WNS +0.073 ns); it meets the floors at every corner
+
+## 8x8 head
+EPPO  ExtraPostPlacementOpt  Slow_0C +0.332/+0.102  Slow_85C +0.332/+0.102  Fast_0C +1.636/+0.036  Fast_85C +1.636/+0.036  route status clean  floors met
+      routed LUT=43477 FF=50885 SLICE=15544 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11   placed LUT=43466 FF=50885 SLICE=15544 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+ASLH  AltSpreadLogic_high    Slow_0C +0.237/+0.102  Slow_85C +0.237/+0.102  Fast_0C +1.660/+0.036  Fast_85C +1.660/+0.036  route status clean  floors met
+      routed LUT=43536 FF=50884 SLICE=15186 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11   placed LUT=43533 FF=50884 SLICE=15186 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+ETO   ExtraTimingOpt         Slow_0C +0.244/+0.102  Slow_85C +0.244/+0.102  Fast_0C +1.660/+0.036  Fast_85C +1.660/+0.036  route status clean  floors met
+      routed LUT=43589 FF=50886 SLICE=15220 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11   placed LUT=43586 FF=50886 SLICE=15221 BRAM_TILE=94.5 RAMB36=78 RAMB18=33 DSP=11
+best() selects ExtraPostPlacementOpt (worst-corner WNS +0.332 ns); it meets the floors at every corner
+
+# qualifying head against qualifying base
+
+## 1x1: base ExtraTimingOpt, head ExtraTimingOpt
+routed: LUT 32777 -> 32455 (-322)  FF 42628 -> 42624 (-4)  SLICE 14274 -> 14271 (-3)  BRAM_TILE 80 -> 80 (+0)  RAMB36 62 -> 62 (+0)  RAMB18 36 -> 36 (+0)  DSP 11 -> 11 (+0)
+placed: LUT 32777 -> 32455 (-322)  FF 42628 -> 42624 (-4)  SLICE 14274 -> 14271 (-3)  BRAM_TILE 80 -> 80 (+0)  RAMB36 62 -> 62 (+0)  RAMB18 36 -> 36 (+0)  DSP 11 -> 11 (+0)
+rule (LUT/FF/BRAM of the qualifying head <= the qualifying base's, routed): MET
+  head EPPO  floors met; against the qualifying base: no growth
+  head ASLH  floors met; against the qualifying base: no growth
+  head ETO   floors met; against the qualifying base: no growth
+routed hierarchy (baseline_hierarchy.rpt) as 137 disjoint pieces (base 137, head 137): every leaf cell and every parent's own row
+  FF, RAMB36, RAMB18 and DSP pieces sum exactly to the image; LUT pieces count a LUT site shared by two cells in each: shared sites base 144, head 160
+  pieces' changes: LUT -306, less the shared sites' change +16, = the image's -322; FF -4, RAMB36 +0, RAMB18 +0, DSP +0
+pieces whose LUTs moved by 40 or more (base -> head LUT; FF change):
+    -259     877 -> 618    FF    +0  alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow (own)
+    -179    2418 -> 2239   FF    +1  alinx_ax7101/milan_datapath/csr
+    +173     195 -> 368    FF    +0  alinx_ax7101/milan_datapath/chan_map_render
+    +167     147 -> 314    FF    +0  alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_txslot
+    +150    2116 -> 2266   FF    -5  alinx_ax7101/KL_mbx (own)
+    -146    2769 -> 2623   FF    +0  alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_ucpu
+    -117     921 -> 804    FF    +0  alinx_ax7101/milan_datapath/chan_map_capture
+    -100    1822 -> 1722   FF    -2  alinx_ax7101/KL_mbx/u_rx
+     -96     375 -> 279    FF    +0  alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_timer
+     +71     232 -> 303    FF    +0  alinx_ax7101/milan_datapath/crf_rx
+     -64      85 -> 21     FF    +0  alinx_ax7101/KL_mbx/u_maap_tx
+     +62     781 -> 843    FF    +0  alinx_ax7101/KL_mbx_dma
+     +62     384 -> 446    FF    +0  alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/peripheral_toAxiLite4_logic_bridge/a_buffered_fork2
+     +57     183 -> 240    FF    +0  alinx_ax7101/milan_datapath/ts_counter
+     -46     487 -> 441    FF    +0  alinx_ax7101/milan_datapath/avtp_rx_parser
+     -41  every other piece (122), FF +2
+     -16  less the shared LUT sites' change (144 -> 160)
+the gPTP plane (g_gptp_plane.u_gptp_shadow), Vivado's row: LUT 5979 -> 5637 (-342), FF +0, RAMB36 +0, RAMB18 +0, DSP +0; the sum of its 10 pieces: LUT -341
+  its engine, the only cell whose RTL or microcode image this change touches (u_engine), Vivado's row: LUT 4717 -> 4637 (-80), FF +0, RAMB36 +0, RAMB18 +0, DSP +0; the sum of its 5 pieces: LUT -81
+every piece outside the gPTP plane: LUT +35, FF -4
+depth 1, Vivado's rows (each top-level cell with everything inside it; nested rows are not added):
+  LUT     +2 (1042 -> 1044)  FF    +3  alinx_ax7101 (own)
+  LUT    -11 (212 -> 201)  FF    +0  alinx_ax7101/KL_gptp_gmii_launch
+  LUT    -61 (5541 -> 5480)  FF    -7  alinx_ax7101/KL_mbx
+  LUT    -20 (1218 -> 1198)  FF    +0  alinx_ax7101/KL_mbx_cdc
+  LUT    +62 (781 -> 843)  FF    +0  alinx_ax7101/KL_mbx_dma
+  LUT    -28 (31 -> 3)  FF    +0  alinx_ax7101/KL_mbx_wb
+  LUT    +89 (4031 -> 4120)  FF    +0  alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51
+  LUT   -356 (19902 -> 19546)  FF    +0  alinx_ax7101/milan_datapath
+
+## 8x8: base ExtraPostPlacementOpt, head ExtraPostPlacementOpt
+routed: LUT 43022 -> 43477 (+455)  FF 50995 -> 50885 (-110)  SLICE 15624 -> 15544 (-80)  BRAM_TILE 94.5 -> 94.5 (+0)  RAMB36 78 -> 78 (+0)  RAMB18 33 -> 33 (+0)  DSP 11 -> 11 (+0)
+placed: LUT 43022 -> 43466 (+444)  FF 50995 -> 50885 (-110)  SLICE 15624 -> 15544 (-80)  BRAM_TILE 94.5 -> 94.5 (+0)  RAMB36 78 -> 78 (+0)  RAMB18 33 -> 33 (+0)  DSP 11 -> 11 (+0)
+rule (LUT/FF/BRAM of the qualifying head <= the qualifying base's, routed): NOT MET: LUT +455
+  head EPPO  floors met; against the qualifying base: LUT +455
+  head ASLH  floors met; against the qualifying base: LUT +514
+  head ETO   floors met; against the qualifying base: LUT +567
+routed hierarchy (baseline_hierarchy.rpt) as 129 disjoint pieces (base 129, head 129): every leaf cell and every parent's own row
+  FF, RAMB36, RAMB18 and DSP pieces sum exactly to the image; LUT pieces count a LUT site shared by two cells in each: shared sites base 202, head 217
+  pieces' changes: LUT +470, less the shared sites' change +15, = the image's +455; FF -110, RAMB36 +0, RAMB18 +0, DSP +0
+pieces whose LUTs moved by 40 or more (base -> head LUT; FF change):
+   +1569    3733 -> 5302   FF    -6  alinx_ax7101/KL_mbx_cdc/u_edit (own)
+   -1338    4105 -> 2767   FF    -9  alinx_ax7101/milan_datapath/csr
+    +335    1776 -> 2111   FF    +0  alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow (own)
+    +220    4165 -> 4385   FF   +18  alinx_ax7101/milan_datapath (own)
+    -109    1340 -> 1231   FF    +0  alinx_ax7101/milan_datapath/chan_map_capture
+     -87     653 -> 566    FF    +0  alinx_ax7101/KL_mbx_cdc (own)
+     +86     274 -> 360    FF    +0  alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/peripheral_toAxiLite4_logic_bridge (own)
+     +83     230 -> 313    FF    +0  alinx_ax7101/milan_datapath/crf_rx
+     +75     502 -> 577    FF    +0  alinx_ax7101/KL_mbx_cdc/u_pub
+     -69     148 -> 79     FF    +0  alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/splited_wc_hub_hub_logic_hub/streamArbiter_12
+     -67     199 -> 132    FF    +0  alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_txslot
+     +65     335 -> 400    FF    +0  alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/splited_wc_hub_hub_logic_hub (own)
+     -63     223 -> 160    FF    +0  alinx_ax7101/milan_datapath/g_gptp_plane.u_gptp_shadow/u_engine/u_timer
+     -59     459 -> 400    FF    +0  alinx_ax7101/milan_datapath/avtp_rx_parser
+     -57     307 -> 250    FF    +0  alinx_ax7101/milan_datapath/crf_tx
+     -55     564 -> 509    FF    +0  alinx_ax7101/milan_datapath/stream_table
+     +52     210 -> 262    FF    +0  alinx_ax7101/milan_datapath/ts_counter
+     -50     768 -> 718    FF    +0  alinx_ax7101/milan_datapath/talker_diag
+     -44      87 -> 43     FF    +0  alinx_ax7101/KL_mbx/u_acmp_rx
+     -41     412 -> 371    FF    +0  alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51/peripheral_toAxiLite4_logic_bridge/a_buffered_fork2
+     -40     180 -> 140    FF    +0  alinx_ax7101/milan_datapath/g_sp_ctrl.ctrl_split (own)
+     +64  every other piece (108), FF -113
+     -15  less the shared LUT sites' change (202 -> 217)
+the gPTP plane (g_gptp_plane.u_gptp_shadow), Vivado's row: LUT 5858 -> 6097 (+239), FF +1, RAMB36 +0, RAMB18 +0, DSP +0; the sum of its 10 pieces: LUT +240
+  its engine, the only cell whose RTL or microcode image this change touches (u_engine), Vivado's row: LUT 3811 -> 3737 (-74), FF +1, RAMB36 +0, RAMB18 +0, DSP +0; the sum of its 5 pieces: LUT -73
+every piece outside the gPTP plane: LUT +230, FF -111
+depth 1, Vivado's rows (each top-level cell with everything inside it; nested rows are not added):
+  LUT    +22 (955 -> 977)  FF    +0  alinx_ax7101 (own)
+  LUT     +8 (192 -> 200)  FF    +0  alinx_ax7101/KL_gptp_gmii_launch
+  LUT    -73 (5511 -> 5438)  FF   -12  alinx_ax7101/KL_mbx
+  LUT  +1588 (5560 -> 7148)  FF   -42  alinx_ax7101/KL_mbx_cdc
+  LUT     -6 (763 -> 757)  FF    +0  alinx_ax7101/KL_mbx_dma
+  LUT    -39 (45 -> 6)  FF    +0  alinx_ax7101/KL_mbx_wb
+  LUT    +45 (3805 -> 3850)  FF    -2  alinx_ax7101/VexiiRiscvLitex_191cc5939ce3852a6aea2e352ce86e51
+  LUT  -1085 (26184 -> 25099)  FF   -54  alinx_ax7101/milan_datapath

@@ -1,0 +1,19 @@
+head 2cf4b61406cfdd5b51f59823de47820f586480f4 gptp-processor a728cc3ce9d0342aa596c8170fecf1284c0b604c tree: 
+2026-11-23T20:09:57+01:00
+GRADER gptp-locked: FAIL (SYNC=0 ASCAPABLE=1 TU=1); not evidence: no gPTP peer and no datapath: CLKV_STAT is the stand-in register file's word
+GRADER phc-advances: PASS (0x00000000046C7489 -> 0x000000000480F87D)
+ctrl_split_boot: PASS (0 finding(s))
+2026-11-23T20:17:55+01:00
+recipe argv names --ctrl-firmware sw/builder/out/endstation_ax7101_8x8/ctrl_app.elf
+WROTE /data-2/milan/tmp/gptp106-a831/r3-head-8x8/flash-map/generated/csr.h, /data-2/milan/tmp/gptp106-a831/r3-head-8x8/flash-map/generated/mem.h, /data-2/milan/tmp/gptp106-a831/r3-head-8x8/flash-map/flash_port.json
+[endstation_builder] WARNING: platform.mac_address 02:4b:4c:4b:4c:01 has the U/L bit set: it is locally administered, not an IEEE-assigned EUI-48, and neither are the gPTP clockIdentity and the mac-derived entity_id formed from it (IEEE 802.1AS-2011 8.5.2.2.1, IEEE 1588-2008 7.5.2.2.2, IEEE 1722.1-2021 6.2.2.7). A production build needs an address from an owned MA-L, MA-M or MA-S block (#840).
+ctrl_app.elf 0add4cbd25ffc66d
+[milan] flash-boot layout (baremetal) -> /data-2/milan/tmp/gptp106-a831/r3-head-8x8/split/flashboot_layout.json
+[milan] split image manifest -> /data-2/milan/tmp/gptp106-a831/r3-head-8x8/split/image_manifest.json
+csr map: the image's equals the stand-in's
+image identity: a split image whose manifest, ident, firmware, bitstream and placement agree, with no DDR3
+/data-2/milan/tmp/gptp106-a831/r3-head-8x8/split/gateware/baseline_integrated.tcl
+place_design -directive ExtraPostPlacementOpt lines: 1
+gptp ucode image: 48ffdf5c266ce389
+2026-11-23T20:18:09+01:00
+done
