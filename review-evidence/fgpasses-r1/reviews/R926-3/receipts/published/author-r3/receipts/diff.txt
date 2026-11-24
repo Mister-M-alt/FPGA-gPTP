@@ -1,0 +1,18 @@
+diff --git a/docs/TEST_DEVELOPER.md b/docs/TEST_DEVELOPER.md
+index db4806f..ae23dad 100644
+--- a/docs/TEST_DEVELOPER.md
++++ b/docs/TEST_DEVELOPER.md
+@@ -72,10 +72,12 @@ Outputs print afterwards, in the serial order.
+ 
+ That holds under `-s`, `-i` and `-k` too.
+ 
+-The first failing pass in order sets the status.
++Without `-i`, the first failing pass sets the status.
+ 
+ It also stops the later passes.
+ 
++With `-i`, failures are ignored and later passes continue.
++
+ Four free job slots take about its longest pass.
+ 
+ By default, up to eight engine mutants run at once.

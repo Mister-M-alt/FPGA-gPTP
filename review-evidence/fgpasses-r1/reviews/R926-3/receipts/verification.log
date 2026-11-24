@@ -1,0 +1,8 @@
+PASS: 122 tracked files; index, bytes, modes and zero gitlinks; documentation-only delta
+PASS: 53 archive blobs; 52 manifest matches
+c-base-j4 -> c-head-j4: instructions +0.293598%; CPU +30.279211%; wall 2.048904x
+r-base-j4 -> r-head-j4: instructions +0.293606%; CPU -16.549339%; wall 2.949327x
+r-base-j4 -> r-head-j4-b: instructions +0.293607%; CPU -24.205349%; wall 3.600794x
+c-base-j1 -> c-head-j1: instructions +0.038596%; CPU +3.552979%; wall 0.965804x
+c-base-abort-j4 -> c-head-abort-j4: instructions +0.533809%; CPU -31.703456%; wall 1.474911x
+PASS: ignored and ordinary failures match serial; current documentation describes both

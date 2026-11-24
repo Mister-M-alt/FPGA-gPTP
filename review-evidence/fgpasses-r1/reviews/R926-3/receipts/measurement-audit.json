@@ -1,0 +1,136 @@
+{
+  "arms": {
+    "c-base-abort-j4": {
+      "head": "1213ac5b9e09b8759ba76cc70c53652b5e108996",
+      "wall": 228.39,
+      "user": 227.14,
+      "system": 0.28,
+      "cpu": 227.42,
+      "rc": 2,
+      "cycles:u": 837439887526,
+      "instructions:u": 2469385704454
+    },
+    "c-base-j1": {
+      "head": "1213ac5b9e09b8759ba76cc70c53652b5e108996",
+      "wall": 460.64,
+      "user": 458.54,
+      "system": 0.23,
+      "cpu": 458.77000000000004,
+      "rc": 0,
+      "cycles:u": 1692812190318,
+      "instructions:u": 7518256289086
+    },
+    "c-base-j4": {
+      "head": "1213ac5b9e09b8759ba76cc70c53652b5e108996",
+      "wall": 453.32,
+      "user": 451.41,
+      "system": 0.22,
+      "cpu": 451.63000000000005,
+      "rc": 0,
+      "cycles:u": 1666398818284,
+      "instructions:u": 7518255745307
+    },
+    "c-head-abort-j4": {
+      "head": "661e4c3a45904d2d8f3e061c67103a945651d9ff",
+      "wall": 154.85,
+      "user": 154.83,
+      "system": 0.49,
+      "cpu": 155.32000000000002,
+      "rc": 2,
+      "cycles:u": 570523845971,
+      "instructions:u": 2482567508212
+    },
+    "c-head-j1": {
+      "head": "661e4c3a45904d2d8f3e061c67103a945651d9ff",
+      "wall": 476.95,
+      "user": 474.62,
+      "system": 0.45,
+      "cpu": 475.07,
+      "rc": 0,
+      "cycles:u": 1751726529487,
+      "instructions:u": 7521158053895
+    },
+    "c-head-j4": {
+      "head": "661e4c3a45904d2d8f3e061c67103a945651d9ff",
+      "wall": 221.25,
+      "user": 587.96,
+      "system": 0.42,
+      "cpu": 588.38,
+      "rc": 0,
+      "cycles:u": 2165415708264,
+      "instructions:u": 7540329160123
+    },
+    "r-base-j4": {
+      "head": "1213ac5b9e09b8759ba76cc70c53652b5e108996",
+      "wall": 653.04,
+      "user": 650.35,
+      "system": 0.25,
+      "cpu": 650.6,
+      "rc": 0,
+      "cycles:u": 2397873791051,
+      "instructions:u": 7518254937328
+    },
+    "r-head-j4": {
+      "head": "661e4c3a45904d2d8f3e061c67103a945651d9ff",
+      "wall": 221.42,
+      "user": 542.41,
+      "system": 0.52,
+      "cpu": 542.93,
+      "rc": 0,
+      "cycles:u": 1996958923917,
+      "instructions:u": 7540328960677
+    },
+    "r-head-j4-b": {
+      "head": "661e4c3a45904d2d8f3e061c67103a945651d9ff",
+      "wall": 181.36,
+      "user": 492.67,
+      "system": 0.45,
+      "cpu": 493.12,
+      "rc": 0,
+      "cycles:u": 1814645373218,
+      "instructions:u": 7540329035912
+    }
+  },
+  "pairs": [
+    {
+      "base": "c-base-j4",
+      "head": "c-head-j4",
+      "instructions_percent": 0.29359755192923664,
+      "cpu_percent": 30.27921085844605,
+      "wall_speedup": 2.04890395480226,
+      "instruction_gate_pass": true
+    },
+    {
+      "base": "r-base-j4",
+      "head": "r-head-j4",
+      "instructions_percent": 0.29360567755427613,
+      "cpu_percent": -16.5493390716262,
+      "wall_speedup": 2.9493270707253183,
+      "instruction_gate_pass": true
+    },
+    {
+      "base": "r-base-j4",
+      "head": "r-head-j4-b",
+      "instructions_percent": 0.2936066782519342,
+      "cpu_percent": -24.205348908699666,
+      "wall_speedup": 3.600794000882223,
+      "instruction_gate_pass": true
+    },
+    {
+      "base": "c-base-j1",
+      "head": "c-head-j1",
+      "instructions_percent": 0.03859624755293556,
+      "cpu_percent": 3.5529786167360466,
+      "wall_speedup": 0.9658035433483594,
+      "instruction_gate_pass": true
+    },
+    {
+      "base": "c-base-abort-j4",
+      "head": "c-head-abort-j4",
+      "instructions_percent": 0.5338090252253513,
+      "cpu_percent": -31.703456160408038,
+      "wall_speedup": 1.4749112043913464,
+      "instruction_gate_pass": true
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "case": "ignore-errors",
+    "rc": 0,
+    "serial_equal": true
+  },
+  {
+    "case": "ordinary-failure",
+    "rc": 2,
+    "serial_equal": true
+  }
+]

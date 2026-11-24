@@ -1,0 +1,10 @@
+python3 ../../stub/gen.py --clk-hz 2000000 --cease-ms 3000 -o gptp_ucode.hex
+image written gptp_ucode.hex
+../../stub/verilator.py --cc --exe --build -j 0 --top-module KL_gptp_engine -Wall -Wno-fatal -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDPARAM -GUCODE_HEX_P='"gptp_ucode.hex"' -GCLK_HZ_P=2000000 -CFLAGS "-std=c++17 -O2 -I$REVIEWS/fgpasses-r926-3-packet/scratch/ignore-errors-_d2fpa3d/parallel/engine -Wall -Wextra" ../../../hdl/ucpu/gptp_ucpu_pkg.sv ../../../hdl/ucpu/KL_gptp_ucpu.sv ../../../hdl/wire/KL_gptp_rx_parser.sv ../../../hdl/wire/KL_gptp_tx_slot.sv ../../../hdl/common/KL_gptp_timer.sv ../../../hdl/top/KL_gptp_engine.sv sim_main.cpp -o Vengine_sim
+stub verilator: Vengine_sim from 27 arguments
+./obj_dir/Vengine_sim
+pass 0: first line
+pass 0: 12 checks: 12 PASS, 0 FAIL
+-- again, with the request counter seeded above 16 bits --
+pass 1: first line
+pass 1: 12 checks: 11 PASS, 1 FAIL

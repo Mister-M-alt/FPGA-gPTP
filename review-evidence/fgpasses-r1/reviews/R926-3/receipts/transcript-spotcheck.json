@@ -1,0 +1,9 @@
+{
+  "pair": [
+    "c-base-j4",
+    "c-head-j4"
+  ],
+  "ordered_equal": true,
+  "retained_lines": 181,
+  "normalization": "checkout include path and one compiler timing-statistics line only"
+}
