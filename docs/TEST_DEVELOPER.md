@@ -49,6 +49,7 @@ No handwritten C harness exists.
 | `make -C tb/verilator/engine mutants` | Engine mutation controls |
 | `make -C tb/verilator/engine mutants-jobs-test` | Engine mutation output across jobs and ccache states |
 | `make -C tb/verilator/engine mutants-order-test` | Engine verdict order, with stubbed builds and runs |
+| `make -C tb/verilator/engine passes-test` | Engine pass order, budget and signals, stub tools |
 | `make -C tb/verilator/parser mutants` | Parser receive-error, PathTrace and TLV-walk mutation controls |
 | `make -C tb/verilator/gaskets` | Bench MII gasket loopback and its mutation controls |
 | `make -C tb/tsngen` | Independent frame decode; skips without its checkout |
@@ -59,13 +60,23 @@ No handwritten C harness exists.
 
 Bare `make` in parser, engine, gaskets and tsngen adds mutants.
 
-The engine suite's four passes run at once.
+The engine suite's four passes are four make jobs.
 
-Their outputs print afterwards, in the serial order.
+`make -j4` runs them at once.
 
-The first failing pass in order sets the exit status.
+`-j1`, or no `-j`, runs one at a time.
 
-Four free cores run it in about its longest pass.
+A parent make's budget counts each as one job.
+
+Outputs print afterwards, in the serial order.
+
+That holds under `-s`, `-i` and `-k` too.
+
+The first failing pass in order sets the status.
+
+It also stops the later passes.
+
+Four free job slots take about its longest pass.
 
 By default, up to eight engine mutants run at once.
 
@@ -85,9 +96,11 @@ A ccache that cannot write its cache fails the build.
 
 Point `CCACHE_DIR` somewhere writable, or set `OBJCACHE=`.
 
-Bare engine `make` also runs the order check.
+Bare engine `make` also runs the order and passes checks.
 
-That check takes seconds.
+The order check takes seconds.
+
+The passes check takes about 90 seconds.
 
 The jobs test runs the arm six times.
 
