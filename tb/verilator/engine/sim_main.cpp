@@ -290,7 +290,8 @@
 //         the wire can make the datapath compute, keep asCapable and are
 //         used and published as -800 ns, with no PHC step
 // 64      #109: 800 ns keeps asCapable; 801 ns clears it, and the next
-//         Follow_Up is not used
+//         Follow_Up is not used; so does the most positive delay the wire
+//         can make the datapath compute, above 2^60 ns
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255 and
 // --clock-accuracy 0xFE) runs only the phases a self publication passes
@@ -8633,7 +8634,11 @@ class GptpEngineHarness {
   // ---- 64: #109, the +800 ns threshold is unchanged ----------------------
   // 800 ns keeps asCapable and is used; 801 ns exceeds
   // neighborPropDelayThresh (Milan v1.2 4.2.6.1.1), so the exchange is bad:
-  // asCapable falls, and the next Follow_Up is not used and steps nothing
+  // asCapable falls, and the next Follow_Up is not used and steps nothing.
+  // So is the most positive delay the wire can make the datapath compute,
+  // the mirror of phase 63's (t2 the largest fold, t3's seconds field
+  // 0x80000000): the verdict reads the sign of the whole 64-bit D - 801,
+  // and a narrower one would judge such a delay good
   void judge_the_threshold_at_800_and_801() {
     {
       const char *tag = "#109 D 800";
@@ -8656,6 +8661,29 @@ class GptpEngineHarness {
       expect(n, pr.consumed || pr.stepped, 0);
     }
     expect("#109 capable again after 801", p109_ready(), 1);
+    judge_the_most_positive_delay_of_the_wire();
+  }
+
+  //! #109: the most positive delay the wire can make the datapath compute
+  //! is a bad exchange
+  void judge_the_most_positive_delay_of_the_wire() {
+    const char *tag = "#109 the most positive delay of the wire";
+    const WireTs t2w{0x7FFFFFFFull, 0xFFFFFFFFu};
+    const WireTs t3w{0x80000000ull, 0u};
+    if (p109_exchange(tag, PD_WIRE, 0, t2w, t3w)) {
+      printf("INFO %s: computed %lld ns\n", tag,
+             static_cast<long long>(pdm.d));
+      char n[160];
+      snprintf(n, sizeof n, "%s: the plane computes above 2^60 ns", tag);
+      expect(n, pdm.d > (1ll << 60), 1);
+      snprintf(n, sizeof n, "%s: asCapable falls", tag);
+      expect(n, dut->pub_flags_o & FL_ASCAP, 0);
+      const P109Pair pr = p109_pair(P109_THRESH, 0);
+      snprintf(n, sizeof n, "%s: the next Follow_Up is not used", tag);
+      expect(n, pr.consumed || pr.stepped, 0);
+    }
+    expect("#109 capable again after the most positive delay", p109_ready(),
+           1);
   }
 
 };

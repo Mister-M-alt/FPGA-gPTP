@@ -106,4 +106,12 @@ P109_MUTATIONS = [
      VERDICT,
      VERDICT.replace("imm=NPD_HI_C + 1)", "imm=NPD_HI_C)"),
      kept("D 800")),
+    # word-neutral: the verdict tests D - 801 >> 31 for zero, not its sign,
+    # so a delay of 2^31 + 801 ns or more is a good exchange
+    ("the verdict reads D - 801 from bit 31", GENERATOR,
+     VERDICT,
+     VERDICT.replace("cnd=ALU_SHR, imm=63)", "cnd=ALU_SHR, imm=31)"),
+     "#109 the most positive delay of the wire: asCapable falls"
+     " | #109 the most positive delay of the wire: the next Follow_Up is"
+     " not used"),
 ]
