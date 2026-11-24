@@ -1,0 +1,7 @@
+HEAD 74830c2f73a3001da7325e84e8fe19a161383f82 tree 274dd63e5414ca64c5bd83b9df78939c8820b47e
+status --porcelain --ignored: []
+worktree == index
+index == HEAD
+ls-files -s digest e25410076ab677579713b3f3fecf82686043acd45ebce7ac398be50cd4691644
+ls-tree digest     e25410076ab677579713b3f3fecf82686043acd45ebce7ac398be50cd4691644
+gitlinks (mode 160000): 0

@@ -1,0 +1,39 @@
+# Reproduction: 74830c2 harness and RTL, 1213ac5b generator and ROM image (md5 a9fd0a0f6586a04bc2f2ef19422a8017), shipping pass; rc=2
+FAIL lines: 31; not prefixed '#109 ': 0; 'its offset uses the delay exactly': 7
+FAIL lines identical to R921-1 receipts/repro_suite.txt (8e4889b harness): yes
+```
+FAIL #109 D -81: asCapable kept   got 0000000000000000 exp 0000000000000004
+FAIL #109 D -81: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -81: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -81: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -263: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -263: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -263: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -263: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 latency constants over-stated by 400 ns: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 latency constants over-stated by 400 ns: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 latency constants over-stated by 400 ns: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 latency constants over-stated by 400 ns: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -800: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -800: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -800: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -800: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -801: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -801: the engine publishes the used delay got 00000000fffffcdf exp 00000000fffffce0
+FAIL #109 D -801: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -801: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -801: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -5000000: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 D -5000000: the engine publishes the used delay got 00000000ffb3b4c0 exp 00000000fffffce0
+FAIL #109 D -5000000: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -5000000: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -5000000: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+INFO #109 the most negative delay of the wire: computed -2147483641057566820 ns, the wire's bound -2147483649647483648 ns
+FAIL #109 the most negative delay of the wire: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 the most negative delay of the wire: the engine publishes the used delay got 000000009dcd1f9c exp 00000000fffffce0
+FAIL #109 the most negative delay of the wire: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 the most negative delay of the wire: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 the most negative delay of the wire: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+INFO #109 the most positive delay of the wire: computed 2147483658237409833 ns
+2302 checks: 2271 PASS, 31 FAIL
+```

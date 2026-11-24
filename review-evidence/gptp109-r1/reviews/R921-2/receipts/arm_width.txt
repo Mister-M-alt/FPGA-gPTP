@@ -1,0 +1,14 @@
+# arm_width at 74830c2; rc=1
+INFO full arm entries: 176; #109 entries: 9
+INFO running 2 entries
+INFO entry: W60 the verdict reads D - 801 from bit 60
+INFO entry: W61 the verdict reads D - 801 from bit 61
+[PASS] the unmutated engine still passes the harness
+FAIL #109 the most positive delay of the wire: asCapable falls got 0000000000000004 exp 0000000000000000
+FAIL #109 the most positive delay of the wire: the next Follow_Up is not used got 0000000000000001 exp 0000000000000000
+[PASS] mutant caught: W60 the verdict reads D - 801 from bit 60 - breaks "#109 the most positive delay of the wire: asCapable falls | #109 the most positive delay of the wire: the next Follow_Up is not used"
+[FAIL] mutant SURVIVED: W61 the verdict reads D - 801 from bit 61. The harness does not prove "#109 the most positive delay of the wire: asCapable falls | #109 the most positive delay of the wire: the next Follow_Up is not used".
+
+3 checks: 2 PASS, 1 FAIL
+
+Reviewer note: W61 is expected to survive. Every delay the wire can make the datapath compute lies in (-2^61, 2^61) (phase 63 computes -2147483641057566821, phase 64 +2147483649647485841; 2^61 = 2305843009213693952), so reading D - 801 from bit 61 (or 62) gives the same verdict as bit 63 for every reachable D: an equivalent mutant on the reachable domain. W60 is caught, so the trial kills every verdict that reads bit 60 or below.
