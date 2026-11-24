@@ -3574,5 +3574,29 @@
     "original_sha256": "4699bc7d6197975a080ddc664dd9214d04034d01d790bab8685234991566cca8",
     "published_sha256": "4699bc7d6197975a080ddc664dd9214d04034d01d790bab8685234991566cca8",
     "path_redacted": false
+  },
+  {
+    "file": "author-r3/REVIEW-READY.md",
+    "original_sha256": "ce4121c6ff23632e61b5e1d9ed2b120a0300cd9f811980b7d356559fed3e98db",
+    "published_sha256": "ce4121c6ff23632e61b5e1d9ed2b120a0300cd9f811980b7d356559fed3e98db",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r3/receipts/diff.txt",
+    "original_sha256": "6884501fbe81ad1789c0e5e40123a025e113373aa8a22938f93a0512f9cab924",
+    "published_sha256": "6884501fbe81ad1789c0e5e40123a025e113373aa8a22938f93a0512f9cab924",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r3/receipts/docs-gate.txt",
+    "original_sha256": "31e1c4a61ef372889ec0da247fefb3aeca6101093fa1dcc0ad376043e2cad7e2",
+    "published_sha256": "31e1c4a61ef372889ec0da247fefb3aeca6101093fa1dcc0ad376043e2cad7e2",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r3/receipts/issue-111-amendment.md",
+    "original_sha256": "b93a33bb7bed7fc3f02a10c32f80679e3be23a08daad7caad189d3fe760c178d",
+    "published_sha256": "b93a33bb7bed7fc3f02a10c32f80679e3be23a08daad7caad189d3fe760c178d",
+    "path_redacted": false
   }
 ]
