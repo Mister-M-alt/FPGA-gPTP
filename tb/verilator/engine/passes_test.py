@@ -15,10 +15,11 @@ The checks:
    byte apart from the recipe line numbers in make's own messages, for a clean
    run, a failing pass at each position, two failing passes, a pass killed by
    SIGSEGV, SIGABRT and SIGKILL, a failing image generator, an image
-   generator killed by SIGSEGV and a failing build; each with no option, -s, -i and -k, and at -j4 and -j1. Standard
-   output and standard error are compared apart, with only the tree's own
-   path and make's recipe line numbers masked. The clean -j4 run must have
-   finished its passes out of order, or the ordering was not exercised.
+   generator killed by SIGSEGV and a failing build; each with no option, -s,
+   -i and -k at -j4, and again at -j1 with no option. Standard output and
+   standard error are compared apart, with only the tree's own path and
+   make's recipe line numbers masked. The clean -j4 run must have finished
+   its passes out of order, or the ordering was not exercised.
 2. The job budget: at most one pass at a time at -j1, two at -j2, four at
    -j4 (and four reached), and under a parent make at -j3 whose two other
    targets hold job slots, at most three jobs at once in all.
@@ -33,8 +34,12 @@ The checks:
 7. An image generator whose shell died of a signal (a shell that execs the
    line, as dash does) ends as the serial line did: make reports the signal
    for SIGSEGV and SIGKILL. A crafted record stands in for the run, so the
-   check holds on any host's /bin/sh.
-Nothing is built or simulated; it takes seconds.
+   check holds on any host's /bin/sh. The reference line execs its process,
+   so it dies of the signal itself whether the shell forks or not.
+8. A replayed signal death that did not dump core ends without a dump under
+   a one-byte caller core limit, as the serial line does, on a piped
+   core_pattern too.
+Nothing is built or simulated; it takes about 90 seconds.
 """
 
 from __future__ import annotations
@@ -326,7 +331,8 @@ def unprintable(trees: dict[str, Path], scratch: Path) -> int:
 
 
 def replay_cwd(trees: dict[str, Path], scratch: Path) -> int:
-    """Check 6: a replayed signal death is re-raised from obj_dir/, so a file core_pattern keeps the simulator's core."""
+    """Check 6: a replayed signal death is re-raised from obj_dir/engine-passes/, so a relative file core_pattern
+    keeps the simulator's core."""
     state = scratch / "cwd" / "obj_dir" / "engine-passes"
     state.mkdir(parents=True)
     (state / "0.json").write_text(json.dumps({"signal": int(signal.SIGSEGV), "core": True}))
@@ -363,23 +369,52 @@ def gen_signal(trees: dict[str, Path], scratch: Path) -> int:
             (state / "build.ok").touch()
             (state / "1.json").write_text(json.dumps({"gen_signal": int(signum), "gen_core": False}))
             line = (f"python3 {tool} replay-gen 1" if form == "replay"
-                    else f"python3 -c 'import os; os.kill(os.getpid(), {int(signum)})'")
+                    else f"exec python3 -c 'import os; os.kill(os.getpid(), {int(signum)})'")
             (d / "Makefile").write_text(f"all:\n\t@{line}\n")
             runs[form] = subprocess.run(["make", "--no-print-directory"], cwd=d, capture_output=True, text=True,
                                         preexec_fn=no_cores, env={**os.environ, "MAKEFLAGS": ""})
         same = (runs["replay"].returncode == runs["serial"].returncode
                 and runs["replay"].stderr == runs["serial"].stderr)
         bad += not same
-        print(f"[{'PASS' if same else 'FAIL'}] an image generator killed by {signal.Signals(signum).name} replays as the "
-              f"serial line ended: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
+        name = signal.Signals(signum).name
+        print(f"[{'PASS' if same else 'FAIL'}] an image generator killed by {name} replays as the serial line "
+              f"ended: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
     return bad
+
+
+def no_core_replay(trees: dict[str, Path], scratch: Path) -> int:
+    """Check 8: a replayed signal death recorded without a core ends without one under a one-byte caller core limit,
+    as the serial line does there, whatever the host's core_pattern (a limit of 0 still dumps to a pipe)."""
+    def one_byte() -> None:
+        resource.setrlimit(resource.RLIMIT_CORE, (1, resource.getrlimit(resource.RLIMIT_CORE)[1]))
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+    tool = Path(__file__).resolve().parent / "pass_run.py"
+    runs = {}
+    for form in ("replay", "serial"):
+        d = scratch / f"nocore-{form}"
+        state = d / "obj_dir" / "engine-passes"
+        state.mkdir(parents=True)
+        (state / "build.ok").touch()
+        (state / "0.json").write_text(json.dumps({"signal": int(signal.SIGSEGV), "core": False}))
+        (state / "0.log").write_bytes(b"")
+        line = (f"python3 {tool} replay 0" if form == "replay"
+                else f"exec python3 -c 'import os; os.kill(os.getpid(), {int(signal.SIGSEGV)})'")
+        (d / "Makefile").write_text(f"all:\n\t@{line}\n")
+        runs[form] = subprocess.run(["make", "--no-print-directory"], cwd=d, capture_output=True, text=True,
+                                    preexec_fn=one_byte, env={**os.environ, "MAKEFLAGS": ""})
+    same = runs["replay"].returncode == runs["serial"].returncode and runs["replay"].stderr == runs["serial"].stderr
+    print(f"[{'PASS' if same else 'FAIL'}] a no-core signal death replays without a dump under a one-byte core "
+          f"limit: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
+    return not same
 
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="engine-passes-test-") as name:
         scratch = Path(name)
         trees = tree(scratch)
-        bad = sum(check(trees, scratch) for check in (transcripts, budget, fail_fast, signals, unprintable, replay_cwd, gen_signal))
+        bad = sum(check(trees, scratch) for check in (transcripts, budget, fail_fast, signals, unprintable,
+                                               replay_cwd, gen_signal, no_core_replay))
     print(f"engine passes test: {'PASS' if not bad else f'{bad} FAIL'}")
     return 1 if bad else 0
 

@@ -172,6 +172,7 @@ def run(n: int, directory: str | None, generate: str | None, argv: list[str], ig
                 stop_later(n)
     # This pass is over: a later stop must not find it exiting, when Python's shutdown restores the default action.
     signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+    (STATE / f"{n}.pid").unlink(missing_ok=True)  # no later stop reaches a recycled pid
     log.close()
     if received:
         (STATE / f"{n}.json").unlink(missing_ok=True)
@@ -247,12 +248,15 @@ def replay(n: int, banner: str | None, ignoring: bool) -> int:
 
 
 def reraise(signum: int, core: bool) -> None:
-    """End as the recorded process ended: by its signal, dumping core only if it did."""
+    """End as the recorded process ended: by its signal, dumping core only if it did. A soft core limit of one byte
+    suppresses the dump on a piped core_pattern (the kernel skips a pipe only at exactly 1) and on a file one (below
+    the smallest dump); 0 would still dump to a pipe."""
     if not core:
-        resource.setrlimit(resource.RLIMIT_CORE, (0, resource.getrlimit(resource.RLIMIT_CORE)[1]))
+        hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
+        resource.setrlimit(resource.RLIMIT_CORE, (1 if hard == resource.RLIM_INFINITY or hard >= 1 else 0, hard))
     if signum != signal.SIGKILL:
         signal.signal(signum, signal.SIG_DFL)
-    os.chdir(STATE)  # a file core_pattern writes this process's core here, never over the simulator's
+    os.chdir(STATE)  # a relative file core_pattern writes this process's core here, never over the simulator's
     os.kill(os.getpid(), signum)
 
 
