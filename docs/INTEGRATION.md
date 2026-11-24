@@ -951,6 +951,46 @@ Its asCapable recommendation is deliberately not taken.
 
 A late pair moves no delay, ratio or ladder.
 
+### Link delay verdict
+
+Values here come from the [protocol constants](#protocol-constants).
+
+A completed exchange computes the mean link delay D.
+
+D above [`NPD_HI_C`](#protocol-constants) is a bad exchange.
+
+802.1AS-2011 Figure 11-8 then clears asCapable at once.
+
+Every other D is a good exchange, however negative (#109).
+
+Milan requires only a minimum negative tolerance.
+
+See Milan v1.2 4.2.6.2.7.
+
+802.1AS clears asCapable only above the threshold.
+
+See 802.1AS-2020 11.2.2.
+
+The engine floors D at minus [`NPD_HI_C`](#protocol-constants).
+
+The Sync path subtracts the floored D, signed.
+
+That follows 11.2.13.2.1 f).
+
+Equally over-stated latency constants then cancel in the offset.
+
+The floor bounds what a faulty peer can inject.
+
+`pub_pdelay_ns_o` carries the same floored, signed value.
+
+Unfloored, a large negative D could wrap its sign.
+
+The parent clamps a negative published value to zero.
+
+So the published and used values differ by design.
+
+[The manager's ruling](https://github.com/Mister-M-alt/FPGA-gPTP/issues/109#issuecomment-7123290416) sets the floor and the signed use.
+
 ### Follow_Up information TLV
 
 A grandmaster's Follow_Up carries this plane's own TLV values.
@@ -1041,7 +1081,6 @@ Clauses without a prefix are IEEE 802.1AS-2011.
 | `LOST_N_C` | 3 | allowedLostResponses | 11.5.3 |
 | `LOST_CLEARS_AT_C` | 5 | Consecutive lost response that clears asCapable | 11.2.15, Figure 11-8 |
 | `NPD_HI_C` | 800 | neighborPropDelayThresh, ns | Milan 4.2.6.1.1 |
-| `NPD_LO_C` | 80 | Largest tolerated negative delay magnitude, ns | Milan 4.2.6.2.7 |
 | `SYNC_RTO_MS_C` | 375 | syncReceiptTimeout, ms | Milan 4.2.6.2.3, Table 4.2 |
 | `FU_RTO_MS_C` | 125 | followUpReceiptTimeout, ms | Milan 4.2.6.2.3, Table 4.2 |
 | `CEASE_N_C` | 3 | Successive multi-answered requests before the cease | Milan 4.2.6.2.5 |

@@ -117,7 +117,7 @@ CONSTANT_ROW_RE = re.compile(r"^\|\s*`([A-Za-z_][A-Za-z0-9_]*)`\s*\|\s*([^|]*?)\
 DECIMAL_RE = re.compile(r"[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+")
 CONSTANTS = (
     "P1_C", "ASCAP_UP_C", "LOST_N_C", "LOST_CLEARS_AT_C", "NPD_HI_C",
-    "NPD_LO_C", "SYNC_RTO_MS_C", "FU_RTO_MS_C", "CEASE_N_C", "CEASE_MS_C",
+    "SYNC_RTO_MS_C", "FU_RTO_MS_C", "CEASE_N_C", "CEASE_MS_C",
     "STEP_LINKUP_NS_C", "STEP_LOCKED_NS_C", "SLEW_SETTLED_NS_C", "RATE_PPM_C",
     "DEPTH", "ROM_CID_HI_C", "ROM_GMCAP_BIT_C",
 )
