@@ -1,0 +1,50 @@
+# OOC synthesis, Vivado 2026.1, xc7a100tfgg484-2, 100 MHz (ooc_clock.xdc), before (1213ac5b) and after (head)
+Each side: its own gen_gptp_ucode.py default image, its own syn/ooc/engine_ooc.tcl and ucpu_ooc.tcl, run in a scratch directory; check_ooc_clock.py --log on both logs.
+
+## base
+gptp_ucode.hex: 1024 words, 1013 real (98.9%), mac 02A1B2C3D4E5
+ooc clock order: PASS (ucpu_ooc.log, engine_ooc.log and their timing reports)
+### engine (KL_gptp_engine)
+| Slice LUTs*                | 5375 |     0 |          0 |     63400 |  8.48 |
+|   LUT as Logic             | 4885 |     0 |          0 |     63400 |  7.71 |
+|   LUT as Memory            |  490 |     0 |          0 |     19000 |  2.58 |
+| Slice Registers            | 3617 |     0 |          0 |    126800 |  2.85 |
+| Block RAM Tile    |  1.5 |     0 |          0 |       135 |  1.11 |
+| DSPs           |    6 |     0 |          0 |       240 |  2.50 |
+    WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints     WPWS(ns)     TPWS(ns)  TPWS Failing Endpoints  TPWS Total Endpoints  
+    -------      -------  ---------------------  -------------------     --------     --------  ----------------------  --------------------  
+      2.093        0.000                      0                12424        3.870        0.000                       0                  4420  
+### ucpu (KL_gptp_ucpu)
+| Slice LUTs*                | 1643 |     0 |          0 |     63400 |  2.59 |
+| Slice Registers            |  733 |     0 |          0 |    126800 |  0.58 |
+| Block RAM Tile    |  1.5 |     0 |          0 |       135 |  1.11 |
+| DSPs           |    4 |     0 |          0 |       240 |  1.67 |
+    WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints     WPWS(ns)     TPWS(ns)  TPWS Failing Endpoints  TPWS Total Endpoints  
+    -------      -------  ---------------------  -------------------     --------     --------  ----------------------  --------------------  
+      1.941        0.000                      0                 3165        3.870        0.000                       0                  1001  
+9f50f13ae3d0feb4c301bd624be70dca
+
+## head
+gptp_ucode.hex: 1024 words, 1013 real (98.9%), mac 02A1B2C3D4E5
+ooc clock order: PASS (ucpu_ooc.log, engine_ooc.log and their timing reports)
+### engine (KL_gptp_engine)
+| Slice LUTs*                | 5375 |     0 |          0 |     63400 |  8.48 |
+|   LUT as Logic             | 4885 |     0 |          0 |     63400 |  7.71 |
+|   LUT as Memory            |  490 |     0 |          0 |     19000 |  2.58 |
+| Slice Registers            | 3617 |     0 |          0 |    126800 |  2.85 |
+| Block RAM Tile    |  1.5 |     0 |          0 |       135 |  1.11 |
+| DSPs           |    6 |     0 |          0 |       240 |  2.50 |
+    WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints     WPWS(ns)     TPWS(ns)  TPWS Failing Endpoints  TPWS Total Endpoints  
+    -------      -------  ---------------------  -------------------     --------     --------  ----------------------  --------------------  
+      2.093        0.000                      0                12424        3.870        0.000                       0                  4420  
+### ucpu (KL_gptp_ucpu)
+| Slice LUTs*                | 1643 |     0 |          0 |     63400 |  2.59 |
+| Slice Registers            |  733 |     0 |          0 |    126800 |  0.58 |
+| Block RAM Tile    |  1.5 |     0 |          0 |       135 |  1.11 |
+| DSPs           |    4 |     0 |          0 |       240 |  1.67 |
+    WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints     WPWS(ns)     TPWS(ns)  TPWS Failing Endpoints  TPWS Total Endpoints  
+    -------      -------  ---------------------  -------------------     --------     --------  ----------------------  --------------------  
+      1.941        0.000                      0                 3165        3.870        0.000                       0                  1001  
+baf5fd29214b5870c9154b9da050d1be
+
+Delta (head - base): engine LUT 0, FF 0, BRAM 0, DSP 0, WNS 0.000 ns; ucpu LUT 0, FF 0, WNS 0.000 ns. The RTL is unchanged; the ROM image differs (BRAM contents only).

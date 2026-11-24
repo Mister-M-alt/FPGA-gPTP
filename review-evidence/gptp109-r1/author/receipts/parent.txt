@@ -1,0 +1,100 @@
+# Parent consumer gate (scratch, never pushed)
+Clone: https://github.com/kebag-logic/milan-fpga.git at origin/dev-soft-core aa30d77f75; local branch gptp109-scratch:
+5e7bebbdfc Regenerate the submodule boundaries diagram for the new pin (scratch only)
+e6b96b9ee5 Pin gptp-processor at 8e4889b and its donor links (scratch only)
+3825fcc496 Point the donor links at gitlink 124683a (scratch only)
+21053ac10e End the #109 probe build without the whole-run TX flag sweep (scratch only)
+b1d5b59c42 Run the milan_dp #109 Pdelay probes in their own probe-only build (scratch only)
+c9a9acfd55 Probe the public pdelay at -263 ns and -5 ms (FPGA-gPTP #109, scratch only)
+c8a499f86f Pin gptp-processor at 124683a (FPGA-gPTP #109, scratch only)
+gitlink now: 8e4889bba462d14d4e5a34068769872510d4775d (checkout: 8e4889b)
+Verilator: 5.050 (the parent's CI pin, /data tools install) unless noted
+Runs before 09:2x used gitlink 124683a; 8e4889b differs only in the engine harness (tb/verilator/engine/sim_main.cpp), which no parent gate builds, so the RTL and generator every parent leg consumed are identical.
+
+## milan_dp gptp leg (shipping harness, unchanged)
+212 checks: 212 PASS, 0 FAIL
+## milan_dp gptp-lat leg (shipping harness, unchanged)
+212 checks: 212 PASS, 0 FAIL
+## milan_dp #109 probe build (-DGPTP109_PROBE: the gptp leg to its -40 ns probe, then -263 ns and -5 ms, then the run ends)
+40 checks: 40 PASS, 0 FAIL
+  same probe build with the submodule at 1213ac5b (pre-fix):
+  FAIL #109 Pdelay -263 ns: asCapable retained got 0000000000000000 exp 0000000000000001
+  FAIL #109 Pdelay -5000000 ns: asCapable retained got 0000000000000000 exp 0000000000000001
+  40 checks: 38 PASS, 2 FAIL
+
+## gptp_shadow (make all: lifecycle + run + mutants)
+332 checks: 332 PASS, 0 FAIL
+mutant lifecycle: PASS (normal/repeat, n
+RESULT: PASS
+rc=0
+  run with the submodule at 1213ac5b (pre-fix), first lines:
+  FAIL #109 pdelay -263 ns: asCapable retained got 0000000000000000 exp 0000000000000004
+  FAIL #109 pdelay -5000000 ns: asCapable retained got 0000000000000000 exp 0000000000000004
+  FAIL adopted                          got 0000000000000003 exp 0000000000000001
+  FAIL pub gm id                        got 02a1b2fffec3d4e5 exp 00aaccfffe010203
+  332 checks: 290 PASS, 42 FAIL
+
+## gptp_plane (make all)
+31 checks: 31 PASS, 0 FAIL
+== phc_step: checks: 62   failures: 0 ==
+RESULT: PASS
+phc_step campaign: 8 checks: 8 PASS, 0 FAIL
+## gptp_tables (make all)
+== gptp_tables: checks: 36   failures: 0 ==
+RESULT: PASS
+RESULT: PASS
+## gptp_txts (make all)
+== gptp_txts: checks: 95   failures: 0 ==
+RESULT: PASS
+RESULT: PASS
+## milan_dp_gm_steps (make run: gmstep leg + gmstep_mutants --no-small-steps)
+== gmstep: checks: 196   failures: 0 ==
+[PASS] control caught: the PHC re-base restart term is restored - breaks "restart: a PHC-only step leaves outg
+[PASS] control caught: the source-change term is removed - breaks "source control: a real source change toggle
+[PASS] control caught: selected CRF mr propagation is removed - breaks "CRF control: selected CRF mr propagate
+[PASS] control caught: the grandmaster identity empties the render stage - breaks "render: every PDU not prese
+[PASS] control caught: the step empties the render stage - breaks "render: every PDU not presented was refused
+
+## builder tests touching the engine (pytest -k 'gptp or engine or clock_accuracy or port_number or portnum')
+11 passed, 103 deselected in 396.57s (0:06:36)
+
+## submodule-scanning gates
+check_cpp_idiom.py.2:   build without warnings: 0 <= 0
+check_cpp_idiom.py: FAIL: multi-declarator declaration 1 > ratchet 0. New C++ uses the named construct; see Rule 11 in docs/development/CODE_QUALITY.md.
+check_gptp_docs.py.2: gPTP documentation: OK (8 current pages, donor checkout verified)
+check_hygiene.py: HYGIENE RATCHET: PASS (3 population(s), 1522 file(s))
+check_port_contracts.py:   review inventory: 94 open and 50 literal-bound named connection(s), 58 without a local rationale (all recorded; none may be added); 477 test-only hi
+check_py_idiom.py:   over-long line: 0 <= 0
+check_rtl_source_lists.py: RTL source-list gate: OK (113 files in the milan_datapath closure, 4 of 4 consumer list(s) carry all of them; protocol-processor 42/42 tops, 0 recorde
+check_sh_idiom.py:   top-heavy long script: 0 <= 0
+check_soc_sources.py: SoC source gate: OK (47 instantiated modules all registered, 85 sources all present)
+check_submodule_docs.py.2: submodule documentation: OK (6 exact gitlinks)
+check_submodule_docs.py: submodule documentation: FAIL (1 findings)
+check_sv_idiom.py: SystemVerilog idiom gate: OK (145 first-party HDL file(s) across the superproject and both processor submodules, every one .sv/.svh; 0 generic `always
+check_todo_ownership.py: TODO ownership gate: OK (0 owned marker(s), 0 unowned; 80 near-miss occurrence(s) on 73 line(s) correctly not treated as markers; 1595 first-party fil
+diagram_gen: wrote docs/diagrams/submodule_boundaries.svg and docs/diagrams/submodule_boundaries.drawio and docs/diagrams/submodule_boundaries.png
+measure_fail_fast.py:   the ratchets can be lowered to 80, 3 and 0
+measure_naming.py: NAMING RATCHET: PASS (95 candidate(s), all recorded by identity; 95 recorded)
+measure_test_evidence.py:   the mutation ratchet can be lowered to 67
+
+## Isolation of a probe side effect (Verilator 5.050, gptp leg)
+With the probes inline in the shipping gptp leg, 'LINK_DOWN push body equals solicited counters' failed (217/218): the probes' extra exchanges move the Pdelay cadence so a frame lands between the unsolicited AVB_INTERFACE counter push and its solicited read.
+dev-soft-core unchanged (pin 1616fc8f): 212 checks: 212 PASS, 0 FAIL
+dev-soft-core with only the gitlink at 124683a: 212 checks: 212 PASS, 0 FAIL
+So the probes moved to their own build (above), and the shipping legs are dev-soft-core's.
+
+## Verilator 5.054 note
+With the system Verilator 5.054, milan_dp's gptp harness does not compile (sim_gptp.cpp:1551 reads rootp->milan_datapath__DOT__gptp_pub_path_count_w, which 5.054 does not keep); unrelated to the engine, so the parent gates use 5.050.
+
+## milan_dp_gptp (the parent's physical-gptp suite: make -C ../milan_dp ax1x1gptp, verify_abort.py, verify_recentres.py --jobs 2)
+/usr/bin/time -f "wall_clock_seconds=%e process_exit_status=%x" ./obj_ax1x1gptp/Vmilan_dp_ax1x1gptp 
+== ax1x1gptp physical: checks: 151   failures: 0 ==
+RESULT: PASS
+wall_clock_seconds=10313.67 process_exit_status=0
+(its make wrappers were stopped after the build so the 2-job verify step could be run by hand under the 4-leg cap; the simulation itself ran to completion)
+== ax1x1gptp setup abort: checks: 6   failures: 0 ==
+== ax1x1gptp no-TX accounting: checks: 20   failures: 0 ==
+== ax1x1gptp no-Pdelay accounting: checks: 14   failures: 0 ==
+rc=0
+== ax1x1gptp recentre controls: checks: 14   failures: 0 ==
+rc=0

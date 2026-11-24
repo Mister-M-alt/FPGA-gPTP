@@ -1,0 +1,20 @@
+# Engine suite at the head 8e4889b (make run's four passes, rebuilt at 14:00)
+## pass 1: shipping
+INFO #109 the most negative delay of the wire: computed -2147483641057566821 ns, the wire's bound -2147483649647483648 ns
+FAIL lines: 0
+2296 checks: 2296 PASS, 0 FAIL
+## pass 2: request counter seeded 0x200000
+INFO #109 the most negative delay of the wire: computed -2147483641057566821 ns, the wire's bound -2147483649647483648 ns
+FAIL lines: 0
+2296 checks: 2296 PASS, 0 FAIL
+## pass 3: Sync counter seeded 0x10000
+INFO #109 the most negative delay of the wire: computed -2147483641057566821 ns, the wire's bound -2147483649647483648 ns
+FAIL lines: 0
+2296 checks: 2296 PASS, 0 FAIL
+## pass 4: +not-gm-capable, --p1 255 --clock-accuracy 0xFE
+FAIL lines: 0
+61 checks: 61 PASS, 0 FAIL
+
+Earlier, at 124683a's harness (07:3x): the same four tallies (2296 x3, 61).
+Baseline at 1213ac5b (shipping pass, 1213ac5b harness): 2199 checks: 2199 PASS, 0 FAIL
+New checks: 2296 - 2199 = 97, all in phases 62-64 (phase 22 only changes wording).

@@ -1,0 +1,111 @@
+# Clause verification against $WORKSPACE_HOME/standards (pdftotext -layout), 2026-11-24
+
+## 802.1AS-2020.pdf
+ 11.2.2 Determination of asCapable and asCapableAcrossDomains
+
+ There is one instance of the global variable asCapable (see 10.2.5.1) per PTP Port, per domain. There is one
+ instance of the global variable asCapableAcrossDomains (see 11.2.13.12), per port, that is common across,
+ and accessible by, all the domains.
+
+ The per-PTP Port global variable asCapable (see 10.2.5.1) indicates whether the IEEE 802.1AS protocol is
+ operating, in this domain, on the PTP Link attached to this PTP Port, and can provide the time-
+ synchronization performance described in B.3. asCapable is used by the PortSync entity, which is media-
+ independent; however, the determination of asCapable is media-dependent.
+
+ The per-port global variable asCapableAcrossDomains is set by the MDPdelayReq state machine
+ (see 11.2.19 and Figure 11-9). For a port attached to a full-duplex point-to-point PTP Link,
+ asCapableAcrossDomains shall be set to TRUE if and only if it is determined, via the peer-to-peer delay
+ mechanism, that the following conditions hold for the port:
+
+    a)     The port is exchanging peer delay messages with its neighbor,
+    b)     The measured delay does not exceed meanLinkDelayThresh,
+    c)     The port does not receive multiple Pdelay_Resp or Pdelay_Resp_Follow_Up messages in response
+           to a single Pdelay_Req message, and
+    d)     The port does not receive a response from itself or another PTP Port of the same PTP Instance.
+
+
+ 11.2.13.7 meanLinkDelayThresh: The propagation time threshold above which a port is considered not
+ capable of participating in the IEEE 802.1AS protocol. If meanLinkDelay (see 10.2.5.8) exceeds
+ meanLinkDelayThresh, then asCapableAcrossDomains (see 11.2.13.12) is set to FALSE. The data type for
+ meanLinkDelayThresh is UScaledNs. There is one instance of this variable for all the domains (per port).
+
+ 11.2.14.2.1 setMDSyncReceiveMDSR(): Creates an MDSyncReceive structure, and returns a pointer to
+ this structure. The members of this structure are set as follows:
+
+
+
+
+                                                                  173
+                                             Copyright © 2020 IEEE. All rights reserved.
+
+ 11.2.19.3.4 computePropTime(): Computes the mean propagation delay on the PTP Link attached to this
+ MD entity, D, and returns this value. D is given by Equation (11-5).
+
+## 802.1AS-2011.pdf
+          11.2.2 Determination of asCapable
+
+          The per-port global variable asCapable (see 10.2.4.1) indicates whether or not the IEEE 802.1AS protocol is
+          operating on the link attached to this port, and can provide the time-synchronization performance described
+          in B.3. asCapable is used by the PortSync entity, which is media-independent; however, the determination of
+          asCapable is media-dependent.
+
+          For a port attached to a full-duplex, point-to-point link, asCapable shall be set to TRUE if and only if it is
+          determined, via the peer delay mechanism, that the following conditions hold for the port:
+
+             a)    The port is exchanging peer delay messages with its neighbor,
+             b)    The measured delay does not exceed neighborPropDelayThresh,
+             c)    The port does not receive multiple Pdelay_Resp or Pdelay_Resp_Follow_Up messages in response
+                   to a single Pdelay_Req message, and
+             d)    The port does not receive a response from itself or another port of the same time-aware system.
+
+          asCapable is set in the MDPdelayReq state machine (see 11.2.15 and Figure 11-8).
+
+          11.2.12.6 neighborPropDelayThresh: the propagation time threshold, above which a port is not considered
+          capable of participating in the IEEE 802.1AS protocol. If neighborPropDelay (see 10.2.4.7) exceeds
+          neighborPropDelayThresh, then asCapable (see 11.2.12.4) is set to FALSE. The data type for
+          neighborPropDelayThresh is UScaledNs.
+
+          11.2.13.2.1 setMDSyncReceive(): creates an MDSyncReceive structure, and returns a pointer to this
+          structure. The members of this structure are set as follows:
+             f)    upstreamTxTime is set equal to the <syncEventIngressTimestamp> for the most recently received
+                   Sync message, minus the mean propagation time on the link attached to this port
+                   (neighborPropDelay, see 10.2.4.7) divided by neighborRateRatio (see 10.2.4.6), minus
+                   delayAsymmetry (see 10.2.4.8) for this port divided by rateRatio [see e) above]. The
+
+          11.2.15.2.4 computePropTime(): computes the mean propagation delay on the link attached to this MD
+          entity, D, and returns this value. D is given by Equation (11-5):
+(no clause 11.2.15.3.4 exists in 802.1AS-2011; computePropTime is 11.2.15.2.4)
+0
+
+Figure 11-8 (802.1AS-2011):
+                                                                                  neighborPropDelay = computePropTime();
+                                                                               lostResponses = 0;
+                                                                               isMeasuringDelay = TRUE;
+                                                                               if ((neighborPropDelay <= neighborPropDelayThresh) &&
+                                                                                     (rcvdPdelayRespPtr->sourcePortIdentity.clockIdentity !=
+                                                                                     thisClock) && neighborRateRatioValid)
+                                                                                  asCapable = TRUE;
+                                                                               else
+                                                                                  asCapable = FALSE;
+
+## 802.1AS-2011_Cor1-2013.pdf, Figure 11-8 as corrected
+                                                                   neighborPropDelay = computePropTime();
+                                                                lostResponses = 0;
+                                                                isMeasuringDelay = TRUE;
+                                                                if ((neighborPropDelay <= neighborPropDelayThresh) &&
+                                                                      (rcvdPdelayRespPtr->sourcePortIdentity.clockIdentity !=
+                                                                      thisClock) && neighborRateRatioValid)
+                                                                   asCapable = TRUE;
+                                                                else
+                                                                   asCapable = FALSE;
+
+## Milan v1.2 (Consolidated, Final Approved 20231130)
+4.2.6.1.1 neighborPropDelayThresh
+
+As per [802.1AS-2011/Cor1, Clause 11.2.2], a PAAD utilizing a copper interface (specifically 100Base-TX or
+1000Base-T) shall implement a neighborPropDelayThresh threshold with a default value of 800 ns on this port.
+On a fiber port, the PAAD shall disable the neighborPropDelayThresh by default.
+4.2.6.2.7 Negative Pdelay
+
+A PAAD is expected to accept that the calculation of Pdelay can result in negative values. Negative Pdelay
+values between -80 ns and 0 ns shall not cause asCapable to be set to false.

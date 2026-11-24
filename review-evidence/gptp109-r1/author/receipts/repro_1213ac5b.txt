@@ -1,0 +1,32 @@
+# Reproduction at 1213ac5b: the new #109 phases (harness of this branch) against the 1213ac5b ROM image
+Image: tb/verilator/engine/gptp_ucode.hex as tracked at 1213ac5b (md5 a9fd0a0f6586a04bc2f2ef19422a8017), RTL of 1213ac5b (unchanged by this branch).
+Shipping pass only. Every #109 line and the tally:
+
+FAIL #109 D -81: asCapable kept   got 0000000000000000 exp 0000000000000004
+FAIL #109 D -81: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -81: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -263: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -263: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -263: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 latency constants over-stated by 400 ns: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 latency constants over-stated by 400 ns: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 latency constants over-stated by 400 ns: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -800: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -800: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -800: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -801: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -801: the engine publishes the used delay got 00000000fffffcdf exp 00000000fffffce0
+FAIL #109 D -801: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -801: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -5000000: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 D -5000000: the engine publishes the used delay got 00000000ffb3b4c0 exp 00000000fffffce0
+FAIL #109 D -5000000: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -5000000: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+INFO #109 the most negative delay of the wire: computed -2147483641057566821 ns, the wire's bound -2147483649647483648 ns
+FAIL #109 the most negative delay of the wire: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 the most negative delay of the wire: the engine publishes the used delay got 000000009dcd1f9b exp 00000000fffffce0
+FAIL #109 the most negative delay of the wire: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 the most negative delay of the wire: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+2296 checks: 2272 PASS, 24 FAIL
+
+Note: at that point of development the background pairs used offset 0, so 'its offset uses the delay exactly' could not fail on an unused pair; the committed harness uses 11 ns for background pairs (P109_BG_OFF), and the 'next Follow_Up is used' check grades consumption directly.

@@ -1,0 +1,34 @@
+# Repository gates at 124683a (8e4889b changes only one harness declaration)
+Verilator 5.054 (system); Python 3.14.10
+
+## make contract
+PHC interface contract: PASS
+## make lint (rc 0)
+warnings+errors: 0
+## ucpu
+768 checks: 768 PASS, 0 FAIL
+## parser (suite, then mutants)
+482 checks: 482 PASS, 0 FAIL
+35 checks: 35 PASS, 0 FAIL
+## gaskets (suite, then mutants)
+81 checks: 81 PASS, 0 FAIL
+5 checks: 5 PASS, 0 FAIL
+## tsngen (suite, then mutants)
+288 checks: 288 PASS, 0 FAIL
+4 checks: 4 PASS, 0 FAIL
+## bench/arty test
+PASS: two MII done toggles carried tags {3,1234}, {a,beef}
+## make docs
+diagram check: PASS (9 pinned assets, 3 source-bound PNGs)
+diagram selftest: PASS (10 arms)
+docs check: PASS (14 current pages, 18 historical pages)
+docs selftest: PASS (127 arms)
+source evidence: 20 exact, 0 findings
+source evidence selftest: PASS (7 arms)
+
+## ROM budget (generator), before and after
+1213ac5b: 1024 words, 1013 real (98.9%), mac 02A1B2C3D4E5
+head:     1024 words, 1013 real (98.9%), mac 02A1B2C3D4E5
+1213ac5b seeded: 1024 words, 1014 real (99.0%), mac 02A1B2C3D4E5
+head seeded:     1024 words, 1014 real (99.0%), mac 02A1B2C3D4E5
+legs (head): legs: BTCA@729 BECOME@309 BECGATE@941 SELF@975 RFU@471 SYNCFU@336 SYNCTX@834 ANNTX@385 PDPOST@28 PDPAIR@634 PDEPOCH@698 SRTO@986 SRWATCH@58 FUTO@509 SERVO@0 SLEW@163 SVRATE@958 RESUME@248 PDREQ@890 TXLOST@106 TXT1OK@997 NOTEN@1007
