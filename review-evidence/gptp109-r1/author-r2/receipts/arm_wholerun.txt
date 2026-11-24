@@ -1,0 +1,116 @@
+# The 12 existing arm entries that name a whole-run grade, at the head 74830c2
+The suite's whole-run grades (hold_every_committed_path_coherent, keep_sync_ok_in_every_master_cycle,
+end_every_peer_path_with_thisclock) run after phase 64, so they also grade the new trial. These are their checks:
+'#82 every commit naming thisClock carries {thisClock}', '#84 every handover to a peer grandmaster clears sync-ok',
+'#84 every master cycle publishes sync-ok', '#84 master cycles were graded', '#84 the run hands mastership to a peer',
+'#85 every peer path ends with thisClock', '#85 peer commits with a path were graded'. Every arm entry naming one of them
+(full-arm indices 37, 44, 47, 58, 59, 153, 154, 155, 159, 161, 169, 171) was re-run. Every other check is graded before the new
+trial on unchanged stimulus.
+Run: the same scratch driver as arm_p109_controls.txt, selection idx:..., --jobs 3; rc 0.
+(A first attempt at --jobs 1 (18:47) was stopped at 19:09, with no verdict printed, to run at 3 jobs once the #109 controls finished.)
+
+```
+INFO full arm entries: 176; #109 entries: 9
+INFO entry: reset keeps the elected tail
+INFO entry: a winning peer's grandmaster is not published
+INFO entry: the self publication keeps the departed path
+INFO entry: becoming grandmaster clears sync-ok
+INFO entry: a queued receipt timeout clears a master's sync-ok
+INFO entry: mastership never publishes the master bit
+INFO entry: a handover to a peer keeps sync-ok
+INFO entry: the received path is published without thisClock
+INFO entry: thisClock lands one slot early
+INFO entry: the appended entry is the announcing source
+INFO entry: the empty sequence published without a TLV
+INFO entry: the self path leaves entry 0 empty
+[PASS] the unmutated engine still passes the harness
+FAIL #82 warm reset: its path is {thisClock} with a zero tail got 0000000000000000 exp 0000000000000001
+FAIL #82 every commit naming thisClock carries {thisClock} got 0000000000000009 exp 0000000000000000
+[PASS] mutant caught: reset keeps the elected tail - breaks "#82 warm reset: its path is {thisClock} with a zero tail | #82 every commit naming thisClock carries {thisClock}"
+FAIL #82 peer wins: its commit names the peer GM got 02a1b2fffec3d4e5 exp 0082a0fffe000001
+FAIL #82 warm reset: the live worse peer wins, not the absent A got 02a1b2fffec3d4e5 exp 0082b0fffe000001
+FAIL #84 the run hands mastership to a peer got 0000000000000000 exp 0000000000000001
+FAIL #85 direct grandmaster: elected got 02a1b2fffec3d4e5 exp 00e5e5fffe000001
+FAIL #85 multi-hop grandmaster: elected got 02a1b2fffec3d4e5 exp 00e6e6fffe000001
+FAIL #85 seven received entries: elected got 02a1b2fffec3d4e5 exp 00e7e7fffe000001
+FAIL #85 eight received entries: elected got 02a1b2fffec3d4e5 exp 00e8e8fffe000001
+FAIL #85 absent path: elected     got 02a1b2fffec3d4e5 exp 00e9e9fffe000001
+[PASS] mutant caught: a winning peer's grandmaster is not published - breaks "#82 peer wins: its commit names the peer GM | #82 warm reset: the live worse peer wins, not the absent A | #84 the run hands mastership to a peer | #85 direct grandmaster: elected | #85 multi-hop grandmaster: elected | #85 seven received entries: elected | #85 eight received entries: elected | #85 absent path: elected"
+FAIL #82 peer leaves: the mastership commit path is {thisClock} got 0000000000000000 exp 0000000000000001
+FAIL #82 Pdelay loss: that commit carries {thisClock} got 0000000000000000 exp 0000000000000001
+FAIL #82 Pdelay loss: that mastership names thisClock, {thisClock} got 0000000000000000 exp 0000000000000001
+FAIL #82 every commit naming thisClock carries {thisClock} got 000000000000010b exp 0000000000000000
+[PASS] mutant caught: the self publication keeps the departed path - breaks "#82 peer leaves: the mastership commit path is {thisClock} | #82 Pdelay loss: that commit carries {thisClock} | #82 Pdelay loss: that mastership names thisClock, {thisClock} | #82 every commit naming thisClock carries {thisClock}"
+FAIL #84 first mastership: the master flags carry sync-ok got 0000000000000007 exp 000000000000000f
+FAIL #84 takeover: its commit names thisClock with sync-ok got 0000000000000000 exp 0000000000000001
+FAIL #84 every master cycle publishes sync-ok got 000000001abd55fd exp 0000000000000000
+FAIL p1 255 #84 first mastership: the master flags carry sync-ok got 0000000000000006 exp 000000000000000e
+FAIL p1 255 #84 every master cycle publishes sync-ok got 0000000000003cf8 exp 0000000000000000
+[PASS] mutant caught: becoming grandmaster clears sync-ok - breaks "#84 first mastership: the master flags carry sync-ok | #84 takeover: its commit names thisClock with sync-ok | #84 every master cycle publishes sync-ok | p1 255 #84 first mastership: the master flags carry sync-ok | p1 255 #84 every master cycle publishes sync-ok"
+FAIL #84 takeover: a queued receipt timeout keeps sync-ok got 0000000000000000 exp 0000000000000001
+FAIL #84 every master cycle publishes sync-ok got 0000000006bc26a4 exp 0000000000000000
+[PASS] mutant caught: a queued receipt timeout clears a master's sync-ok - breaks "#84 takeover: a queued receipt timeout keeps sync-ok | #84 every master cycle publishes sync-ok"
+FAIL #84 master cycles were graded got 0000000000000000 exp 0000000000000001
+FAIL p1 255 #84 master cycles were graded got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: mastership never publishes the master bit - breaks "#84 master cycles were graded | p1 255 #84 master cycles were graded"
+FAIL #84 every handover to a peer grandmaster clears sync-ok got 0000000000000051 exp 0000000000000000
+FAIL p1 255 #84 every handover to a peer grandmaster clears sync-ok got 0000000000000004 exp 0000000000000000
+[PASS] mutant caught: a handover to a peer keeps sync-ok - breaks "#84 every handover to a peer grandmaster clears sync-ok | p1 255 #84 every handover to a peer grandmaster clears sync-ok"
+FAIL #85 direct grandmaster: count got 0000000000000001 exp 0000000000000002
+FAIL #85 direct grandmaster: tail 1 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL #85 direct grandmaster: its commit names the grandmaster and path got 0000000000000000 exp 0000000000000001
+FAIL #85 multi-hop grandmaster: count got 0000000000000005 exp 0000000000000006
+FAIL #85 multi-hop grandmaster: tail 5 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL #85 multi-hop grandmaster: its commit names the grandmaster and path got 0000000000000000 exp 0000000000000001
+FAIL #85 seven received entries: count got 0000000000000007 exp 0000000000000008
+FAIL #85 seven received entries: tail 7 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL #85 seven received entries: its commit names the grandmaster and path got 0000000000000000 exp 0000000000000001
+FAIL #85 every peer path ends with thisClock got 0000000000000bd4 exp 0000000000000000
+FAIL p1 255 #85 every peer path ends with thisClock got 000000000000005c exp 0000000000000000
+FAIL #82 peer wins: its commit carries the peer path got 0000000000000000 exp 0000000000000001
+FAIL #82 warm reset: the live peer carries its own path got 0000000000000000 exp 0000000000000001
+FAIL #82 Pdelay loss: once capable, a live peer worse than D wins got 0000000000000000 exp 0000000000000001
+FAIL adopt appends thisClock as path tail 4 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL worse announce retains path A tail 4 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL worse TLV-less announce retains path A tail 4 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL parent refresh appends thisClock got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL unknown before path current parent: tail 3 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL post-release C appends thisClock got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL #88 empty path: count        got 0000000000000000 exp 0000000000000001
+FAIL #88 empty path from the parent: count got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the received path is published without thisClock - breaks "#85 direct grandmaster: count | #85 direct grandmaster: tail 1 | #85 direct grandmaster: its commit names the grandmaster and path | #85 multi-hop grandmaster: count | #85 multi-hop grandmaster: tail 5 | #85 multi-hop grandmaster: its commit names the grandmaster and path | #85 seven received entries: count | #85 seven received entries: tail 7 | #85 seven received entries: its commit names the grandmaster and path | #85 every peer path ends with thisClock | p1 255 #85 every peer path ends with thisClock | #82 peer wins: its commit carries the peer path | #82 warm reset: the live peer carries its own path | #82 Pdelay loss: once capable, a live peer worse than D wins | adopt appends thisClock as path tail 4 | worse announce retains path A tail 4 | worse TLV-less announce retains path A tail 4 | parent refresh appends thisClock | unknown before path current parent: tail 3 | post-release C appends thisClock | #88 empty path: count | #88 empty path from the parent: count"
+FAIL #85 direct grandmaster: tail 1 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL #85 multi-hop grandmaster: tail 5 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL #85 every peer path ends with thisClock got 0000000000000bd3 exp 0000000000000000
+FAIL #88 empty path: head         got 0000000000000000 exp 02a1b2fffec3d4e5
+[PASS] mutant caught: thisClock lands one slot early - breaks "#85 direct grandmaster: tail 1 | #85 multi-hop grandmaster: tail 5 | #85 every peer path ends with thisClock | #88 empty path: head"
+FAIL #85 direct grandmaster: tail 1 got 00e5e5fffe000001 exp 02a1b2fffec3d4e5
+FAIL #85 multi-hop grandmaster: tail 5 got 00e6e6fffe0000c4 exp 02a1b2fffec3d4e5
+FAIL #85 every peer path ends with thisClock got 0000000000000bd3 exp 0000000000000000
+[PASS] mutant caught: the appended entry is the announcing source - breaks "#85 direct grandmaster: tail 1 | #85 multi-hop grandmaster: tail 5 | #85 every peer path ends with thisClock"
+FAIL #87 G1 to G2 without a TLV: count got 0000000000000000 exp 0000000000000004
+FAIL #87 G1 to G2 without a TLV: its commit names the grandmaster and path got 0000000000000000 exp 0000000000000001
+FAIL #87 parent refresh without a TLV: count got 0000000000000000 exp 0000000000000003
+FAIL #85 absent path: count       got 0000000000000000 exp 0000000000000001
+FAIL TLV-less competition control: raw path count got 0000000000000000 exp 0000000000000001
+FAIL #87 post-warm-reset TLV-less count got 0000000000000000 exp 0000000000000001
+FAIL #87 post-warm-reset TLV-less selection commits {thisClock} got 0000000000000000 exp 0000000000000001
+FAIL TLV-less current parent: keeps the previous count got 0000000000000000 exp 0000000000000008
+FAIL unknown-only current parent: keeps the previous count got 0000000000000000 exp 0000000000000004
+FAIL out-of-message fake PathTrace: keeps the previous count got 0000000000000000 exp 0000000000000008
+FAIL #87 raw-empty overload: frozen A keeps C's path got 0000000000000000 exp 0000000000000001
+FAIL #85 every peer path ends with thisClock got 000000000000000b exp 0000000000000000
+[PASS] mutant caught: the empty sequence published without a TLV - breaks "#87 G1 to G2 without a TLV: count | #87 G1 to G2 without a TLV: its commit names the grandmaster and path | #87 parent refresh without a TLV: count | #85 absent path: count | TLV-less competition control: raw path count | #87 post-warm-reset TLV-less count | #87 post-warm-reset TLV-less selection commits {thisClock} | TLV-less current parent: keeps the previous count | unknown-only current parent: keeps the previous count | out-of-message fake PathTrace: keeps the previous count | #87 raw-empty overload: frozen A keeps C's path | #85 every peer path ends with thisClock"
+FAIL #82 cold release: every cycle to the first beat has {thisClock} got 000000000024a167 exp 0000000000000000
+FAIL #82 cold release: that commit carries thisClock and {thisClock} got 0000000000000000 exp 0000000000000001
+FAIL self path entry 0 is thisClock got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL own-GM transition publishes thisClock at entry 0 got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL #87 post-warm-reset TLV-less head got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL #87 the degraded G2 yields with {thisClock} got 0000000000000000 exp 0000000000000001
+FAIL #82 every commit naming thisClock carries {thisClock} got 0000000000000141 exp 0000000000000000
+FAIL p1 255 self path entry 0 is thisClock got 0000000000000000 exp 02a1b2fffec3d4e5
+FAIL p1 255 #82 every commit naming thisClock carries {thisClock} got 0000000000000010 exp 0000000000000000
+[PASS] mutant caught: the self path leaves entry 0 empty - breaks "#82 cold release: every cycle to the first beat has {thisClock} | #82 cold release: that commit carries thisClock and {thisClock} | self path entry 0 is thisClock | own-GM transition publishes thisClock at entry 0 | #87 post-warm-reset TLV-less head | #87 the degraded G2 yields with {thisClock} | #82 every commit naming thisClock carries {thisClock} | p1 255 self path entry 0 is thisClock | p1 255 #82 every commit naming thisClock carries {thisClock}"
+
+13 checks: 13 PASS, 0 FAIL
+```

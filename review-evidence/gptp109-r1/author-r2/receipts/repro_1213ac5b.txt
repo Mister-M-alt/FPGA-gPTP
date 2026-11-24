@@ -1,0 +1,99 @@
+# Reproduction at 1213ac5b: the committed #109 harness against the 1213ac5b ROM image
+
+Method: `git archive` of the harness commit into scratch; hdl/ucode/gen_gptp_ucode.py and
+tb/verilator/engine/gptp_ucode.hex replaced by their 1213ac5b versions (image md5 a9fd0a0f6586a04bc2f2ef19422a8017,
+the same as round 1's); RTL unchanged by this branch. `make run VERILATOR=verilator` under Verilator
+Verilator 5.050 2026-07-01 rev v5.050. make stops after the shipping pass (rc 2), as it must on a failing pass.
+
+## Harness at 8e4889b, the harness the reviewer measured (R921-1 receipts/repro_suite.txt)
+
+```
+FAIL #109 D -81: asCapable kept   got 0000000000000000 exp 0000000000000004
+FAIL #109 D -81: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -81: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -81: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -263: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -263: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -263: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -263: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 latency constants over-stated by 400 ns: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 latency constants over-stated by 400 ns: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 latency constants over-stated by 400 ns: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 latency constants over-stated by 400 ns: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -800: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -800: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -800: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -800: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -801: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -801: the engine publishes the used delay got 00000000fffffcdf exp 00000000fffffce0
+FAIL #109 D -801: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -801: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -801: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -5000000: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 D -5000000: the engine publishes the used delay got 00000000ffb3b4c0 exp 00000000fffffce0
+FAIL #109 D -5000000: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -5000000: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -5000000: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+INFO #109 the most negative delay of the wire: computed -2147483641057566820 ns, the wire's bound -2147483649647483648 ns
+FAIL #109 the most negative delay of the wire: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 the most negative delay of the wire: the engine publishes the used delay got 000000009dcd1f9c exp 00000000fffffce0
+FAIL #109 the most negative delay of the wire: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 the most negative delay of the wire: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 the most negative delay of the wire: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+2296 checks: 2265 PASS, 31 FAIL
+```
+
+- FAIL lines: 31; FAIL lines not prefixed '#109 ': 0
+- 'its offset uses the delay exactly' FAIL lines: 7 (got 0xb, the P109_BG_OFF background offset: the graded pair was not used, so the last used pair's offset stayed published)
+
+## Harness at 74830c2, the harness of the new head (adds the most positive wire delay, phase 64)
+
+```
+FAIL #109 D -81: asCapable kept   got 0000000000000000 exp 0000000000000004
+FAIL #109 D -81: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -81: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -81: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -263: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -263: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -263: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -263: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 latency constants over-stated by 400 ns: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 latency constants over-stated by 400 ns: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 latency constants over-stated by 400 ns: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 latency constants over-stated by 400 ns: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -800: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -800: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -800: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -800: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -801: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -801: the engine publishes the used delay got 00000000fffffcdf exp 00000000fffffce0
+FAIL #109 D -801: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -801: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -801: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+FAIL #109 D -5000000: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 D -5000000: the engine publishes the used delay got 00000000ffb3b4c0 exp 00000000fffffce0
+FAIL #109 D -5000000: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 D -5000000: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 D -5000000: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+INFO #109 the most negative delay of the wire: computed -2147483641057566820 ns, the wire's bound -2147483649647483648 ns
+FAIL #109 the most negative delay of the wire: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 the most negative delay of the wire: the engine publishes the used delay got 000000009dcd1f9c exp 00000000fffffce0
+FAIL #109 the most negative delay of the wire: the next Follow_Up is used got 0000000000000000 exp 0000000000000001
+FAIL #109 the most negative delay of the wire: its offset uses the delay exactly got 000000000000000b exp 0000000000000000
+FAIL #109 the most negative delay of the wire: the grandmaster stays elected got 0000000000000000 exp 0000000000000001
+INFO #109 the most positive delay of the wire: computed 2147483658237409833 ns
+2302 checks: 2271 PASS, 31 FAIL
+```
+
+- FAIL lines: 31; FAIL lines not prefixed '#109 ': 0
+- 'its offset uses the delay exactly' FAIL lines: 7 (got 0xb, the P109_BG_OFF background offset: the graded pair was not used, so the last used pair's offset stayed published)
+
+## Comparison
+
+- The two harnesses fail the same 31 checks with the same got/exp values: `diff` of the FAIL lines is empty (identical).
+- The 6 checks the new head adds (phase 64's most positive wire delay) pass at 1213ac5b: its verdict compared all 64 bits too.
+- The 24 of round 1 came from an earlier, uncommitted harness whose background pairs used offset 0, so 'its offset uses the delay exactly' could not fail on an unused pair.
+  The committed harness (P109_BG_OFF = 11) adds those 7 failures: -81, -263, over-stated, -800, -801, -5 ms, wire minimum.
+- The wire minimum computes -2147483641057566820 ns here and -2147483641057566821 at the head, and the most positive delay
+  2147483658237409833 here and 2147483649647485841 at the head: the 1213ac5b plane reaches those trials from a different
+  state (it lost asCapable in the trials before), so its ratio window differs. Neither value changes a verdict.

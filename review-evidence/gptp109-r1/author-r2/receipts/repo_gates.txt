@@ -1,0 +1,69 @@
+# Repository gates at the head 74830c2 (`git archive` into scratch)
+
+## make docs (rc 0)
+```
+EXACT hdl/top/KL_gptp_engine.sv#L1283 (Registered policy slew level): 2'd3: begin
+EXACT hdl/ucode/gen_gptp_ucode.py#L1115 (Registered policy slew level): def prog_leg_slew(base: int) -> Prog:
+EXACT hdl/wire/KL_gptp_rx_parser.sv#L521 (Ignored receive flag bits): 11'(OFF_FLAGS0_C + 1): flags_r <= acc_nxt_w[15:0];
+source evidence: 20 exact, 0 findings
+python3 scripts/check_source_evidence.py --selftest
+source evidence selftest: PASS (7 arms)
+```
+
+## make contract (rc 0)
+```
+python3 tb/check_phc_contract.py
+PHC interface contract: PASS
+```
+
+## make lint (rc 0)
+```
+make[1]: Entering directory '<SCRATCH>/gates/bench/arty'
+verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-PINCONNECTEMPTY --top-module bench_arty_top ../../hdl/ucpu/gptp_ucpu_pkg.sv ../../hdl/ucpu/KL_gptp_ucpu.sv ../../hdl/wire/KL_gptp_rx_parser.sv ../../hdl/wire/KL_gptp_tx_slot.sv ../../hdl/common/KL_gptp_timer.sv ../../hdl/top/KL_gptp_engine.sv bench_afifo.sv bench_mii_rx.sv bench_mii_tx.sv bench_phc.sv bench_uart_report.sv bench_arty_top.sv
+- V e r i l a t i o n   R e p o r t: Verilator 5.050 2026-07-01 rev v5.050
+- Verilator: Built from 1.111 MB sources in 13 modules, into 0.448 MB in 3 C++ files needing 0.000 MB
+- Verilator: Walltime 0.166 s (elab=0.024, cvt=0.086, bld=0.000); cpu 0.115 s on 1 threads; allocated 40.023 MB
+make[1]: Leaving directory '<SCRATCH>/gates/bench/arty'
+```
+
+## ROM images
+No generator change since 8e4889b, so no image changes: `git diff --stat 8e4889b..74830c2`:
+```
+ docs/INTEGRATION.md                 |  2 +-
+ tb/verilator/engine/p109_mutants.py |  8 ++++++++
+ tb/verilator/engine/sim_main.cpp    | 32 ++++++++++++++++++++++++++++++--
+ 3 files changed, 39 insertions(+), 3 deletions(-)
+```
+The four tracked images are byte-identical to 8e4889b's (shipping 1,013 words, seeded 1,014, same leg map; see round 1).
+
+## Parent submodule-scanning ratchets (scratch parent, gptp-processor gitlink staged at 74830c2, never committed or pushed)
+The new harness function and constants are inside the C++ idiom ratchet (Rule 11: one declarator per declaration).
+```
+== cpp_idiom (rc 0)
+  multi-declarator declaration: 0 <= 0
+  long function: 0 <= 0
+  build without warnings: 0 <= 0
+== check_hygiene (rc 0)
+  CRLF line ending                         0                   0                   0
+  UTF-8 BOM                                0                   0                   0
+  tab in SystemVerilog                     0                   0                   0
+== check_py_idiom (rc 0)
+  too many parameters: 7 <= 7
+  global statement: 0 <= 0
+  over-long line: 0 <= 0
+== check_todo_ownership (rc 0)
+TODO ownership gate: OK (0 owned marker(s), 0 unowned; 80 near-miss occurrence(s) on 73 line(s) correctly not treated as markers; 1595 first-party file(s) read)
+== measure_naming (rc 0)
+total                  141   4520    689       4824          385        327     653      558          4         95
+
+95 candidate(s): 91 boundary name(s) hide a documented unit and 4 are named for a different unit than documented (4520 ports and 689 parameters scanned, 385 with no //! and so not judged here, 558 mat
+== measure_fail_fast (rc 0)
+waived by site, with a reason (2):
+   .github/workflows/rtl-fast.yml:167  the grep IS the version assertion; its status is the verdict
+   .github/workflows/rtl.yml:248  the grep IS the version assertion; its status is the verdict
+== measure_test_evidence (rc 0)
+Verilator scheduling: 65 default suites; physical selection: milan_dp_gptp
+
+runner evidence contract: OK
+```
+The parent's docs gates (imported-gPTP docs, submodule docs) were not re-run: their donor links name the gitlink SHA, which the bump refreshes (a bump chore, as in round 1).
