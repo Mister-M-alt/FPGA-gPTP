@@ -8580,7 +8580,8 @@ class GptpEngineHarness {
     // and ingress constants 400 ns too large, so t4 - t1 is 800 ns short
     // and the computed delay is L - 400; the true offset is 0
     const char *tag = "#109 latency constants over-stated by 400 ns";
-    const int64_t L = 100, E = 400;
+    const int64_t L = 100;
+    const int64_t E = 400;
     if (p109_exchange(tag, PD_SET, L - E)) {
       char n[160];
       snprintf(n, sizeof n, "%s: the plane computes L - 400", tag);
