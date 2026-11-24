@@ -1,0 +1,108 @@
+== plan 1 [engine=0]: IDENTICAL; serial: make-rc=0 | parallel: make-rc=0 
+== plan 2 [engine=1]: DIFFER; serial: make-rc=0 | parallel: make-rc=0 
+   6,21c6
+   < make: [Makefile:51: run] Error 1 (ignored)
+   < -- again, with the request counter seeded above 16 bits --
+   < stub out 1 in seedrun args[]
+   < stub err 1 in seedrun
+   < stub out 2 in seedrun
+   < 1 checks: 1 PASS, 0 FAIL
+   < -- again, with the Sync counter seeded above 16 bits --
+   < stub out 1 in syncseedrun args[]
+   < stub err 1 in syncseedrun
+   < stub out 2 in syncseedrun
+   < 1 checks: 1 PASS, 0 FAIL
+   < -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+   < stub out 1 in p1run args[+not-gm-capable]
+   < stub err 1 in p1run
+   < stub out 2 in p1run
+   < 1 checks: 1 PASS, 0 FAIL
+   ---
+   > make: [Makefile:65: run] Error 1 (ignored)
+== plan 3 [seedrun=3]: DIFFER; serial: make-rc=0 | parallel: make-rc=0 
+   11,21c11
+   < make: [Makefile:55: run] Error 3 (ignored)
+   < -- again, with the Sync counter seeded above 16 bits --
+   < stub out 1 in syncseedrun args[]
+   < stub err 1 in syncseedrun
+   < stub out 2 in syncseedrun
+   < 1 checks: 1 PASS, 0 FAIL
+   < -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+   < stub out 1 in p1run args[+not-gm-capable]
+   < stub err 1 in p1run
+   < stub out 2 in p1run
+   < 1 checks: 1 PASS, 0 FAIL
+   ---
+   > make: [Makefile:65: run] Error 3 (ignored)
+== plan 4 [seedrun=3 syncseedrun=5]: DIFFER; serial: make-rc=0 | parallel: make-rc=0 
+   11,22c11
+   < make: [Makefile:55: run] Error 3 (ignored)
+   < -- again, with the Sync counter seeded above 16 bits --
+   < stub out 1 in syncseedrun args[]
+   < stub err 1 in syncseedrun
+   < stub out 2 in syncseedrun
+   < FAIL stub in syncseedrun
+   < make: [Makefile:59: run] Error 5 (ignored)
+   < -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+   < stub out 1 in p1run args[+not-gm-capable]
+   < stub err 1 in p1run
+   < stub out 2 in p1run
+   < 1 checks: 1 PASS, 0 FAIL
+   ---
+   > make: [Makefile:65: run] Error 3 (ignored)
+== plan 5 [p1run=7]: DIFFER; serial: make-rc=0 | parallel: make-rc=0 
+   21c21
+   < make: [Makefile:63: run] Error 7 (ignored)
+   ---
+   > make: [Makefile:65: run] Error 7 (ignored)
+== plan 6 [engine=2 p1run=9]: DIFFER; serial: make-rc=0 | parallel: make-rc=0 
+   6,22c6
+   < make: [Makefile:51: run] Error 2 (ignored)
+   < -- again, with the request counter seeded above 16 bits --
+   < stub out 1 in seedrun args[]
+   < stub err 1 in seedrun
+   < stub out 2 in seedrun
+   < 1 checks: 1 PASS, 0 FAIL
+   < -- again, with the Sync counter seeded above 16 bits --
+   < stub out 1 in syncseedrun args[]
+   < stub err 1 in syncseedrun
+   < stub out 2 in syncseedrun
+   < 1 checks: 1 PASS, 0 FAIL
+   < -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+   < stub out 1 in p1run args[+not-gm-capable]
+   < stub err 1 in p1run
+   < stub out 2 in p1run
+   < FAIL stub in p1run
+   < make: [Makefile:63: run] Error 9 (ignored)
+   ---
+   > make: [Makefile:65: run] Error 2 (ignored)
+== plan 7 [seedrun=sigSEGV]: DIFFER; serial: make-rc=0 | parallel: make-rc=0 
+   10,20c10
+   < make: [Makefile:55: run] Segmentation fault (core dumped) (ignored)
+   < -- again, with the Sync counter seeded above 16 bits --
+   < stub out 1 in syncseedrun args[]
+   < stub err 1 in syncseedrun
+   < stub out 2 in syncseedrun
+   < 1 checks: 1 PASS, 0 FAIL
+   < -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+   < stub out 1 in p1run args[+not-gm-capable]
+   < stub err 1 in p1run
+   < stub out 2 in p1run
+   < 1 checks: 1 PASS, 0 FAIL
+   ---
+   > make: [Makefile:65: run] Error 139 (ignored)
+== plan 8 [syncseedrun=sigABRT]: DIFFER; serial: make-rc=0 | parallel: make-rc=0 
+   15,20c15
+   < make: [Makefile:59: run] Aborted (core dumped) (ignored)
+   < -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+   < stub out 1 in p1run args[+not-gm-capable]
+   < stub err 1 in p1run
+   < stub out 2 in p1run
+   < 1 checks: 1 PASS, 0 FAIL
+   ---
+   > make: [Makefile:65: run] Error 134 (ignored)
+== plan 9 [p1run=sigKILL]: DIFFER; serial: make-rc=0 | parallel: make-rc=0 
+   20c20
+   < make: [Makefile:63: run] Killed (ignored)
+   ---
+   > make: [Makefile:65: run] Error 137 (ignored)

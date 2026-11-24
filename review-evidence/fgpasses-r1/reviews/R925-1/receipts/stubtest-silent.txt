@@ -1,0 +1,39 @@
+== plan 1 [engine=0]: DIFFER; serial: make-rc=0 | parallel: make-rc=0 
+   0a1
+   > ./obj_dir/Vengine_sim
+== plan 2 [engine=1]: DIFFER; serial: make: *** [Makefile:51: run] Error 1 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 1 make-rc=2 
+   0a1
+   > ./obj_dir/Vengine_sim
+== plan 3 [seedrun=3]: DIFFER; serial: make: *** [Makefile:55: run] Error 3 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 3 make-rc=2 
+   0a1
+   > ./obj_dir/Vengine_sim
+== plan 4 [seedrun=3 syncseedrun=5]: DIFFER; serial: make: *** [Makefile:55: run] Error 3 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 3 make-rc=2 
+   0a1
+   > ./obj_dir/Vengine_sim
+== plan 5 [p1run=7]: DIFFER; serial: make: *** [Makefile:63: run] Error 7 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 7 make-rc=2 
+   0a1
+   > ./obj_dir/Vengine_sim
+== plan 6 [engine=2 p1run=9]: DIFFER; serial: make: *** [Makefile:51: run] Error 2 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 2 make-rc=2 
+   0a1
+   > ./obj_dir/Vengine_sim
+== plan 7 [seedrun=sigSEGV]: DIFFER; serial: make: *** [Makefile:55: run] Segmentation fault (core dumped) make-rc=2 | parallel: make: *** [Makefile:65: run] Error 139 make-rc=2 
+   0a1
+   > ./obj_dir/Vengine_sim
+   9c10
+   < make: *** [Makefile:<L>: run] Segmentation fault (core dumped)
+   ---
+   > make: *** [Makefile:<L>: run] Error 139
+== plan 8 [syncseedrun=sigABRT]: DIFFER; serial: make: *** [Makefile:59: run] Aborted (core dumped) make-rc=2 | parallel: make: *** [Makefile:65: run] Error 134 make-rc=2 
+   0a1
+   > ./obj_dir/Vengine_sim
+   14c15
+   < make: *** [Makefile:<L>: run] Aborted (core dumped)
+   ---
+   > make: *** [Makefile:<L>: run] Error 134
+== plan 9 [p1run=sigKILL]: DIFFER; serial: make: *** [Makefile:63: run] Killed make-rc=2 | parallel: make: *** [Makefile:65: run] Error 137 make-rc=2 
+   0a1
+   > ./obj_dir/Vengine_sim
+   19c20
+   < make: *** [Makefile:<L>: run] Killed
+   ---
+   > make: *** [Makefile:<L>: run] Error 137

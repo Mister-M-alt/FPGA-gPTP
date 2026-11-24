@@ -1,0 +1,2 @@
+CPU serial 826.99s, parallel 4cpu 859.00s (+3.9%), parallel 1cpu 831.32s (+0.5%); wall 1266.88 -> 561.13 s = 2.26x
+author: CPU 817.72 -> 836.79 (+2.33%), wall 2721.59 -> 974.61 = 2.79x

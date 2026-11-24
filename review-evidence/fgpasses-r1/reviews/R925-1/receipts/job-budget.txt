@@ -1,0 +1,10 @@
+P1cpu-clean max live simulators under make -j1: 4
+P-abort max live simulators under make -j1: 3
+P-clean max live simulators under make -j1: 4
+P-fail max live simulators under make -j1: 4
+S-abort max live simulators under make -j1: 1
+S-clean max live simulators under make -j1: 1
+S-fail max live simulators under make -j1: 1
+1795544581 P-clean sims=4 cpus=[65-68 65-68 65-68 65-68]
+1795544593 P-clean sims=4 cpus=[65-68 65-68 65-68 65-68]
+1795544581 P1cpu-clean sims=4 cpus=[69 69 69 69]

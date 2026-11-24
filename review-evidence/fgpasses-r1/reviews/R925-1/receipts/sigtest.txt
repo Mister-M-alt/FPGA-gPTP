@@ -1,0 +1,5 @@
+TERM to make: passes alive before=0, make rc=2, passes alive 3 s after=0; make said: make: *** [Makefile:65: run] Error 143 
+INT to group: passes alive before=4, make rc=2, passes alive 3 s after=0; make said: make: *** [Makefile:65: run] Error 143 
+INT to recipe-shell: passes alive before=4, make rc=2, passes alive 3 s after=0; make said: make: *** [Makefile:65: run] Error 143 
+TERM to recipe-shell: passes alive before=4, make rc=2, passes alive 3 s after=0; make said: make: *** [Makefile:65: run] Error 143 
+HUP to group: passes alive before=4, make rc=129, passes alive 3 s after=0; make said: make: *** [Makefile:65: run] Hangup 

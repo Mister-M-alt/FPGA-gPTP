@@ -1,0 +1,22 @@
+true --cc --exe --build -j 0 --top-module KL_gptp_engine -Wall -Wno-fatal -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDPARAM -GUCODE_HEX_P='"gptp_ucode.hex"' -GCLK_HZ_P=2000000 -CFLAGS "-std=c++17 -O2 -I$PACKET/scratch/stub/par/tb/verilator/engine -Wall -Wextra" ../../../hdl/ucpu/gptp_ucpu_pkg.sv ../../../hdl/ucpu/KL_gptp_ucpu.sv ../../../hdl/wire/KL_gptp_rx_parser.sv ../../../hdl/wire/KL_gptp_tx_slot.sv ../../../hdl/common/KL_gptp_timer.sv ../../../hdl/top/KL_gptp_engine.sv sim_main.cpp -o Vengine_sim
+./obj_dir/Vengine_sim
+stub out 1 in engine args[]
+stub err 1 in engine
+stub out 2 in engine
+1 checks: 1 PASS, 0 FAIL
+-- again, with the request counter seeded above 16 bits --
+stub out 1 in seedrun args[]
+stub err 1 in seedrun
+stub out 2 in seedrun
+1 checks: 1 PASS, 0 FAIL
+-- again, with the Sync counter seeded above 16 bits --
+stub out 1 in syncseedrun args[]
+stub err 1 in syncseedrun
+stub out 2 in syncseedrun
+1 checks: 1 PASS, 0 FAIL
+-- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+stub out 1 in p1run args[+not-gm-capable]
+stub err 1 in p1run
+stub out 2 in p1run
+1 checks: 1 PASS, 0 FAIL
+make-rc=0

@@ -1,0 +1,7 @@
+tb/verilator/engine/obj_dir/pass0.out
+tb/verilator/engine/obj_dir/pass1.out
+tb/verilator/engine/obj_dir/pass2.out
+tb/verilator/engine/obj_dir/pass3.out
+tb/verilator/engine/p1run/gptp_ucode.hex
+tb/verilator/engine/seedrun/gptp_ucode.hex
+tb/verilator/engine/syncseedrun/gptp_ucode.hex

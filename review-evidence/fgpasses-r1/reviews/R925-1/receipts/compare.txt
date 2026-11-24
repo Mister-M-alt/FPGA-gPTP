@@ -1,0 +1,16 @@
+S-clean vs P-clean: 167 vs 167 normalised lines; exact IDENTICAL; with make's recipe line number masked IDENTICAL
+  S-clean: make rc=0; no make error line; 1266.88 wall 825.36 user 1.63 sys
+  P-clean: make rc=0; no make error line; 561.13 wall 857.18 user 1.82 sys
+S-clean vs P1cpu-clean: 167 vs 167 normalised lines; exact IDENTICAL; with make's recipe line number masked IDENTICAL
+  S-clean: make rc=0; no make error line; 1266.88 wall 825.36 user 1.63 sys
+  P1cpu-clean: make rc=0; no make error line; 877.99 wall 828.96 user 2.36 sys
+S-fail vs P-fail: 108 vs 108 normalised lines; exact DIFFER; with make's recipe line number masked IDENTICAL
+  S-fail: make rc=2; make: *** [Makefile:55: run] Error 1; 939.35 wall 550.33 user 0.90 sys
+  P-fail: make rc=2; make: *** [Makefile:65: run] Error 1; 579.51 wall 858.15 user 1.85 sys
+S-abort vs P-abort: 109 vs 109 normalised lines; exact DIFFER; with make's recipe line number masked DIFFER
+  S-abort: make rc=2; make: *** [Makefile:59: run] Aborted (core dumped); 899.74 wall 554.44 user 1.01 sys
+  P-abort: make rc=2; make: *** [Makefile:65: run] Error 134; 434.58 wall 570.83 user 1.33 sys
+  | 109c109
+  | < make: *** [Makefile:<L>: run] Aborted (core dumped)
+  | ---
+  | > make: *** [Makefile:<L>: run] Error 134

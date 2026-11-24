@@ -1,0 +1,21 @@
+== plan 1 [engine=0]: IDENTICAL; serial: make-rc=0 | parallel: make-rc=0 
+== plan 2 [engine=1]: IDENTICAL; serial: make: *** [Makefile:51: run] Error 1 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 1 make-rc=2 
+== plan 3 [seedrun=3]: IDENTICAL; serial: make: *** [Makefile:55: run] Error 3 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 3 make-rc=2 
+== plan 4 [seedrun=3 syncseedrun=5]: IDENTICAL; serial: make: *** [Makefile:55: run] Error 3 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 3 make-rc=2 
+== plan 5 [p1run=7]: IDENTICAL; serial: make: *** [Makefile:63: run] Error 7 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 7 make-rc=2 
+== plan 6 [engine=2 p1run=9]: IDENTICAL; serial: make: *** [Makefile:51: run] Error 2 make-rc=2 | parallel: make: *** [Makefile:65: run] Error 2 make-rc=2 
+== plan 7 [seedrun=sigSEGV]: DIFFER; serial: make: *** [Makefile:55: run] Segmentation fault (core dumped) make-rc=2 | parallel: make: *** [Makefile:65: run] Error 139 make-rc=2 
+   10c10
+   < make: *** [Makefile:<L>: run] Segmentation fault (core dumped)
+   ---
+   > make: *** [Makefile:<L>: run] Error 139
+== plan 8 [syncseedrun=sigABRT]: DIFFER; serial: make: *** [Makefile:59: run] Aborted (core dumped) make-rc=2 | parallel: make: *** [Makefile:65: run] Error 134 make-rc=2 
+   15c15
+   < make: *** [Makefile:<L>: run] Aborted (core dumped)
+   ---
+   > make: *** [Makefile:<L>: run] Error 134
+== plan 9 [p1run=sigKILL]: DIFFER; serial: make: *** [Makefile:63: run] Killed make-rc=2 | parallel: make: *** [Makefile:65: run] Error 137 make-rc=2 
+   20c20
+   < make: *** [Makefile:<L>: run] Killed
+   ---
+   > make: *** [Makefile:<L>: run] Error 137

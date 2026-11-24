@@ -1,0 +1,78 @@
+=== INT to shell
+live=4 make=4086378 recipe-shell=4086494
+recipe shell SigIgn:	0000000001001004 SigCgt:	0000000000014002 
+pass pid 4086496 SigIgn:	0000000001001006
+pass pid 4086497 SigIgn:	0000000001001006
+pass pid 4086498 SigIgn:	0000000001001006
+pass pid 4086499 SigIgn:	0000000001001006
+make rc=2
+live after=0
+13:+ p3=
+14:+ trap 'kill $p0 $p1 $p2 $p3 2>/dev/null; exit 130' INT
+15:+ trap 'kill $p0 $p1 $p2 $p3 2>/dev/null; exit 143' TERM
+16:+ p0=4086496
+17:+ p1=4086497
+18:+ ./obj_dir/Vengine_sim
+19:+ p2=4086498
+20:+ p3=4086499
+21:+ wait 4086496
+22:++ kill 4086496 4086497 4086498 4086499
+23:++ exit 130
+24:make: *** [Makefile:65: run] Error 130
+timeout-rc=0
+=== INT to group
+live=4 make=4087462 recipe-shell=4087551
+recipe shell SigIgn:	0000000001001004 SigCgt:	0000000000014002 
+pass pid 4087552 SigIgn:	0000000001001006
+pass pid 4087553 SigIgn:	0000000001001006
+pass pid 4087554 SigIgn:	0000000001001006
+pass pid 4087555 SigIgn:	0000000001001006
+make rc=2
+live after=0
+15:+ trap 'kill $p0 $p1 $p2 $p3 2>/dev/null; exit 143' TERM
+16:+ p0=4087552
+17:+ p1=4087553
+18:+ p2=4087554
+19:+ ./obj_dir/Vengine_sim
+20:+ p3=4087555
+21:+ wait 4087552
+22:++ kill 4087552 4087553 4087554 4087555
+23:++ exit 130
+24:make: *** wait: No child processes.  Stop.
+25:make: *** Waiting for unfinished jobs....
+26:make: *** wait: No child processes.  Stop.
+timeout-rc=0
+=== TERM to shell
+live=4 make=4088356 recipe-shell=4088484
+recipe shell SigIgn:	0000000001001004 SigCgt:	0000000000014002 
+pass pid 4088485 SigIgn:	0000000001001006
+pass pid 4088486 SigIgn:	0000000001001006
+pass pid 4088487 SigIgn:	0000000001001006
+pass pid 4088488 SigIgn:	0000000001001006
+make rc=2
+live after=0
+13:+ p3=
+14:+ trap 'kill $p0 $p1 $p2 $p3 2>/dev/null; exit 130' INT
+15:+ trap 'kill $p0 $p1 $p2 $p3 2>/dev/null; exit 143' TERM
+16:+ p0=4088485
+17:+ ./obj_dir/Vengine_sim
+18:+ p1=4088486
+19:+ p2=4088487
+20:+ p3=4088488
+21:+ wait 4088485
+22:++ kill 4088485 4088486 4088487 4088488
+23:++ exit 143
+24:make: *** [Makefile:65: run] Error 143
+timeout-rc=0
+=== QUIT to group
+live=4 make=4089404 recipe-shell=4089718
+recipe shell SigIgn:	0000000001001004 SigCgt:	0000000000014002 
+pass pid 4089721 SigIgn:	0000000001001006
+pass pid 4089722 SigIgn:	0000000001001006
+pass pid 4089723 SigIgn:	0000000001001006
+pass pid 4089724 SigIgn:	0000000001001006
+timeout-rc=124
+STALE 4089721
+STALE 4089722
+STALE 4089723
+STALE 4089724
