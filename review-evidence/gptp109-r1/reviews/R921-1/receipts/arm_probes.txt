@@ -1,0 +1,23 @@
+INFO full arm entries: 175; #109 entries: 8
+INFO running 5 entries
+INFO entry: R1 the floor is -801 ns
+INFO entry: R2 the engine publishes a negative delay as 0
+INFO entry: R3 the floor mask uses a logical shift
+INFO entry: R4 only the publication is floored
+INFO entry: R5 the verdict reads bit 31
+[PASS] the unmutated engine still passes the harness
+FAIL #109 D -801: its offset uses the delay exactly got 0000000000000001 exp 0000000000000000
+FAIL #109 D -801: the engine publishes the used delay got 00000000fffffcdf exp 00000000fffffce0
+[PASS] mutant caught: R1 the floor is -801 ns - breaks "#109 D -801: its offset uses the delay exactly | #109 D -801: the engine publishes the used delay"
+FAIL #109 D -3: the engine publishes the used delay got 0000000000000000 exp 00000000fffffffd
+FAIL #109 D -263: the engine publishes the used delay got 0000000000000000 exp 00000000fffffef9
+[PASS] mutant caught: R2 the engine publishes a negative delay as 0 - breaks "#109 D -3: the engine publishes the used delay | #109 D -263: the engine publishes the used delay"
+FAIL #109 D -801: its offset uses the delay exactly got 0000000000000002 exp 0000000000000000
+FAIL #109 D -5000000: no PHC step got 0000000000000001 exp 0000000000000000
+[PASS] mutant caught: R3 the floor mask uses a logical shift - breaks "#109 D -801: its offset uses the delay exactly | #109 D -5000000: no PHC step"
+FAIL #109 D -801: its offset uses the delay exactly got 0000000000000001 exp 0000000000000000
+FAIL #109 D -5000000: no PHC step got 0000000000000001 exp 0000000000000000
+[PASS] mutant caught: R4 only the publication is floored - breaks "#109 D -801: its offset uses the delay exactly | #109 D -5000000: no PHC step"
+[FAIL] mutant SURVIVED: R5 the verdict reads bit 31. The harness does not prove "probe: a huge positive delay is bad".
+
+6 checks: 5 PASS, 1 FAIL

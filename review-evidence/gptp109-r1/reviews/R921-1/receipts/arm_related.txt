@@ -1,0 +1,105 @@
+INFO full arm entries: 175; #109 entries: 8
+INFO running 27 entries
+INFO entry: slew idle asCapable loss arms qualification
+INFO entry: lost t1 fabricates a time and a companion
+INFO entry: lost Sync cancels the requester exchange
+INFO entry: lost response cancels the requester exchange
+INFO entry: the tail runs before its own t1
+INFO entry: becoming grandmaster unlocks the servo
+INFO entry: asCapable's rise keeps the lock
+INFO entry: an asCapable fall leaves the receipt watch running
+INFO entry: an incapable receipt timeout keeps the elected peer
+INFO entry: an incapable port's Announces still compete
+INFO entry: the asCapable drop keeps the flags word
+INFO entry: an incapable port's receipt watch is not re-armed
+INFO entry: lost responses clear asCapable at the first
+INFO entry: lost responses clear asCapable at the fourth
+INFO entry: lost responses clear asCapable at the sixth
+INFO entry: a second response re-arms the pairing
+INFO entry: a third response re-arms the reset exchange
+INFO entry: a portEnabled edge keeps the ladder
+INFO entry: a portEnabled edge leaves the interval unanswered
+INFO entry: the cease entry keeps asCapable
+INFO entry: the ladder raises asCapable at the first exchange
+INFO entry: NOT_ENABLED keeps the armed response
+INFO entry: a late response completes its exchange
+INFO entry: the late bound is one nanosecond short
+INFO entry: the late bound leaves out the clock tolerance
+INFO entry: the late bound leaves out the link
+INFO entry: the late bound leaves out the timestamp granules
+[PASS] the unmutated engine still passes the harness
+FAIL slew: in-band pair after asCapable recovery stays inactive got 0000000000000001 exp 0000000000000000
+[PASS] mutant caught: slew idle asCapable loss arms qualification - breaks "slew: in-band pair after asCapable recovery stays inactive"
+[PASS] mutant caught: lost t1 fabricates a time and a companion - breaks "a lost result writes no time and completes no exchange"
+[PASS] mutant caught: lost Sync cancels the requester exchange - breaks "a lost Sync result retires the Sync claim and nothing else"
+[PASS] mutant caught: lost response cancels the requester exchange - breaks "a lost Pdelay_Resp result retires the response claim and nothing else"
+[PASS] mutant caught: the tail runs before its own t1 - breaks "a delay is computed from this exchange's own t1, never a predecessor's"
+[PASS] mutant caught: becoming grandmaster unlocks the servo - breaks "the servo stays locked across a return from mastership"
+[PASS] mutant caught: asCapable's rise keeps the lock - breaks "the first pair after asCapable rises, or after a reset, is a link-up"
+FAIL #82 Pdelay loss: thisClock is committed within 2 ms of the fall got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: an asCapable fall leaves the receipt watch running - breaks "#82 Pdelay loss: thisClock is committed within 2 ms of the fall"
+FAIL #82 Pdelay loss: thisClock is committed within 2 ms of the fall got 0000000000000000 exp 0000000000000001
+FAIL #82 Pdelay loss: that commit carries {thisClock} got 0000000000000000 exp 0000000000000001
+FAIL #82 Pdelay loss: Announces from the incapable port elect nothing got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: an incapable receipt timeout keeps the elected peer - breaks "#82 Pdelay loss: thisClock is committed within 2 ms of the fall | #82 Pdelay loss: that commit carries {thisClock} | #82 Pdelay loss: Announces from the incapable port elect nothing"
+FAIL #82 Pdelay loss: Announces from the incapable port elect nothing got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: an incapable port's Announces still compete - breaks "#82 Pdelay loss: Announces from the incapable port elect nothing"
+FAIL #82 Pdelay loss: the drop commit's flags are gmPresent alone got 0000000000000009 exp 0000000000000001
+FAIL p1 255 #82 Pdelay loss: the drop commit's flags are gmPresent alone got 0000000000000009 exp 0000000000000000
+[PASS] mutant caught: the asCapable drop keeps the flags word - breaks "#82 Pdelay loss: the drop commit's flags are gmPresent alone | p1 255 #82 Pdelay loss: the drop commit's flags are gmPresent alone"
+FAIL #82 Pdelay loss: once capable, with no Announce, master in 3 s got 0000000000000000 exp 0000000000000001
+FAIL #82 Pdelay loss: that mastership names thisClock, {thisClock} got 0000000000000000 exp 0000000000000001
+FAIL p1 255 #82 Pdelay loss: once capable, with no Announce, master in 3 s got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: an incapable port's receipt watch is not re-armed - breaks "#82 Pdelay loss: once capable, with no Announce, master in 3 s | #82 Pdelay loss: that mastership names thisClock, {thisClock} | p1 255 #82 Pdelay loss: once capable, with no Announce, master in 3 s"
+FAIL #90 no response: one loss keeps asCapable got 0000000000000000 exp 0000000000000004
+FAIL #90 no follow-up: one loss keeps asCapable got 0000000000000000 exp 0000000000000004
+FAIL #91 duplicated response: one loss keeps asCapable got 0000000000000000 exp 0000000000000004
+FAIL #91 three responses: one loss keeps asCapable got 0000000000000000 exp 0000000000000004
+[PASS] mutant caught: lost responses clear asCapable at the first - breaks "#90 no response: one loss keeps asCapable | #90 no follow-up: one loss keeps asCapable | #91 duplicated response: one loss keeps asCapable | #91 three responses: one loss keeps asCapable"
+FAIL #90 no response: four losses keep asCapable got 0000000000000000 exp 0000000000000004
+FAIL #90 no follow-up: four losses keep asCapable got 0000000000000000 exp 0000000000000004
+FAIL #91 duplicated response: four losses keep asCapable got 0000000000000000 exp 0000000000000004
+FAIL #91 three responses: four losses keep asCapable got 0000000000000000 exp 0000000000000004
+[PASS] mutant caught: lost responses clear asCapable at the fourth - breaks "#90 no response: four losses keep asCapable | #90 no follow-up: four losses keep asCapable | #91 duplicated response: four losses keep asCapable | #91 three responses: four losses keep asCapable"
+FAIL #90 no response: the fifth loss clears asCapable got 0000000000000004 exp 0000000000000000
+FAIL #90 no follow-up: the fifth loss clears asCapable got 0000000000000004 exp 0000000000000000
+FAIL #91 duplicated response: the fifth loss clears asCapable got 0000000000000004 exp 0000000000000000
+FAIL #91 three responses: the fifth loss clears asCapable got 0000000000000004 exp 0000000000000000
+[PASS] mutant caught: lost responses clear asCapable at the sixth - breaks "#90 no response: the fifth loss clears asCapable | #90 no follow-up: the fifth loss clears asCapable | #91 duplicated response: the fifth loss clears asCapable | #91 three responses: the fifth loss clears asCapable"
+FAIL #91 duplicated response: the fifth loss clears asCapable got 0000000000000004 exp 0000000000000000
+FAIL #91 duplicated response: no exchange completes got 0000000000000295 exp 0000000000000259
+FAIL #91 three responses: the fifth loss clears asCapable got 0000000000000004 exp 0000000000000000
+FAIL #91 three responses: no exchange completes got 00000000000002d1 exp 0000000000000295
+[PASS] mutant caught: a second response re-arms the pairing - breaks "#91 duplicated response: the fifth loss clears asCapable | #91 duplicated response: no exchange completes | #91 three responses: the fifth loss clears asCapable | #91 three responses: no exchange completes"
+FAIL #91 three responses: the fifth loss clears asCapable got 0000000000000004 exp 0000000000000000
+FAIL #91 three responses: no exchange completes got 00000000000002d1 exp 0000000000000259
+[PASS] mutant caught: a third response re-arms the reset exchange - breaks "#91 three responses: the fifth loss clears asCapable | #91 three responses: no exchange completes"
+FAIL #94 link loss: one exchange after the rise leaves asCapable clear got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a portEnabled edge keeps the ladder - breaks "#94 link loss: one exchange after the rise leaves asCapable clear"
+FAIL #94 toggle: lostResponses starts at zero: four losses commit nothing got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a portEnabled edge leaves the interval unanswered - breaks "#94 toggle: lostResponses starts at zero: four losses commit nothing"
+FAIL #94 toggle: three multi-answered requests cease got 0000000000000000 exp 0000000000000001
+FAIL #94 countdown: three multi-answered requests cease got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the cease entry keeps asCapable - breaks "#94 toggle: three multi-answered requests cease | #94 countdown: three multi-answered requests cease"
+FAIL #94 toggle: one exchange after the rise leaves asCapable clear got 0000000000000000 exp 0000000000000001
+FAIL #94 link loss: one exchange after the rise leaves asCapable clear got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the ladder raises asCapable at the first exchange - breaks "#94 toggle: one exchange after the rise leaves asCapable clear | #94 link loss: one exchange after the rise leaves asCapable clear"
+FAIL #94 Follow_Up after the fall: nothing commits after NOT_ENABLED got 0000000000000001 exp 0000000000000000
+FAIL #94 Follow_Up after the fall: the delay holds got 00000000000002bd exp 0000000000000259
+FAIL #94 Follow_Up queued before the fall: nothing commits after NOT_ENABLED got 0000000000000001 exp 0000000000000000
+FAIL #94 Follow_Up queued before the fall: the delay holds got 00000000000002bd exp 0000000000000259
+[PASS] mutant caught: NOT_ENABLED keeps the armed response - breaks "#94 Follow_Up after the fall: nothing commits after NOT_ENABLED | #94 Follow_Up after the fall: the delay holds | #94 Follow_Up queued before the fall: nothing commits after NOT_ENABLED | #94 Follow_Up queued before the fall: the delay holds"
+FAIL #100 late responses: the fifth clears asCapable got 0000000000000000 exp 0000000000000001
+FAIL #100 late responses: none moves the delay got 0000000000000001 exp 0000000000000000
+[PASS] mutant caught: a late response completes its exchange - breaks "#100 late responses: the fifth clears asCapable | #100 late responses: none moves the delay"
+FAIL #100 responses at the bound: six keep asCapable got 0000000000000000 exp 0000000000000001
+FAIL #100 responses at the bound: the delay is published got 0000000000000259 exp 0000000000000258
+[PASS] mutant caught: the late bound is one nanosecond short - breaks "#100 responses at the bound: six keep asCapable | #100 responses at the bound: the delay is published"
+FAIL #100 responses at the bound: six keep asCapable got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the late bound leaves out the clock tolerance - breaks "#100 responses at the bound: six keep asCapable"
+FAIL #100 responses at the bound: six keep asCapable got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the late bound leaves out the link - breaks "#100 responses at the bound: six keep asCapable"
+FAIL #100 responses at the bound: six keep asCapable got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the late bound leaves out the timestamp granules - breaks "#100 responses at the bound: six keep asCapable"
+
+28 checks: 28 PASS, 0 FAIL

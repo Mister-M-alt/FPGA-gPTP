@@ -1,0 +1,67 @@
+INFO full arm entries: 175; #109 entries: 8
+INFO running 21 entries
+INFO entry: a later response re-arms the frozen pair
+INFO entry: a new request leaves the old pair live
+INFO entry: every pair uses the locked threshold
+INFO entry: every pair uses the link-up threshold
+INFO entry: exactly the threshold steps
+INFO entry: the step arm is unreachable
+INFO entry: a grandmaster change unlocks the servo
+INFO entry: a receipt timeout unlocks the servo
+INFO entry: the locked threshold is 200 us
+INFO entry: the whole trim is not clamped
+INFO entry: the trim clamp is one unit wider than the envelope
+INFO entry: a consumed pair leaves sync-ok down
+INFO entry: a master steers on its aged peer's Sync
+INFO entry: a Follow_Up pairs whatever its sequenceId
+INFO entry: the fifth loss stops the requests
+INFO entry: same-identity duplicates are a storm
+INFO entry: the countdown loads one beat less
+INFO entry: the cease entry ends the cease at once
+INFO entry: the trim stops short of a grandmaster 100 ppm away
+INFO entry: a handover to a peer keeps sync-ok
+INFO entry: slew clears at the first in-band pair
+[PASS] the unmutated engine still passes the harness
+[PASS] mutant caught: a later response re-arms the frozen pair - breaks "a complete pair keeps its own identity and operands until its t1"
+[PASS] mutant caught: a new request leaves the old pair live - breaks "a superseded exchange cannot pair with the new request's t1"
+[PASS] mutant caught: every pair uses the locked threshold - breaks "a link-up pair steps over 20 us"
+[PASS] mutant caught: every pair uses the link-up threshold - breaks "a locked pair slews up to 100 us"
+[PASS] mutant caught: exactly the threshold steps - breaks "an offset of exactly 20 us, or 100 us once locked, slews"
+[PASS] mutant caught: the step arm is unreachable - breaks "an offset over the threshold steps"
+[PASS] mutant caught: a grandmaster change unlocks the servo - breaks "the servo stays locked across a grandmaster identity change"
+[PASS] mutant caught: a receipt timeout unlocks the servo - breaks "the servo stays locked across a Sync receipt timeout"
+[PASS] mutant caught: the locked threshold is 200 us - breaks "a locked pair steps over 100 us, after a receipt timeout too"
+[PASS] mutant caught: the whole trim is not clamped - breaks "the written trim never leaves +-200 ppm"
+[PASS] mutant caught: the trim clamp is one unit wider than the envelope - breaks "the written trim never leaves the envelope the consumer derives"
+FAIL p1 255 #89 gmPresent: a priority1 255 grandmaster's usable Sync raises sync-ok got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a consumed pair leaves sync-ok down - breaks "p1 255 #89 gmPresent: a priority1 255 grandmaster's usable Sync raises sync-ok"
+FAIL #89 first grandmaster: Sync recovery is heard as master and steers nothing got 0000000000000000 exp 0000000000000001
+FAIL #89 Sync stops: Sync recovery is heard as master and steers nothing got 0000000000000000 exp 0000000000000001
+FAIL #89 no Follow_Up: Sync recovery is heard as master and steers nothing got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: a master steers on its aged peer's Sync - breaks "#89 first grandmaster: Sync recovery is heard as master and steers nothing | #89 Sync stops: Sync recovery is heard as master and steers nothing | #89 no Follow_Up: Sync recovery is heard as master and steers nothing"
+FAIL #89 Follow_Up after the next Sync: no unusable pair is consumed got 00000000078181a6 exp 0000000000000000
+FAIL #89 Follow_Up with the next sequenceId: no unusable pair is consumed got 0000000000000309 exp 0000000000000000
+[PASS] mutant caught: a Follow_Up pairs whatever its sequenceId - breaks "#89 Follow_Up after the next Sync: no unusable pair is consumed | #89 Follow_Up with the next sequenceId: no unusable pair is consumed"
+FAIL #90 no response: request 6 goes out got 0000000000000000 exp 0000000000000001
+FAIL #90 no follow-up: runs from a capable plane got 0000000000000000 exp 0000000000000001
+FAIL #90 no follow-up: runs from a completed exchange got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the fifth loss stops the requests - breaks "#90 no response: request 6 goes out | #90 no follow-up: runs from a capable plane | #90 no follow-up: runs from a completed exchange"
+FAIL #91 duplicates are not a storm: requests keep going out got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: same-identity duplicates are a storm - breaks "#91 duplicates are not a storm: requests keep going out"
+FAIL #94 countdown: the first request after the cease follows the last by the countdown and two beats got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the countdown loads one beat less - breaks "#94 countdown: the first request after the cease follows the last by the countdown and two beats"
+FAIL #94 toggle: the cease sends no request got 00000000000000d2 exp 00000000000000d1
+FAIL #94 countdown: the first request after the cease follows the last by the countdown and two beats got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the cease entry ends the cease at once - breaks "#94 toggle: the cease sends no request | #94 countdown: the first request after the cease follows the last by the countdown and two beats"
+FAIL #107 a grandmaster +100 ppm: the trim settles within 0.2 ppm of it got 0000000000000000 exp 0000000000000001
+FAIL #107 a grandmaster +100 ppm: its offset stays within 1 us got 0000000000000000 exp 0000000000000001
+FAIL #107 a grandmaster -100 ppm: the trim settles within 0.2 ppm of it got 0000000000000000 exp 0000000000000001
+FAIL #107 a grandmaster -100 ppm: its offset stays within 1 us got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: the trim stops short of a grandmaster 100 ppm away - breaks "#107 a grandmaster +100 ppm: the trim settles within 0.2 ppm of it | #107 a grandmaster +100 ppm: its offset stays within 1 us | #107 a grandmaster -100 ppm: the trim settles within 0.2 ppm of it | #107 a grandmaster -100 ppm: its offset stays within 1 us"
+FAIL #84 every handover to a peer grandmaster clears sync-ok got 0000000000000050 exp 0000000000000000
+FAIL p1 255 #84 every handover to a peer grandmaster clears sync-ok got 0000000000000004 exp 0000000000000000
+[PASS] mutant caught: a handover to a peer keeps sync-ok - breaks "#84 every handover to a peer grandmaster clears sync-ok | p1 255 #84 every handover to a peer grandmaster clears sync-ok"
+FAIL slew: first in-band pair cannot clear got 0000000000000000 exp 0000000000000001
+[PASS] mutant caught: slew clears at the first in-band pair - breaks "slew: first in-band pair cannot clear"
+
+22 checks: 22 PASS, 0 FAIL

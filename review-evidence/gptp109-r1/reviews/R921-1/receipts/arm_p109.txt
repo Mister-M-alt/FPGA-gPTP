@@ -1,0 +1,46 @@
+INFO full arm entries: 175; #109 entries: 8
+INFO running 8 entries
+INFO entry: a delay below -80 ns is a bad exchange
+INFO entry: the Sync path uses a negative delay as 0
+INFO entry: a negative delay is floored at 0
+INFO entry: a negative delay has no floor
+INFO entry: the floor is -799 ns
+INFO entry: the engine publishes the unfloored delay
+INFO entry: 801 ns is a good exchange
+INFO entry: 800 ns is a bad exchange
+[PASS] the unmutated engine still passes the harness
+FAIL #109 D -81: asCapable kept   got 0000000000000000 exp 0000000000000004
+FAIL #109 D -263: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 latency constants over-stated by 400 ns: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 D -800: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -801: asCapable kept  got 0000000000000000 exp 0000000000000004
+FAIL #109 D -5000000: asCapable kept got 0000000000000000 exp 0000000000000004
+FAIL #109 the most negative delay of the wire: asCapable kept got 0000000000000000 exp 0000000000000004
+[PASS] mutant caught: a delay below -80 ns is a bad exchange - breaks "#109 D -81: asCapable kept | #109 D -263: asCapable kept | #109 latency constants over-stated by 400 ns: asCapable kept | #109 D -800: asCapable kept | #109 D -801: asCapable kept | #109 D -5000000: asCapable kept | #109 the most negative delay of the wire: asCapable kept"
+FAIL #109 D -3: its offset uses the delay exactly got 00000000fffffffd exp 0000000000000000
+FAIL #109 D -81: its offset uses the delay exactly got 00000000ffffffaf exp 0000000000000000
+FAIL #109 D -263: its offset uses the delay exactly got 00000000fffffef9 exp 0000000000000000
+FAIL #109 latency constants over-stated by 400 ns: its offset uses the delay exactly got 00000000fffffed4 exp 0000000000000000
+[PASS] mutant caught: the Sync path uses a negative delay as 0 - breaks "#109 D -3: its offset uses the delay exactly | #109 D -81: its offset uses the delay exactly | #109 D -263: its offset uses the delay exactly | #109 latency constants over-stated by 400 ns: its offset uses the delay exactly"
+FAIL #109 D -263: the engine publishes the used delay got 0000000000000000 exp 00000000fffffef9
+FAIL #109 D -263: its offset uses the delay exactly got 00000000fffffef9 exp 0000000000000000
+FAIL #109 latency constants over-stated by 400 ns: its offset uses the delay exactly got 00000000fffffed4 exp 0000000000000000
+[PASS] mutant caught: a negative delay is floored at 0 - breaks "#109 D -263: the engine publishes the used delay | #109 D -263: its offset uses the delay exactly | #109 latency constants over-stated by 400 ns: its offset uses the delay exactly"
+FAIL #109 D -801: its offset uses the delay exactly got 0000000000000001 exp 0000000000000000
+FAIL #109 D -5000000: no PHC step got 0000000000000001 exp 0000000000000000
+FAIL #109 the most negative delay of the wire: no PHC step got 0000000000000001 exp 0000000000000000
+FAIL #109 the most negative delay of the wire: the engine publishes the used delay got 000000009dcd2145 exp 00000000fffffce0
+[PASS] mutant caught: a negative delay has no floor - breaks "#109 D -801: its offset uses the delay exactly | #109 D -5000000: no PHC step | #109 the most negative delay of the wire: no PHC step | #109 the most negative delay of the wire: the engine publishes the used delay"
+FAIL #109 D -800: its offset uses the delay exactly got 00000000ffffffff exp 0000000000000000
+FAIL #109 D -800: the engine publishes the used delay got 00000000fffffce1 exp 00000000fffffce0
+[PASS] mutant caught: the floor is -799 ns - breaks "#109 D -800: its offset uses the delay exactly | #109 D -800: the engine publishes the used delay"
+FAIL #109 D -5000000: the engine publishes the used delay got 00000000ffb3b4c0 exp 00000000fffffce0
+FAIL #109 the most negative delay of the wire: the engine publishes the used delay got 000000009dcd1f9b exp 00000000fffffce0
+[PASS] mutant caught: the engine publishes the unfloored delay - breaks "#109 D -5000000: the engine publishes the used delay | #109 the most negative delay of the wire: the engine publishes the used delay"
+FAIL #109 D 801: asCapable falls  got 0000000000000004 exp 0000000000000000
+FAIL #109 D 801: the next Follow_Up is not used got 0000000000000001 exp 0000000000000000
+[PASS] mutant caught: 801 ns is a good exchange - breaks "#109 D 801: asCapable falls | #109 D 801: the next Follow_Up is not used"
+FAIL #109 D 800: asCapable kept   got 0000000000000000 exp 0000000000000004
+[PASS] mutant caught: 800 ns is a bad exchange - breaks "#109 D 800: asCapable kept"
+
+9 checks: 9 PASS, 0 FAIL

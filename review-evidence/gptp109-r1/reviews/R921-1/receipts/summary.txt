@@ -1,0 +1,52 @@
+# Reviewer summary receipts, R921-1, exact head 8e4889bba462d14d4e5a34068769872510d4775d
+## Verilator
+Verilator 5.050 2026-07-01 rev v5.050
+## rc files
+head_suite.rc=0
+repro_suite.rc=2
+arm_p109.rc=0
+arm_probes.rc=1
+arm_related.rc=0
+docs_rc=0
+contract_rc=0
+lint_rc=0
+## tallies
+head_suite: 2296 checks: 2296 PASS, 0 FAIL
+head_suite: 2296 checks: 2296 PASS, 0 FAIL
+head_suite: 2296 checks: 2296 PASS, 0 FAIL
+head_suite: 61 checks: 61 PASS, 0 FAIL
+repro_suite(base ROM, head harness, shipping pass): 2296 checks: 2265 PASS, 31 FAIL
+repro FAIL lines: 31 (all #109: 31); of them 'its offset uses the delay exactly': 7
+## tracked ROM images at head vs regenerated from the head generator
+d89ed02e7eb4eacfe309c57ed54982ea0bedc80a1b949e3f17350f485da5591b  tb/verilator/engine/gptp_ucode.hex
+52293128994c886d91a4390b73b4cc1fa3c6a330ffae12aac985df750be9be61  tb/verilator/ucpu/gptp_ucode.hex
+52293128994c886d91a4390b73b4cc1fa3c6a330ffae12aac985df750be9be61  syn/ooc/work/gptp_ucode.hex
+3e5dffa26eef54e5f1b2b5726f566d2211aad8946ea85d848b82c728bddfcca6  tb/tsngen/gptp_ucode.hex
+d89ed02e7eb4eacfe309c57ed54982ea0bedc80a1b949e3f17350f485da5591b  engine.hex
+52293128994c886d91a4390b73b4cc1fa3c6a330ffae12aac985df750be9be61  default.hex
+3e5dffa26eef54e5f1b2b5726f566d2211aad8946ea85d848b82c728bddfcca6  tsngen.hex
+## ROM budget
+<PACKET>/scratch/regen/engine.hex: 1024 words, 1013 real (98.9%), mac 02A1B2C3D4E5
+<PACKET>/scratch/regen/default.hex: 1024 words, 1013 real (98.9%), mac 02A1B2C3D4E5
+seeded (--seq-seed 0x200000): 1024 words, 1014 real (99.0%)
+base 1213ac5b generator: 1013 real (shipping); leg map identical to the head (LEGMAP_SAME)
+## arm structure
+entries 175; duplicate names 0; pattern mismatches 0
+base arm entries: 167; removed 0; changed 0; added the 8 #109 controls
+## gitlinks in the head tree
+0 (mode 160000 entries in `git ls-tree -r HEAD`; the repository has no .gitmodules)
+## hosted checks at the head (GitHub API)
+check-runs: 0; combined status: pending with 0 contexts; no .github workflows in the tree
+arm_sync.rc=0
+## arm subsets run at the head (indices are 0-based positions in mutants.MUTATIONS)
+p109 (143-150): 8 of 8 caught, every named check failed; control PASS
+related idx 5,12,13,14,16,27,29,49,50,51,52,53,81,84,85,86,87,90,91,94,95,108,127,128,129,130,131: 27 of 27 caught; control PASS
+sync idx 15,17,21,22,23,24,25,26,28,30,31,65,73,79,82,83,92,93,142,153,1: 21 of 21 caught; control PASS
+total of the published arm run by the reviewer: 56 of 175, all caught
+reviewer probes R1-R4 caught with every named check; R5 (verdict reads bit 31) SURVIVED
+## clone integrity after all probes
+HEAD 8e4889bba462d14d4e5a34068769872510d4775d tree bcd69a8e01ba7856d093579faf0dfbf256e772e4
+porcelain(incl. ignored) lines: 0
+index vs HEAD diff lines: 0
+worktree vs index diff lines: 0
+ls-files -s digest ba94410295ed2415a8c9d6aba0f6b60fb93b1cb08bdf4e4cb35e77a420c75d56; ls-tree digest ba94410295ed2415a8c9d6aba0f6b60fb93b1cb08bdf4e4cb35e77a420c75d56; equal=yes
