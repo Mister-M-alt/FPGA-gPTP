@@ -1,0 +1,9 @@
+From the author's receipts/gptp/summary.txt (wall s, CPU s, instructions T). Ratios within each concurrent pair:
+  c-head-j4    vs c-base-j4 : wall 2.05x faster, CPU +30.3 %, instructions +0.29 %
+  r-head-j4    vs r-base-j4 : wall 2.95x faster, CPU -16.5 %, instructions +0.29 %
+  r-head-j4-b  vs r-base-j4 : wall 3.60x faster, CPU -24.2 %, instructions +0.29 %
+  c-head-j1    vs c-base-j1 : wall 0.97x faster, CPU +3.6 %, instructions +0.04 %
+Cross-pair (head of pair 2 against the base of pair 1, which the PR's own method says not to compare):
+  r-head-j4    vs c-base-j4 : CPU +20.2 %
+  r-head-j4-b  vs c-base-j4 : CPU +9.2 %
+Same base, same work, two pairs: c-base-j4 CPU 451.63 s vs r-base-j4 CPU 650.6 s (+44.1 %): CPU seconds on this host track its load.

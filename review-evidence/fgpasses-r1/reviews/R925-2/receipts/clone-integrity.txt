@@ -1,0 +1,8 @@
+HEAD 661e4c3a45904d2d8f3e061c67103a945651d9ff
+tree 97405b32d95b1b4397f77052d0faef868da20c2e
+index tree 97405b32d95b1b4397f77052d0faef868da20c2e
+worktree and index match HEAD (blob bytes and modes)
+status --ignored (empty = nothing untracked or ignored):
+gitlinks (mode 160000): 0
+.gitmodules present: no
+note: a __pycache__/ written by the reviewer's extra_plans.py import was removed before this check

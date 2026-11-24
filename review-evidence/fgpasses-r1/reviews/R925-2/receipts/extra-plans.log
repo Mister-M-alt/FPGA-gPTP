@@ -1,0 +1,156 @@
+[DIFF] top image (rule-1 prerequisite) refused, make -j4: rc 2 vs serial 2
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,2 +1,2 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: *** [Makefile:98: gptp_ucode.hex] Error 1
+    +make: *** [Makefile:127: gptp_ucode.hex] Error 1
+[DIFF] top image (rule-1 prerequisite) refused, make -j2: rc 2 vs serial 2
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,2 +1,2 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: *** [Makefile:98: gptp_ucode.hex] Error 1
+    +make: *** [Makefile:127: gptp_ucode.hex] Error 1
+[DIFF] top image (rule-1 prerequisite) refused, make -j3: rc 2 vs serial 2
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,2 +1,2 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: *** [Makefile:98: gptp_ucode.hex] Error 1
+    +make: *** [Makefile:127: gptp_ucode.hex] Error 1
+[DIFF] top image (rule-1 prerequisite) refused, make -j4 -k -s: rc 2 vs serial 2
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,3 +1,3 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: *** [Makefile:98: gptp_ucode.hex] Error 1
+    +make: *** [Makefile:127: gptp_ucode.hex] Error 1
+     make: Target 'run' not remade because of errors.
+[DIFF] top image (rule-1 prerequisite) refused, make -j4 -i -k: rc 0 vs serial 0
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,3 +1,3 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: [Makefile:98: gptp_ucode.hex] Error 1 (ignored)
+    +make: [Makefile:127: gptp_ucode.hex] Error 1 (ignored)
+     pass 0: a note on standard error
+[PASS] top image (rule-1 prerequisite) refused, make -j4 -i -s: rc 0 vs serial 0
+[DIFF] top image (rule-1 prerequisite) refused, make -j1 -k: rc 2 vs serial 2
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,3 +1,3 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: *** [Makefile:98: gptp_ucode.hex] Error 1
+    +make: *** [Makefile:127: gptp_ucode.hex] Error 1
+     make: Target 'run' not remade because of errors.
+[DIFF] top image (rule-1 prerequisite) refused, make -j1 -i: rc 0 vs serial 0
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,3 +1,3 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: [Makefile:98: gptp_ucode.hex] Error 1 (ignored)
+    +make: [Makefile:127: gptp_ucode.hex] Error 1 (ignored)
+     pass 0: a note on standard error
+[DIFF] top image (rule-1 prerequisite) refused, make -j4 --no-print-directory: rc 2 vs serial 2
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,2 +1,2 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: *** [Makefile:98: gptp_ucode.hex] Error 1
+    +make: *** [Makefile:127: gptp_ucode.hex] Error 1
+[DIFF] top image (rule-1 prerequisite) refused, make -j4 -w: rc 2 vs serial 2
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,2 +1,2 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: *** [Makefile:98: gptp_ucode.hex] Error 1
+    +make: *** [Makefile:127: gptp_ucode.hex] Error 1
+[DIFF] top image (rule-1 prerequisite) refused, make -j4 -Otarget: rc 2 vs serial 2
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,2 +1,2 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: *** [Makefile:98: gptp_ucode.hex] Error 1
+    +make: *** [Makefile:127: gptp_ucode.hex] Error 1
+[DIFF] top image (rule-1 prerequisite) refused, make -j4 -Oline: rc 2 vs serial 2
+    --- serial stderr
+    +++ scheduled stderr
+    @@ -1,2 +1,2 @@
+     gen_gptp_ucode: a planted refusal for gptp_ucode.hex
+    -make: *** [Makefile:98: gptp_ucode.hex] Error 1
+    +make: *** [Makefile:127: gptp_ucode.hex] Error 1
+[PASS] pass 0 SIGSEGV, make -j4: rc 2 vs serial 2
+[PASS] pass 0 SIGSEGV, make -j2: rc 2 vs serial 2
+[PASS] pass 0 SIGSEGV, make -j3: rc 2 vs serial 2
+[PASS] pass 0 SIGSEGV, make -j4 -k -s: rc 2 vs serial 2
+[PASS] pass 0 SIGSEGV, make -j4 -i -k: rc 0 vs serial 0
+[PASS] pass 0 SIGSEGV, make -j4 -i -s: rc 0 vs serial 0
+[PASS] pass 0 SIGSEGV, make -j1 -k: rc 2 vs serial 2
+[PASS] pass 0 SIGSEGV, make -j1 -i: rc 0 vs serial 0
+[PASS] pass 0 SIGSEGV, make -j4 --no-print-directory: rc 2 vs serial 2
+[PASS] pass 0 SIGSEGV, make -j4 -w: rc 2 vs serial 2
+[PASS] pass 0 SIGSEGV, make -j4 -Otarget: rc 2 vs serial 2
+[PASS] pass 0 SIGSEGV, make -j4 -Oline: rc 2 vs serial 2
+[PASS] pass 0 SIGABRT, make -j4: rc 2 vs serial 2
+[PASS] pass 0 SIGABRT, make -j2: rc 2 vs serial 2
+[PASS] pass 0 SIGABRT, make -j3: rc 2 vs serial 2
+[PASS] pass 0 SIGABRT, make -j4 -k -s: rc 2 vs serial 2
+[PASS] pass 0 SIGABRT, make -j4 -i -k: rc 0 vs serial 0
+[PASS] pass 0 SIGABRT, make -j4 -i -s: rc 0 vs serial 0
+[PASS] pass 0 SIGABRT, make -j1 -k: rc 2 vs serial 2
+[PASS] pass 0 SIGABRT, make -j1 -i: rc 0 vs serial 0
+[PASS] pass 0 SIGABRT, make -j4 --no-print-directory: rc 2 vs serial 2
+[PASS] pass 0 SIGABRT, make -j4 -w: rc 2 vs serial 2
+[PASS] pass 0 SIGABRT, make -j4 -Otarget: rc 2 vs serial 2
+[PASS] pass 0 SIGABRT, make -j4 -Oline: rc 2 vs serial 2
+[PASS] pass 3 image refused, make -j4: rc 2 vs serial 2
+[PASS] pass 3 image refused, make -j2: rc 2 vs serial 2
+[PASS] pass 3 image refused, make -j3: rc 2 vs serial 2
+[PASS] pass 3 image refused, make -j4 -k -s: rc 2 vs serial 2
+[PASS] pass 3 image refused, make -j4 -i -k: rc 0 vs serial 0
+[PASS] pass 3 image refused, make -j4 -i -s: rc 0 vs serial 0
+[PASS] pass 3 image refused, make -j1 -k: rc 2 vs serial 2
+[PASS] pass 3 image refused, make -j1 -i: rc 0 vs serial 0
+[PASS] pass 3 image refused, make -j4 --no-print-directory: rc 2 vs serial 2
+[PASS] pass 3 image refused, make -j4 -w: rc 2 vs serial 2
+[PASS] pass 3 image refused, make -j4 -Otarget: rc 2 vs serial 2
+[PASS] pass 3 image refused, make -j4 -Oline: rc 2 vs serial 2
+[PASS] passes 0 and 3 fail, make -j4: rc 2 vs serial 2
+[PASS] passes 0 and 3 fail, make -j2: rc 2 vs serial 2
+[PASS] passes 0 and 3 fail, make -j3: rc 2 vs serial 2
+[PASS] passes 0 and 3 fail, make -j4 -k -s: rc 2 vs serial 2
+[PASS] passes 0 and 3 fail, make -j4 -i -k: rc 0 vs serial 0
+[PASS] passes 0 and 3 fail, make -j4 -i -s: rc 0 vs serial 0
+[PASS] passes 0 and 3 fail, make -j1 -k: rc 2 vs serial 2
+[PASS] passes 0 and 3 fail, make -j1 -i: rc 0 vs serial 0
+[PASS] passes 0 and 3 fail, make -j4 --no-print-directory: rc 2 vs serial 2
+[PASS] passes 0 and 3 fail, make -j4 -w: rc 2 vs serial 2
+[PASS] passes 0 and 3 fail, make -j4 -Otarget: rc 2 vs serial 2
+[PASS] passes 0 and 3 fail, make -j4 -Oline: rc 2 vs serial 2
+[PASS] pass 2 fails first, pass 1 later, make -j4: rc 2 vs serial 2
+[PASS] pass 2 fails first, pass 1 later, make -j2: rc 2 vs serial 2
+[PASS] pass 2 fails first, pass 1 later, make -j3: rc 2 vs serial 2
+[PASS] pass 2 fails first, pass 1 later, make -j4 -k -s: rc 2 vs serial 2
+[PASS] pass 2 fails first, pass 1 later, make -j4 -i -k: rc 0 vs serial 0
+[PASS] pass 2 fails first, pass 1 later, make -j4 -i -s: rc 0 vs serial 0
+[PASS] pass 2 fails first, pass 1 later, make -j1 -k: rc 2 vs serial 2
+[PASS] pass 2 fails first, pass 1 later, make -j1 -i: rc 0 vs serial 0
+[PASS] pass 2 fails first, pass 1 later, make -j4 --no-print-directory: rc 2 vs serial 2
+[PASS] pass 2 fails first, pass 1 later, make -j4 -w: rc 2 vs serial 2
+[PASS] pass 2 fails first, pass 1 later, make -j4 -Otarget: rc 2 vs serial 2
+[PASS] pass 2 fails first, pass 1 later, make -j4 -Oline: rc 2 vs serial 2
+[PASS] clean, make -j4: rc 0 vs serial 0
+[PASS] clean, make -j2: rc 0 vs serial 0
+[PASS] clean, make -j3: rc 0 vs serial 0
+[PASS] clean, make -j4 -k -s: rc 0 vs serial 0
+[PASS] clean, make -j4 -i -k: rc 0 vs serial 0
+[PASS] clean, make -j4 -i -s: rc 0 vs serial 0
+[PASS] clean, make -j1 -k: rc 0 vs serial 0
+[PASS] clean, make -j1 -i: rc 0 vs serial 0
+[PASS] clean, make -j4 --no-print-directory: rc 0 vs serial 0
+[PASS] clean, make -j4 -w: rc 0 vs serial 0
+[PASS] clean, make -j4 -Otarget: rc 0 vs serial 0
+[PASS] clean, make -j4 -Oline: rc 0 vs serial 0
+extra plans: 11 differing cases
+rc=0

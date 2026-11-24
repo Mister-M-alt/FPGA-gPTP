@@ -1,0 +1,4 @@
+/bin/sh is: bash
+serial-form line under make: make: *** [Makefile:2: all] Error 139
+pass_run.py-form returncode: -11
+replay-gen exit status for that record: 245

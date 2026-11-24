@@ -1,0 +1,10 @@
+Reviewer real-harness arms, run concurrently on CPUs 0-15 of a shared host (load ~40-46 on 32 CPUs), pinned Verilator 5.050, private ccache, MAKEFLAGS empty, make -jN -C tb/verilator/engine run.
+base-j4  1213ac5 wall 821.5 s rc=0; peak simulators in this tree at once: 1
+head-j4  661e4c3 wall 276.3 s rc=0; peak simulators in this tree at once: 4
+head-j2  661e4c3 wall 540.8 s rc=0; peak simulators in this tree at once: 2
+
+base-j4 vs head-j4: IDENTICAL (171 normalised lines, sha256 957c238f75734a525f85643977c87aef8628c6e1342dc0a3548136c60fb94e09)
+base-j4 vs head-j2: IDENTICAL (171 normalised lines, sha256 957c238f75734a525f85643977c87aef8628c6e1342dc0a3548136c60fb94e09)
+
+Author's published logs (receipts/gptp/c-base-j4/log, c-head-j4/log) under the reviewer's own normaliser:
+c-base-j4 vs c-head-j4: IDENTICAL (173 normalised lines, sha256 5f2ef59d1babf08923394ecb707fddb95c7be746dba1d3f62f442d1dfa9badac)

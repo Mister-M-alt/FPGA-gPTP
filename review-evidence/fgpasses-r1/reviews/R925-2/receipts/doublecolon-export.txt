@@ -1,0 +1,4 @@
+first CCACHE_BASEDIR=[/some/where]
+rule1 CCACHE_BASEDIR=[/some/where]
+second CCACHE_BASEDIR=[/some/where]
+rule2 CCACHE_BASEDIR=[/some/where]

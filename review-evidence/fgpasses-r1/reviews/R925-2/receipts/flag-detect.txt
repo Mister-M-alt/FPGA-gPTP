@@ -1,0 +1,25 @@
+make :
+MAKEFLAGS=[] first=[-] i=[] s=[]
+make -j4:
+MAKEFLAGS=[ -j4 --jobserver-auth=fifo:<fifo>] first=[-] i=[] s=[]
+make --no-print-directory -j4:
+MAKEFLAGS=[ -j4 --jobserver-auth=fifo:<fifo> --no-print-directory] first=[-] i=[] s=[]
+make -k -j4:
+MAKEFLAGS=[k -j4 --jobserver-auth=fifo:<fifo>] first=[-k] i=[] s=[]
+make -is:
+MAKEFLAGS=[is] first=[-is] i=[i] s=[s]
+make -j4 --output-sync=target:
+MAKEFLAGS=[ -j4 -Otarget --jobserver-auth=fifo:<fifo> --sync-mutex=fnm:<mutex>] first=[-] i=[] s=[]
+make -j4 --warn-undefined-variables:
+MAKEFLAGS=[ -j4 --jobserver-auth=fifo:<fifo> --warn-undefined-variables] first=[-] i=[] s=[]
+make -j4 --trace:
+echo "MAKEFLAGS=[ -j4 --jobserver-auth=fifo:<fifo> --trace] first=[-] i=[] s=[]"
+MAKEFLAGS=[ -j4 --jobserver-auth=fifo:<fifo> --trace] first=[-] i=[] s=[]
+make -j4 -l8:
+MAKEFLAGS=[ -j4 -l8 --jobserver-auth=fifo:<fifo>] first=[-] i=[] s=[]
+make -j4 -I /tmp:
+MAKEFLAGS=[ -I/tmp -j4 --jobserver-auth=fifo:<fifo>] first=[-] i=[] s=[]
+make -j4 --debug=b:
+MAKEFLAGS=[ -j4 --debug=b --jobserver-auth=fifo:<fifo>] first=[-] i=[] s=[]
+MAKEFLAGS='-j4 --no-print-directory' make:
+MAKEFLAGS=[ -j4 --jobserver-auth=fifo:<fifo> --no-print-directory] first=[-] i=[] s=[]

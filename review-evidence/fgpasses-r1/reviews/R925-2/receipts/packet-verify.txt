@@ -1,0 +1,2 @@
+fetched files verified: ok 53 bad 0 missing 0 redacted/rewritten 4
+author-r2 entries in manifest: 124
