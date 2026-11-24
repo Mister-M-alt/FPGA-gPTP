@@ -1,0 +1,12 @@
+{
+  "head": "f1b566a881573611637e7bd6ecd257799b8c991c",
+  "tree": "c4cd0d38763e6d99ad35d8b6dc7e30db6fa38924",
+  "detached": true,
+  "tracked_entries": 122,
+  "blob_bytes_and_modes": "PASS",
+  "index_matches_head_and_initial": "PASS",
+  "clean_status": true,
+  "required_gitlinks": [],
+  "compiler_identity": "Verilator 5.050 2026-07-01 rev v5.050",
+  "compiler_launcher_sha256": "905795b99e0a8803383b198b118bafcbd87d20b877e3f09c39c31ea81979e92f"
+}

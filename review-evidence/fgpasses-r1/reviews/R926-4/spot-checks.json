@@ -1,0 +1,10 @@
+{
+  "serial_recipe_exact_base_match": true,
+  "CPU_percent_from_published_summary": {
+    "first-j4": 30.27921085844607,
+    "second-j4": -16.5493390716262,
+    "alternate-j4": -24.205348908699666,
+    "j1": 3.5529786167360466
+  },
+  "published_delta_matches_local": true
+}

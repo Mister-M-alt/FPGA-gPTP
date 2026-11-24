@@ -1,0 +1,13 @@
+PASS author-r4/REVIEW-READY.md ddc400c64ae9a8d174e453b8b20c6ad041acc74006f7191ab0fb6a05662d67af
+PASS author-r4/receipts/diff.txt c42bf8a513bac75ee945c0e8b757e2153da163f2318aa53452027a124ade9684
+PASS author-r4/receipts/passes-test-plant-cwd.log c8a047e41e9ad94a496d1be2807f5bec4a277d01615d55c8d16ab69aafc06b8c
+PASS author-r4/receipts/passes-test-plant-gen.log 7bd8d1e080704223996631381ff2ba0c26c24e82a58740015400acd9458371ee
+PASS author-r4/receipts/passes-test-pt-r4.log f55e5c8f664599dfdc968aaa5fbd4d5f560cede491f079dd11b89adcc8d68c97
+PASS author-r4/receipts/passes-test-pt-s1.log 1263930dc4e71d90ffb8467f900bf6cddf236c0fc0e0640f3ecf229509c9722f
+PASS author-r4/receipts/passes-test-pt-s2.log c43231e96398c322226773ada612427021f7d8bc8655d290429eb879cb80798a
+PASS author-r4/receipts/passes-test-pt-s3.log 56419c3b2206f92886cd68ddbdbb46448aef4157709d3386e516928c761e9c82
+PASS author-r4/receipts/passes-test-pt-s4.log 860da79f1788296abb4c97caa5510cd5da298780ca7c5f588f7232683aca94a6
+PASS author-r4/receipts/passes-test-pt-s5.log a752549436a417dc7a589381d68815a95f683b496ff25dfd9033909f35f882ee
+PASS author-r4/receipts/passes-test-pt-s6.log 8c55e74d7a7aafaed685a3340184078e108dffcfe984aed6eca1f49757746b57
+PASS author-r4/receipts/passes-test-pt1.log f73cfc417387c09d9c5cb26e95fa1db4cabccec8cf419494e9e31f9f93f749ac
+PASS author-r2/receipts/gptp/summary.txt df26eb80c820c245e03603763054366c731723c3cc5779ba654ab557264b1655
