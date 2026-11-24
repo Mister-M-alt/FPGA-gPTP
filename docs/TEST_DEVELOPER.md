@@ -72,9 +72,11 @@ Outputs print afterwards, in the serial order.
 
 That holds under `-s`, `-i` and `-k` too.
 
-The first failing pass in order sets the status.
+Without `-i`, the first failing pass sets the status.
 
 It also stops the later passes.
+
+With `-i`, failures are ignored and later passes continue.
 
 Four free job slots take about its longest pass.
 
