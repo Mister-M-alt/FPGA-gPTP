@@ -1,0 +1,11 @@
+== no-chdir rc=1 engine passes test: 1 FAIL
+[FAIL] a replayed signal death is re-raised from /tmp/engine-passes-test-crkfiq28/cwd
+== no-gen-reraise rc=1 engine passes test: 2 FAIL
+[FAIL] an image generator killed by SIGSEGV replays as the serial line ended: '' vs 'make: *** [Makefile:2: all] Segmentation fault (core dumped)'
+[FAIL] an image generator killed by SIGKILL replays as the serial line ended: '' vs 'make: *** [Makefile:2: all] Killed'
+== gen-no-redirect rc=1 engine passes test: 5 FAIL
+[FAIL] pass 1 image generator SIGSEGV, make -j4: rc 2 vs serial 2
+[FAIL] pass 1 image generator SIGSEGV, make -j1: rc 2 vs serial 2
+[FAIL] pass 1 image generator SIGSEGV, make -j4 -s: rc 2 vs serial 2
+[FAIL] pass 1 image generator SIGSEGV, make -j4 -i: rc 0 vs serial 0
+[FAIL] pass 1 image generator SIGSEGV, make -j4 -k: rc 2 vs serial 2

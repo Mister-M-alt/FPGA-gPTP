@@ -1,0 +1,3 @@
+$REVIEWS/fgpasses-r925-4-packet/scratch/race/pass_run-no-ign.py: late-stop {'exit0+record': 0, 'other': [(-10, ...)x, -10]}; early-signal {'died TERM <10s': 15, 'other': [], 'max_s': 0.17}
+$REVIEWS/r925-4-fgpasses/tb/verilator/engine/pass_run.py: late-stop {'exit0+record': 150, 'other': []}; early-signal {'died TERM <10s': 15, 'other': [], 'max_s': 0.17}
+$REVIEWS/fgpasses-r925-4-packet/scratch/race/pass_run-no-forward.py: late-stop {'exit0+record': 150, 'other': []}; early-signal {'died TERM <10s': 0, 'other': ['hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s', 'hung >10s'], 'max_s': 10.07}

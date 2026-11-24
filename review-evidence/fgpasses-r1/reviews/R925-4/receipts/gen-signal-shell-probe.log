@@ -1,0 +1,16 @@
+== shell=host
+record: {"gen_stderr": "gen: about to die\n", "gen": 139, "stopped": true}
+serial rc=2 stderr=gen: about to die|make: *** [Makefile.serial:3: serial] Error 139|
+product rc=2 stderr=gen: about to die|make: *** [Makefile.product:4: product] Error 139|
+check7 rc=2 stderr=make: *** [Makefile.check7:3: check7] Segmentation fault (core dumped)|
+crafted rc=2 stderr=make: *** [Makefile.crafted:2: crafted] Segmentation fault (core dumped)|
+product == serial: YES
+check-7 shape passes: YES
+== shell=fork
+record: {"gen_stderr": "gen: about to die\n/usr/bin/bash: line 1: 2225483 Segmentation fault         (core dumped) python3 $REVIEWS/fgpasses-r925-4-packet/scratch/gensig-probe/segv.py -o seedrun/x > /dev/null\n", "gen": 139, "stopped": true}
+serial rc=2 stderr=gen: about to die|/usr/bin/bash: line 1: 2225451 Segmentation fault         (core dumped) python3 $REVIEWS/fgpasses-r925-4-packet/scratch/gensig-probe/segv.py -o seedrun/x > /dev/null|make: *** [Makefile.serial:3: serial] Error 139|
+product rc=2 stderr=gen: about to die|/usr/bin/bash: line 1: 2225483 Segmentation fault         (core dumped) python3 $REVIEWS/fgpasses-r925-4-packet/scratch/gensig-probe/segv.py -o seedrun/x > /dev/null|make: *** [Makefile.product:4: product] Error 139|
+check7 rc=2 stderr=$REVIEWS/fgpasses-r925-4-packet/scratch/gensig-probe/forksh: line 4: 2225515 Segmentation fault         (core dumped) /usr/bin/bash -c "$1"|make: *** [Makefile.check7:3: check7] Error 139|
+crafted rc=2 stderr=make: *** [Makefile.crafted:2: crafted] Segmentation fault (core dumped)|
+product == serial: NO
+check-7 shape passes: NO

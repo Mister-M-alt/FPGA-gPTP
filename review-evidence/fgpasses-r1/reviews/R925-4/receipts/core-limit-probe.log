@@ -1,0 +1,3 @@
+|/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c %h %d %
+soft RLIMIT_CORE=0: make: *** [Makefile:2: all] Segmentation fault (core dumped) 
+soft RLIMIT_CORE=1: make: *** [Makefile:2: all] Segmentation fault 

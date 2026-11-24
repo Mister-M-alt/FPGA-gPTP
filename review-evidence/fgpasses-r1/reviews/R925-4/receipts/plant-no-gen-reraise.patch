@@ -1,0 +1,11 @@
+--- $REVIEWS/r925-4-fgpasses/tb/verilator/engine/pass_run.py	2026-11-25 00:16:25.970152808 +0100
++++ pass_run.py	2026-11-25 00:41:19.180646027 +0100
+@@ -219,8 +219,6 @@
+         return 1
+     if record.get("gen") or record.get("gen_signal"):
+         (STATE / f"{n}.stop").touch()
+-    if record.get("gen_signal"):
+-        reraise(record["gen_signal"], record.get("gen_core", False))
+     return record.get("gen", 0)
+ 
+ 

@@ -1,0 +1,16 @@
+== as-written, /bin/sh host
+[PASS] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all] Segmentation fault (core dumped)'
+[PASS] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:2: all] Killed' vs 'make: *** [Makefile:2: all] Killed'
+bad = 0
+== as-written, /bin/sh fork
+[FAIL] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:3: all] Segmentation fault (core dumped)' vs '$REVIEWS/fgpasses-r925-4-packet/scratch/check7/forksh: line 4: 2370328 Segmentation fault         (core dumped) /usr/bin/bash -c "$1"\nmake: *** [Makefile:3: all] Error 139'
+[FAIL] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:3: all] Killed' vs '$REVIEWS/fgpasses-r925-4-packet/scratch/check7/forksh: line 4: 2370376 Killed                     /usr/bin/bash -c "$1"\nmake: *** [Makefile:3: all] Error 137'
+bad = 2
+== exec-reference, /bin/sh host
+[PASS] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all] Segmentation fault (core dumped)'
+[PASS] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:2: all] Killed' vs 'make: *** [Makefile:2: all] Killed'
+bad = 0
+== exec-reference, /bin/sh fork
+[PASS] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:3: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:3: all] Segmentation fault (core dumped)'
+[PASS] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:3: all] Killed' vs 'make: *** [Makefile:3: all] Killed'
+bad = 0

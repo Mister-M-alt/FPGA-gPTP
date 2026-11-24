@@ -1,0 +1,11 @@
+--- $REVIEWS/r925-4-fgpasses/tb/verilator/engine/pass_run.py	2026-11-25 00:16:25.970152808 +0100
++++ pass_run.py	2026-11-25 00:41:19.181213159 +0100
+@@ -126,7 +126,7 @@
+         # The serial line itself, its redirection included, through the same shell: a shell that forks reports a
+         # signal death as 128+n, which is kept; a shell that execs dies of the signal itself, which is recorded and
+         # re-raised at replay, as for the simulator.
+-        gen = subprocess.Popen(["/bin/sh", "-c", generate + " >/dev/null"], stdout=subprocess.DEVNULL,
++        gen = subprocess.Popen(["/bin/sh", "-c", generate], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE)
+         err = gen.stderr.read()
+         gen.stderr.close()
