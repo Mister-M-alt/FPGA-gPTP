@@ -104,8 +104,10 @@ os.makedirs("obj_dir", exist_ok=True)
 shutil.copy(os.environ["STUB_SIM"], "obj_dir/Vengine_sim")
 os.chmod("obj_dir/Vengine_sim", 0o755)
 '''
-GEN = r'''import json, os, sys
+GEN = r'''import json, os, signal, sys
 out = sys.argv[sys.argv.index("-o") + 1]
+if json.loads(os.environ["STUB_PLAN"]).get("gensig") == os.path.dirname(out):
+    os.kill(os.getpid(), signal.SIGSEGV)
 if json.loads(os.environ["STUB_PLAN"]).get("gen") == os.path.dirname(out):
     print(f"gen_gptp_ucode: a planted refusal for {out}", file=sys.stderr)
     sys.exit(1)
@@ -136,6 +138,7 @@ PLANS = {
     "pass 1 SIGABRT": {"1": {"signal": signal.SIGABRT}},
     "pass 3 SIGKILL": {"3": {"signal": signal.SIGKILL}},
     "pass 2 image refused": {"gen": "syncseedrun"},
+    "pass 1 image generator SIGSEGV": {"gensig": "seedrun"},
     "build fails": {"build": 1},
 }
 LINE = re.compile(r"(make(?:\[\d+\])?: (?:\*\*\* )?\[)[^\]:]+:\d+: run\]")
@@ -316,11 +319,35 @@ def unprintable(trees: dict[str, Path], scratch: Path) -> int:
     return not ok
 
 
+def replay_cwd(trees: dict[str, Path], scratch: Path) -> int:
+    """Check 6: a replayed signal death is re-raised from obj_dir/, so a file core_pattern keeps the simulator's core."""
+    state = scratch / "cwd" / "obj_dir" / "engine-passes"
+    state.mkdir(parents=True)
+    (state / "0.json").write_text(json.dumps({"signal": int(signal.SIGSEGV), "core": True}))
+    (state / "0.log").write_bytes(b"")
+    (state / "build.ok").touch()
+    seen = scratch / "cwd" / "seen"
+    # pass_run's own replay, with os.kill recording where the death would be re-raised instead of dying there
+    probe = ("import os, runpy, sys\n"
+             "def kill(pid, signum):\n"
+             f"    open({str(seen)!r}, 'w').write(os.getcwd())\n"
+             "    os._exit(0)\n"
+             "os.kill = kill\n"
+             "sys.argv = ['pass_run.py', 'replay', '0']\n"
+             f"runpy.run_path({str(Path(__file__).resolve().parent / 'pass_run.py')!r}, run_name='__main__')\n")
+    subprocess.run([sys.executable, "-c", probe], cwd=state.parent.parent,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+    where = seen.read_text() if seen.exists() else None
+    ok = where == str(state.resolve())
+    print(f"[{'PASS' if ok else 'FAIL'}] a replayed signal death is re-raised from {where}")
+    return not ok
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="engine-passes-test-") as name:
         scratch = Path(name)
         trees = tree(scratch)
-        bad = sum(check(trees, scratch) for check in (transcripts, budget, fail_fast, signals, unprintable))
+        bad = sum(check(trees, scratch) for check in (transcripts, budget, fail_fast, signals, unprintable, replay_cwd))
     print(f"engine passes test: {'PASS' if not bad else f'{bad} FAIL'}")
     return 1 if bad else 0
 

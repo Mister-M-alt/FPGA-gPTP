@@ -123,10 +123,12 @@ def run(n: int, directory: str | None, generate: str | None, argv: list[str], ig
     if directory is not None:
         Path(directory).mkdir(parents=True, exist_ok=True)
     if generate is not None and "stopped" not in record:
-        done = subprocess.run(["/bin/sh", "-c", generate], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # The serial line itself, its redirection included, so a signal death ends as the shell reported it there.
+        done = subprocess.run(["/bin/sh", "-c", generate + " >/dev/null"], stdout=subprocess.DEVNULL,
+                              stderr=subprocess.PIPE)
         if done.stderr:
             record["gen_stderr"] = done.stderr.decode(errors="surrogateescape")
-        record["gen"] = done.returncode
+        record["gen"] = done.returncode if done.returncode >= 0 else 128 - done.returncode
         if done.returncode and not ignoring:
             stop_later(n)
             record["stopped"] = True
@@ -135,6 +137,8 @@ def run(n: int, directory: str | None, generate: str | None, argv: list[str], ig
             child.append(subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
             if record.get("stopped"):
                 signal_all(child[0].pid, signal.SIGTERM)  # an earlier pass failed as this one started
+            if received:
+                signal_all(child[0].pid, received[0])  # a signal that came before the child was known
         except OSError as exc:
             chunk(2, f"make: {argv[0]}: {exc.strerror}\n".encode())
             record["exit"] = 127
@@ -158,6 +162,8 @@ def run(n: int, directory: str | None, generate: str | None, argv: list[str], ig
                 record["exit"] = os.WEXITSTATUS(status)
             if not record.get("stopped") and (record.get("signal") or record.get("exit")) and not ignoring:
                 stop_later(n)
+    # This pass is over: a later stop must not find it exiting, when Python's shutdown restores the default action.
+    signal.signal(signal.SIGUSR1, signal.SIG_IGN)
     log.close()
     if received:
         (STATE / f"{n}.json").unlink(missing_ok=True)
@@ -230,6 +236,7 @@ def replay(n: int, banner: str | None, ignoring: bool) -> int:
             resource.setrlimit(resource.RLIMIT_CORE, (0, resource.getrlimit(resource.RLIMIT_CORE)[1]))
         if record["signal"] != signal.SIGKILL:
             signal.signal(record["signal"], signal.SIG_DFL)
+        os.chdir(STATE)  # a file core_pattern writes this process's core here, never over the simulator's
         os.kill(os.getpid(), record["signal"])
     return record.get("exit", 0)
 
