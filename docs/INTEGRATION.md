@@ -975,7 +975,7 @@ The engine floors D at minus [`NPD_HI_C`](#protocol-constants).
 
 The Sync path subtracts the floored D, signed.
 
-That follows 11.2.13.2.1 f).
+That follows 802.1AS-2011 11.2.13.2.1 f).
 
 Equally over-stated latency constants then cancel in the offset.
 
