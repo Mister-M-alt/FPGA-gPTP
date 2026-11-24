@@ -1,0 +1,57 @@
+[PASS] make -j1 run: at most 1 passes at once (budget 1)
+[PASS] make -j2 run: at most 2 passes at once (budget 2)
+[PASS] make -j4 run: at most 4 passes at once (budget 4)
+[PASS] a parent make -j3 with two other jobs: 4 passes ran, at most 3 jobs at once in all (budget 3, reached)
+[PASS] clean, make -j4: the serial transcript and status (rc 0)
+[PASS] the clean -j4 passes finished out of order: ['pass3', 'pass2', 'pass1', 'pass0']
+[PASS] clean, make -j1: the serial transcript and status (rc 0)
+[FAIL] clean, make -j4 -s: rc 0 vs serial 0
+--- serial stdout
+image written gptp_ucode.hex
+stub verilator: Vengine_sim from 27 arguments
+pass 0: first line
+pass 0: 12 checks: 12 PASS, 0 FAIL
+-- again, with the request counter seeded above 16 bits --
+pass 1: first line
+pass 1: 12 checks: 12 PASS, 0 FAIL
+-- again, with the Sync counter seeded above 16 bits --
+pass 2: first line
+pass 2: 12 checks: 12 PASS, 0 FAIL
+-- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+pass 3: first line
+pass 3: 12 checks: 12 PASS, 0 FAIL
+--- stdout
+image written gptp_ucode.hex
+stub verilator: Vengine_sim from 27 arguments
+./obj_dir/Vengine_sim
+pass 0: first line
+pass 0: 12 checks: 12 PASS, 0 FAIL
+-- again, with the request counter seeded above 16 bits --
+pass 1: first line
+pass 1: 12 checks: 12 PASS, 0 FAIL
+-- again, with the Sync counter seeded above 16 bits --
+pass 2: first line
+pass 2: 12 checks: 12 PASS, 0 FAIL
+-- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+pass 3: first line
+pass 3: 12 checks: 12 PASS, 0 FAIL
+--- serial stderr
+pass 0: a note on standard error
+pass 1: a note on standard error
+pass 2: a note on standard error
+pass 3: a note on standard error
+--- stderr
+pass 0: a note on standard error
+pass 1: a note on standard error
+pass 2: a note on standard error
+pass 3: a note on standard error
+
+[PASS] clean, make -j4 -i: the serial transcript and status (rc 0)
+[PASS] clean, make -j4 -k: the serial transcript and status (rc 0)
+PLANTED ECHO DEFECT: 1 failing comparisons; expected 1
+Unreadable transcript 0: status 2, diagnostic present, later output suppressed
+Unreadable transcript 1: status 2, diagnostic present, later output suppressed
+Unreadable transcript 2: status 2, diagnostic present, later output suppressed
+Unreadable transcript 3: status 2, diagnostic present, later output suppressed
+With -i, pass 1 failure is ignored; passes 2 and 3 print and make returns 0
+Independent budget and mutation probes: PASS

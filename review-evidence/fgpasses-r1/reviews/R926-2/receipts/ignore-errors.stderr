@@ -1,0 +1,5 @@
+pass 0: a note on standard error
+pass 1: a note on standard error
+make: [Makefile:74: run] Error 1 (ignored)
+pass 2: a note on standard error
+pass 3: a note on standard error

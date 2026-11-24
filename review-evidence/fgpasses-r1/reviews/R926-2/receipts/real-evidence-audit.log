@@ -1,0 +1,18 @@
+c-base-j4 vs c-head-j4: STRICT ORDER IDENTICAL, 181 lines (log)
+r-base-j4 vs r-head-j4: STRICT ORDER IDENTICAL, 40 lines (log.tail)
+r-base-j4 vs r-head-j4-b: STRICT ORDER IDENTICAL, 40 lines (log.tail)
+c-base-j1 vs c-head-j1: STRICT ORDER IDENTICAL, 40 lines (log.tail)
+c-base-abort-j4 vs c-head-abort-j4: STRICT ORDER IDENTICAL, 40 lines (log.tail)
+c-base-abort-j4 {"cpu": 227.42, "rc": 2, "wall": 228.39}
+c-base-j1 {"cpu": 458.77000000000004, "rc": 0, "wall": 460.64}
+c-base-j4 {"cpu": 451.63000000000005, "rc": 0, "wall": 453.32}
+c-head-abort-j4 {"cpu": 155.32000000000002, "rc": 2, "wall": 154.85}
+c-head-j1 {"cpu": 475.07, "rc": 0, "wall": 476.95}
+c-head-j4 {"cpu": 588.38, "rc": 0, "wall": 221.25}
+r-base-j4 {"cpu": 650.6, "rc": 0, "wall": 653.04}
+r-head-j4 {"cpu": 542.93, "rc": 0, "wall": 221.42}
+r-head-j4-b {"cpu": 493.12, "rc": 0, "wall": 181.36}
+c-base-j4 -> c-head-j4: wall speedup 2.0489x, CPU change +30.2792%
+r-base-j4 -> r-head-j4: wall speedup 2.9493x, CPU change -16.5493%
+r-base-j4 -> r-head-j4-b: wall speedup 3.6008x, CPU change -24.2053%
+c-base-j1 -> c-head-j1: wall speedup 0.9658x, CPU change +3.5530%

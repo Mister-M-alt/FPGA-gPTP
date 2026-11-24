@@ -1,0 +1,14 @@
+{
+  "issue_url": "https://github.com/Mister-M-alt/FPGA-gPTP/issues/111",
+  "issue_body": "## Objective and observed evidence\n\nThe engine suite (`make -C gptp-processor all`, its `tb/verilator/engine` passes) runs its four passes one after another. In a parent merge candidate's native bank on a loaded host the whole `gptp-processor all` command took 21,472 s. Running the four passes at once was measured at 974.6 s against 2,721.6 s wall, CPU +2.3 %, with the transcript identical once each pass is printed in the serial order.\n\n## Scope\n\nIn scope: run the engine suite's four passes concurrently within the caller's job budget, print each pass's output in the serial order under its serial heading, keep every pass's verdict and the suite's exit code.\n\n## Acceptance criteria\n\n1. The suite's transcript (host text removed) and exit code are identical to the serial run's at the same head, clean and with a planted defect in one pass.\n2. Wall time falls by the measured amount; CPU stays within a few percent.\n",
+  "issue_comments": 0,
+  "pr_comment_urls": [
+    "https://github.com/Mister-M-alt/FPGA-gPTP/pull/112#issuecomment-7140397183",
+    "https://github.com/Mister-M-alt/FPGA-gPTP/pull/112#issuecomment-7140409057",
+    "https://github.com/Mister-M-alt/FPGA-gPTP/pull/112#issuecomment-7140627250",
+    "https://github.com/Mister-M-alt/FPGA-gPTP/pull/112#issuecomment-7141226293",
+    "https://github.com/Mister-M-alt/FPGA-gPTP/pull/112#issuecomment-7145231740",
+    "https://github.com/Mister-M-alt/FPGA-gPTP/pull/112#issuecomment-7145242811"
+  ],
+  "manager_execution_evidence_comments": 0
+}
