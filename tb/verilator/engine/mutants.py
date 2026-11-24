@@ -87,11 +87,12 @@ HDL = (HERE / "../../../hdl").resolve()
 sys.path.insert(0, str((HERE / "../../").resolve()))
 
 from mutation_verdict import TALLY, verdict  # noqa: E402
-
 sys.path.insert(0, str(HERE))
 from receipt_mutants import GENERATOR, RECEIPT_MUTATIONS  # noqa: E402
 from port_mutants import PORT_MUTATIONS  # noqa: E402
 from p100_mutants import P100_MUTATIONS  # noqa: E402
+from p106_mutants import P106_MUTATIONS  # noqa: E402
+from p107_mutants import P107_MUTATIONS  # noqa: E402
 from path_mutants import PATH_MUTATIONS  # noqa: E402
 
 #: the RTL the suite builds, in the order the Makefile lists it
@@ -538,6 +539,7 @@ MUTATIONS = [
     *RECEIPT_MUTATIONS,
     *PORT_MUTATIONS,                                  # #94: port_mutants.py
     *P100_MUTATIONS,                                  # #100: p100_mutants.py
+    *P106_MUTATIONS, *P107_MUTATIONS,                 # p106/p107_mutants.py
     ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
      "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
      "                 disp_ready_w && !disp_valid_r;",
@@ -685,11 +687,11 @@ def named_verdict(answer: str, breaks: str, output: str,
             answer = "missed its named check"
         else:
             say(named[0])
-    # #82, #84, #85, #87 to #91, #94 and #100 controls must fail every
-    # check they name, for the same reason: each of those checks needs its
-    # own failing defect.
+    # The controls of these issues must fail every check they name, for the
+    # same reason: each of those checks needs its own failing defect.
     if breaks.startswith(("#82 ", "#84 ", "#85 ", "#87 ", "#88 ", "#89 ",
-                          "#90 ", "#91 ", "#94 ", "#100 ", P1_PREFIX)) and answer == "caught":
+                          "#90 ", "#91 ", "#94 ", "#100 ", "#106 ", "#107 ",
+                          P1_PREFIX)) and answer == "caught":
         failed = [line for line in output.splitlines()
                   if line.startswith("FAIL ")]
         missed = [want for want in breaks.split(" | ")

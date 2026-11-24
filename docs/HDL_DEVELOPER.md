@@ -146,7 +146,9 @@ Nonzero decisions immediately assert `phc_slew_active_o`.
 
 A zero decision clears it with the next rate write.
 
-PHC word 3 retires an active correction during mastership.
+PHC word 3 retires the slave's correction during mastership.
+
+Its low word, rate 0, always applies (#107).
 
 Publication flags also control qualification through an RTL-owned hook.
 
@@ -317,11 +319,11 @@ That counter has no warm-reset assignment.
 
 It also captures the frequency change, through one multiply.
 
-That change is the kept trim less word 3's estimate.
+That change is word 3's high word, the integrator.
 
-An active slew applies word 3: the change is zero.
+It is rate 0 less the slave's estimate.
 
-Before any rate write since reset, it is zero.
+With no word-0 rate since reset or mastership, zero.
 
 Publish word 4 writes keep the offset's upper half.
 

@@ -34,7 +34,7 @@
 //                                            stages the taken path), 15
 //                                            thisClock RO)
 //                  4  PHC control       RW  (0 rate, 1 step, 2 slew verdict,
-//                                            3 integral-only rate)
+//                                            3 mastership rate and change)
 //                  5  timer arm         WO  (slot = addr, delta ms = data)
 //                  6  Follow_Up TLV     RO  (#100: 0..2, the information
 //                                            TLV after its rate offset)
@@ -929,18 +929,18 @@ module KL_gptp_engine
   //!    whole here (pub_offset_o carries its low 32 bits). A master
   //!    publishes no offset, so it holds through the mastership. Zero
   //!    after a reset, as is the offset.
-  //!  - scaledLastGmFreqChange is the frequency the time base keeps,
-  //!    relative to the grandmaster it leaves, from the rate estimate the
-  //!    slave held: the trim the PHC keeps minus the integrator that word
-  //!    3 carries. When the write applies (a slew active), the PHC keeps
-  //!    the estimate itself and the change is zero; otherwise the last
-  //!    trim stays, its proportional term the change. Zero when no rate
-  //!    has been written since reset, as the PHC's rate is then unknown.
+  //!  - scaledLastGmFreqChange is the frequency of the time base,
+  //!    relative to the grandmaster it leaves (#107). A mastership runs on
+  //!    this oscillator, so the change is the rate 0 less the slave's
+  //!    estimate, which word 3 carries in its high word (prog_become).
+  //!    Zero when no slave rate has been written since reset or since the
+  //!    last mastership: the time base has then not left this oscillator,
+  //!    or its rate before a reset is not known.
   //! A trim unit adds 2^-24 ns per clock, CLK_HZ_P * 2^-24 * 1e-9 of
   //! frequency, which the TLV scales by 2^41 (11.4.4.3.9): one unit is
   //! CLK_HZ_P * 2^17 / 1e9, here TLV_K_C / 2^16, rounded to the nearest.
-  //! The product is floored ("the next smaller signed integer"). Both
-  //! trims lie within RATE_PPM_C, so the difference fits 25 bits and the
+  //! The product is floored ("the next smaller signed integer"). The
+  //! estimate lies within RATE_PPM_C, so the change fits 25 bits and the
   //! result 31.
   localparam longint unsigned TLV_K_C =
       ((64'(CLK_HZ_P) << 33) + 64'd500_000_000) / 64'd1_000_000_000;
@@ -948,7 +948,7 @@ module KL_gptp_engine
   logic [15:0] tlv_tbi_r = 16'd0;
   /* verilator lint_on PROCASSINIT */
   logic [31:0] pub_offset_hi_r;
-  logic        phc_rate_seen_r;
+  logic        slave_rate_seen_r;
   logic        tlv_mul_r;
   logic signed [24:0] tlv_dlt_r;
   logic signed [31:0] tlv_freq_r;
@@ -958,26 +958,31 @@ module KL_gptp_engine
   wire         tlv_become_w = st_req_w && st_we_w &&
                               (st_addr_w[19:16] == 4'd4) &&
                               (st_addr_w[1:0] == 2'd3);
+  //! a slave's rate write, PHC word 0 (a step's rate tail included)
+  wire         tlv_rate_w = st_req_w && st_we_w &&
+                            (st_addr_w[19:16] == 4'd4) &&
+                            (st_addr_w[1:0] == 2'd0);
   wire signed [63:0] tlv_prod_w = 64'(tlv_dlt_r) *
                                   $signed({1'b0, TLV_K_C[31:0]});
 
   always_ff @(posedge clk_i) begin : tlv_become
     if (tlv_become_w) tlv_tbi_r <= tlv_tbi_r + 16'd1;
     if (!rst_n) begin
-      pub_offset_hi_r <= '0;
-      phc_rate_seen_r <= 1'b0;
-      tlv_mul_r       <= 1'b0;
-      tlv_dlt_r       <= '0;
-      tlv_freq_r      <= '0;
+      pub_offset_hi_r   <= '0;
+      slave_rate_seen_r <= 1'b0;
+      tlv_mul_r         <= 1'b0;
+      tlv_dlt_r         <= '0;
+      tlv_freq_r        <= '0;
     end else begin
       if (st_req_w && st_we_w && (st_addr_w[19:16] == 4'd3) &&
           (st_addr_w[3:0] == 4'd4))
         pub_offset_hi_r <= st_wdata_w[63:32];
-      if (phc_addend_we_o) phc_rate_seen_r <= 1'b1;
+      if (tlv_rate_w) slave_rate_seen_r <= 1'b1;
+      else if (tlv_become_w) slave_rate_seen_r <= 1'b0;
       tlv_mul_r <= tlv_become_w;
       if (tlv_become_w)
-        tlv_dlt_r <= (phc_slew_active_o || !phc_rate_seen_r) ? 25'sd0
-                   : 25'(phc_addend_o - st_wdata_w[31:0]);
+        tlv_dlt_r <= !slave_rate_seen_r ? 25'sd0
+                   : 25'(st_wdata_w[63:32]);
       if (tlv_mul_r) tlv_freq_r <= 32'(tlv_prod_w >>> 16);
     end
   end
@@ -1276,11 +1281,12 @@ module KL_gptp_engine
                   phc_slew_active_o <= 1'b1;
               end
               2'd3: begin
-                //! Mastership explicitly retires the slave's phase term.
-                if (phc_slew_active_o) begin
-                  phc_addend_we_o <= 1'b1;
-                  phc_addend_o    <= st_wdata_w[31:0];
-                end
+                //! Mastership retires the slave's correction (#107): the
+                //! low word, BECOME's rate 0, always applies, so the time
+                //! base runs on this oscillator. The high word is the
+                //! Follow_Up TLV's (tlv_become).
+                phc_addend_we_o <= 1'b1;
+                phc_addend_o    <= st_wdata_w[31:0];
                 phc_slew_left_r   <= 2'd0;
                 phc_slew_active_o <= 1'b0;
               end

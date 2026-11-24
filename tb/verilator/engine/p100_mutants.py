@@ -31,10 +31,9 @@ LATE_PPM = ("                  * (1_000_000 + LOCAL_CLOCK_PPM_C"
             " + RATE_PPM_C)\n")
 LATE_LINK = "(PD_TURNAROUND_MAX_NS_C + 2 * NPD_HI_C)"
 LATE_GRAIN = "                + 2 * LOCAL_CLOCK_GRAIN_NS_C)\n"
-#: the frequency change's operands, taken at BECOME's PHC word-3 write
-TLV_DLT = ("        tlv_dlt_r <= (phc_slew_active_o || !phc_rate_seen_r)"
-           " ? 25'sd0\n"
-           "                   : 25'(phc_addend_o - st_wdata_w[31:0]);\n")
+#: the frequency change, taken from BECOME's PHC word-3 write (#107)
+TLV_DLT = ("        tlv_dlt_r <= !slave_rate_seen_r ? 25'sd0\n"
+           "                   : 25'(st_wdata_w[63:32]);\n")
 #: the Announce handler's slot-2 arm, anchored at its Announce
 ARM = ("            tmr_arm_delta_w <= tmr_wr_delta_w;\n"
        "            //! #100: an Announce's watch, anchored at its arrival\n"
@@ -51,7 +50,7 @@ SETTLED = "#100 TLV settled"
 SLEWING = "#100 TLV slewing"
 TBI = ": gmTimeBaseIndicator increments"
 PHASE = ": lastGmPhaseChange is the last offset"
-FREQ = ": scaledLastGmFreqChange is the kept trim less the estimate"
+FREQ = ": scaledLastGmFreqChange is rate 0 less the estimate"
 
 #: (name, file under hdl/, pattern, replacement, the checks it must fail)
 P100_MUTATIONS = [
@@ -84,20 +83,14 @@ P100_MUTATIONS = [
      "      if (tlv_mul_r) tlv_freq_r <= 32'(tlv_prod_w >>> 16);\n",
      "",
      f"{SETTLED}{FREQ}"),
-    ("scaledLastGmFreqChange is the rate estimate", ENGINE,
+    # since #107 word 3's low word is the rate, 0: the change read there
+    ("scaledLastGmFreqChange is the rate written", ENGINE,
      TLV_DLT,
-     TLV_DLT.replace("25'(phc_addend_o - st_wdata_w[31:0])",
-                     "25'(st_wdata_w[31:0])"),
-     f"{SETTLED}{FREQ}"),
-    ("a slewing mastership reports its last trim", ENGINE,
-     TLV_DLT,
-     TLV_DLT.replace("(phc_slew_active_o || !phc_rate_seen_r)",
-                     "(!phc_rate_seen_r)"),
-     f"{SLEWING}{FREQ}"),
+     TLV_DLT.replace("25'(st_wdata_w[63:32])", "25'(st_wdata_w[31:0])"),
+     f"{SETTLED}{FREQ} | {SLEWING}{FREQ}"),
     ("a rate unknown since reset is taken as zero", ENGINE,
      TLV_DLT,
-     TLV_DLT.replace("(phc_slew_active_o || !phc_rate_seen_r)",
-                     "(phc_slew_active_o)"),
+     TLV_DLT.replace("!slave_rate_seen_r ? 25'sd0", "1'b0 ? 25'sd0"),
      "#100 TLV: a mastership after a warm reset, no rate written since,"
      " carries no phase or frequency change"),
     # ---- #100: the announce receipt watch (10.3.9.1, Figure 10-13) ---------

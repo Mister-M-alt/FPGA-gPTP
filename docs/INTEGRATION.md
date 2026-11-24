@@ -302,9 +302,9 @@ Each write-enable stays high for exactly one `clk_i` cycle.
 
 Consumed slave Sync and Follow_Up pairs write corrections.
 
-Mastership also retires any active slave correction.
+Mastership also retires the slave's correction.
 
-That transition writes the integral-only rate, without stepping.
+That transition writes rate 0, this oscillator, without stepping.
 
 Each consumed pair writes exactly one addend pulse.
 
@@ -415,9 +415,76 @@ A new parent under the same grandmaster changes nothing.
 
 The trim sums a proportional and an integral term.
 
-That whole trim never exceeds [`RATE_PPM_C`](#protocol-constants) in magnitude.
+That whole trim never exceeds the envelope in magnitude.
+
+The envelope is [`RATE_PPM_C`](#protocol-constants) as an integer addend clamp.
+
+The expression below gives its exact value per clock:
+
+| Clock | Envelope | Fast corner beyond it | Steps every |
+|---|---|---|---|
+| 50 MHz, the parent's images | ±200.000405 ppm | 0.019597 ppm | 5,103 s |
+| 100 MHz, the generator's default | ±199.997425 ppm | 0.022577 ppm | 4,429 s |
+| 125 MHz | ±200.003386 ppm | 0.016616 ppm | 6,018 s |
+| 2 MHz, the engine suite's | ±200.000048 ppm | 0.019954 ppm | 5,011 s |
+
+Grandmasters up to the envelope from this oscillator are followed.
+
+Phase authority shrinks to zero there.
+
+The suite grades ±10 ppm and ±[`LOCAL_CLOCK_PPM_C`](#protocol-constants) from this oscillator.
+
+Each settles within 0.2 ppm of its rate.
+
+That covers the ±[`LOCAL_CLOCK_PPM_C`](#protocol-constants) #107 asks for.
+
+B.1.1 bounds each LocalClock by [`LOCAL_CLOCK_PPM_C`](#protocol-constants) of TAI.
+
+Its fast corner pairs two clocks at that bound `b`.
+
+A slow LocalClock then follows a fast grandmaster.
+
+That needs a trim of `(1 + b) / (1 - b) - 1`, +200.020002 ppm.
+
+That lies just beyond every envelope above.
+
+The offset then grows 17 to 23 ns each second.
+
+Past [`STEP_LOCKED_NS_C`](#protocol-constants) the plane steps, and the offset regrows.
+
+The table's last column gives that interval.
+
+The slow corner needs −199.980002 ppm, inside every envelope.
+
+Phase correction gets only what the rate leaves.
+
+In the rate's direction, phase gets the envelope less `|rate|`.
+
+Against the rate, phase gets the envelope plus `|rate|`.
+
+A rate of 197 ppm leaves phase about 3 ppm.
+
+A residual after its first step then closes slowly.
+
+The integrator's earlier estimate sets how slowly.
+
+From this oscillator, 197 ppm took 5 to 17 s.
+
+From a +199 ppm estimate, -199 ppm took 50 s.
 
 The integrator is clamped to the same bound.
+
+It winds toward that bound meanwhile.
+
+A grandmaster beyond the envelope cannot be followed.
+
+Its offset grows until it steps, again and again.
+
+B.1.1's fast corner lies just beyond, as above.
+
+A drifted test clock's grandmaster can be far beyond.
+
+Zero that clock's frequency adjustment before such scenarios.
 
 In addend units the bound is this integer expression:
 
@@ -439,6 +506,8 @@ When consumption stops, the last trim stays applied.
 
 That held trim is inside the bound too.
 
+Becoming grandmaster replaces it with rate 0.
+
 A locked-threshold slew needs at least `STEP_LOCKED_NS_C / RATE_PPM_C` ms.
 
 The master's own rate offset shares that bound.
@@ -450,6 +519,32 @@ A slew can overshoot while its trim rides the bound.
 A master further apart than the bound outruns the trim.
 
 Its offset then grows past the locked threshold and steps.
+
+#### Mastership rate
+
+A mastership runs on this oscillator (#107).
+
+802.1AS-2020 10.1.2.1 defines that ClockMaster.
+
+Its clause 10.2.4.14 states the same.
+
+Without a ClockSource, a grandmaster runs on its LocalClock.
+
+So becoming grandmaster writes rate 0 through PHC word 3.
+
+The time base keeps its phase.
+
+Its frequency steps by the departed grandmaster's rate.
+
+That step is within the [rate envelope](#rate-envelope), usually far less.
+
+Milan v1.2 Annex B.1 expects such a change.
+
+The parent's media clock holds over it.
+
+The integrator keeps the slave's estimate through the mastership.
+
+A later slave starts from it, as after a step.
 
 #### Slew-active level
 
@@ -503,7 +598,7 @@ Neither the synchronization flag nor addend magnitude determines it.
 | Missing Follow_Up; [`FU_RTO_MS_C`](#protocol-constants) timeout | Discard pending pair; retain level and rate |
 | Grandmaster identity change | Hold level and rate; restart qualification |
 | Replacement step | Hold through step; clear with its integral-only addend |
-| Becoming grandmaster | Replace active correction with integral-only rate; clear together |
+| Becoming grandmaster | Write rate 0, this oscillator; clear together |
 | Returning to slave duty | Next consumed pair makes the policy decision |
 
 Reset the consumer's retained rate when resetting the engine.
@@ -734,6 +829,16 @@ Arrival times decide that order, not queue order.
 
 A stale expiry never ages a refreshed watch.
 
+The expiry's own handler sends the first Announce (#106).
+
+With credit, it reaches the wire before any queued Announce.
+
+Without credit, the next beat tries again, 1 s later.
+
+Later Announces follow one second apart from it.
+
+Figure 10-15 of 802.1AS-2011 states that rule.
+
 So does [`SYNC_RTO_MS_C`](#protocol-constants) without a usable Sync pair.
 
 That needs a grandmaster priority1 below 255.
@@ -864,13 +969,23 @@ This plane sends the offset last measured as a slave.
 
 That offset is not extrapolated to the handover.
 
-scaledLastGmFreqChange is the kept trim less the estimate.
+A mastership runs on this oscillator (#107).
 
-The estimate is the slave's integrator, BECOME's PHC word 3.
+So scaledLastGmFreqChange is rate 0 less the slave's estimate.
 
-An active slew keeps the estimate, so it reads zero.
+The estimate is the slave's integrator, in PHC word 3.
+
+With no slave rate since a mastership, it reads zero.
+
+The time base has then not moved.
 
 Unknown values read zero after a reset.
+
+A takeover during a phase transient sends the wound integrator.
+
+A 90 us jump just before it reads the bound.
+
+The departed grandmaster may have run at 60 ppm.
 
 cumulativeScaledRateOffset stays zero for a grandmaster.
 
