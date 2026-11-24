@@ -1,0 +1,11 @@
+{
+  "head": "bbda770befae8748c1139c4e843c5874c5330048",
+  "tree": "f4ea8ea4b503f8680d571c14394eb7235650ee77",
+  "tracked_files_checked": 120,
+  "worktree_bytes_and_modes": "EXACT",
+  "index": "EXACT",
+  "index_sha256": "f20da9a574fa0d20e309a1fe377b680f01d13e03cb71465c356ebbc26f502b43",
+  "gitlinks": [],
+  "status": "CLEAN",
+  "note": "No tracked source was edited. All probe copies remain under packet scratch."
+}

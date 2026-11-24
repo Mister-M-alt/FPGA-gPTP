@@ -1,0 +1,62 @@
+[
+  {
+    "kind": "start",
+    "pass": 0,
+    "time_ns": 153255876921980,
+    "image_sha256": "38d4506ab8c56937496c5183c58eb267106a21b6d2bf49b12f93b2b9501bc233",
+    "args": []
+  },
+  {
+    "kind": "end",
+    "pass": 0,
+    "time_ns": 153256478195540,
+    "image_sha256": "38d4506ab8c56937496c5183c58eb267106a21b6d2bf49b12f93b2b9501bc233",
+    "args": []
+  },
+  {
+    "kind": "start",
+    "pass": 1,
+    "time_ns": 153256696420556,
+    "image_sha256": "1b36ee806104fb6280e0e2b6847f7397bd4691d813833e450debe82d849c0df9",
+    "args": []
+  },
+  {
+    "kind": "end",
+    "pass": 1,
+    "time_ns": 153257147174211,
+    "image_sha256": "1b36ee806104fb6280e0e2b6847f7397bd4691d813833e450debe82d849c0df9",
+    "args": []
+  },
+  {
+    "kind": "start",
+    "pass": 2,
+    "time_ns": 153257511429085,
+    "image_sha256": "2d93143d7af6b9ad6f6f4894e2f210b24bae78797d0d587481dd7c4a3b52341b",
+    "args": []
+  },
+  {
+    "kind": "end",
+    "pass": 2,
+    "time_ns": 153257812220442,
+    "image_sha256": "2d93143d7af6b9ad6f6f4894e2f210b24bae78797d0d587481dd7c4a3b52341b",
+    "args": []
+  },
+  {
+    "kind": "start",
+    "pass": 3,
+    "time_ns": 153258158599454,
+    "image_sha256": "6c35f20557a2c9de98315745434b5d8ace8065b68056a61f560ee9c82d4c1f58",
+    "args": [
+      "+not-gm-capable"
+    ]
+  },
+  {
+    "kind": "end",
+    "pass": 3,
+    "time_ns": 153258309070095,
+    "image_sha256": "6c35f20557a2c9de98315745434b5d8ace8065b68056a61f560ee9c82d4c1f58",
+    "args": [
+      "+not-gm-capable"
+    ]
+  }
+]

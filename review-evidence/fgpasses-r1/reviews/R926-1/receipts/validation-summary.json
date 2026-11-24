@@ -1,0 +1,70 @@
+{
+  "checks": [
+    {
+      "case": "clean-j1",
+      "serial_rc": 0,
+      "parallel_rc": 0,
+      "parallel_peak": 4,
+      "strict_ordered_equal": true
+    },
+    {
+      "case": "clean-j16",
+      "serial_rc": 0,
+      "parallel_rc": 0,
+      "parallel_peak": 4,
+      "strict_ordered_equal": true
+    },
+    {
+      "case": "clean-j2",
+      "serial_rc": 0,
+      "parallel_rc": 0,
+      "parallel_peak": 4,
+      "strict_ordered_equal": true
+    },
+    {
+      "case": "fail0",
+      "serial_rc": 2,
+      "parallel_rc": 2,
+      "parallel_peak": 4,
+      "strict_ordered_equal": true
+    },
+    {
+      "case": "fail1",
+      "serial_rc": 2,
+      "parallel_rc": 2,
+      "parallel_peak": 4,
+      "strict_ordered_equal": true
+    },
+    {
+      "case": "fail2",
+      "serial_rc": 2,
+      "parallel_rc": 2,
+      "parallel_peak": 4,
+      "strict_ordered_equal": true
+    },
+    {
+      "case": "fail3",
+      "serial_rc": 2,
+      "parallel_rc": 2,
+      "parallel_peak": 4,
+      "strict_ordered_equal": true
+    },
+    {
+      "case": "multi-fail",
+      "serial_rc": 2,
+      "parallel_rc": 2,
+      "parallel_peak": 4,
+      "strict_ordered_equal": true
+    },
+    {
+      "case": "read-fault",
+      "serial_rc": 0,
+      "parallel_rc": 0,
+      "parallel_peak": 4,
+      "strict_ordered_equal": false
+    }
+  ],
+  "script_syntax": "PASS",
+  "image_isolation_and_arguments": "PASS",
+  "out_of_order_completion_exercised": "PASS"
+}

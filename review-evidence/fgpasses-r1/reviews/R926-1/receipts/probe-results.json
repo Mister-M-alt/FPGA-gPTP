@@ -1,0 +1,472 @@
+[
+  {
+    "case": "clean-j1",
+    "variant": "serial",
+    "jobs": 1,
+    "codes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "rc": 0,
+    "peak_passes": 1,
+    "passes_started": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "passes_finished": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "normalized_sha256": "76ab2e016406dfd3179c4bd8a1d774c3dc8b3c68b9245548341c65dbd57f2025",
+    "recipe_sha256": "dd3d0e3959a869579760d9fb74c4d7161d87a56f83eaa8ed37dc1ecf8f8e8829"
+  },
+  {
+    "case": "clean-j1",
+    "variant": "parallel",
+    "jobs": 1,
+    "codes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "rc": 0,
+    "peak_passes": 4,
+    "passes_started": [
+      2,
+      3,
+      1,
+      0
+    ],
+    "passes_finished": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "normalized_sha256": "76ab2e016406dfd3179c4bd8a1d774c3dc8b3c68b9245548341c65dbd57f2025",
+    "recipe_sha256": "617c8fd6b35bf9abdf23980633c4908ae414b7e904aad8926993ea0fe3b746e3"
+  },
+  {
+    "case": "clean-j2",
+    "variant": "serial",
+    "jobs": 2,
+    "codes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "rc": 0,
+    "peak_passes": 1,
+    "passes_started": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "passes_finished": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "normalized_sha256": "76ab2e016406dfd3179c4bd8a1d774c3dc8b3c68b9245548341c65dbd57f2025",
+    "recipe_sha256": "dd3d0e3959a869579760d9fb74c4d7161d87a56f83eaa8ed37dc1ecf8f8e8829"
+  },
+  {
+    "case": "clean-j2",
+    "variant": "parallel",
+    "jobs": 2,
+    "codes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "rc": 0,
+    "peak_passes": 4,
+    "passes_started": [
+      0,
+      2,
+      3,
+      1
+    ],
+    "passes_finished": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "normalized_sha256": "76ab2e016406dfd3179c4bd8a1d774c3dc8b3c68b9245548341c65dbd57f2025",
+    "recipe_sha256": "617c8fd6b35bf9abdf23980633c4908ae414b7e904aad8926993ea0fe3b746e3"
+  },
+  {
+    "case": "clean-j16",
+    "variant": "serial",
+    "jobs": 16,
+    "codes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "rc": 0,
+    "peak_passes": 1,
+    "passes_started": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "passes_finished": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "normalized_sha256": "76ab2e016406dfd3179c4bd8a1d774c3dc8b3c68b9245548341c65dbd57f2025",
+    "recipe_sha256": "dd3d0e3959a869579760d9fb74c4d7161d87a56f83eaa8ed37dc1ecf8f8e8829"
+  },
+  {
+    "case": "clean-j16",
+    "variant": "parallel",
+    "jobs": 16,
+    "codes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "rc": 0,
+    "peak_passes": 4,
+    "passes_started": [
+      0,
+      2,
+      3,
+      1
+    ],
+    "passes_finished": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "normalized_sha256": "76ab2e016406dfd3179c4bd8a1d774c3dc8b3c68b9245548341c65dbd57f2025",
+    "recipe_sha256": "617c8fd6b35bf9abdf23980633c4908ae414b7e904aad8926993ea0fe3b746e3"
+  },
+  {
+    "case": "fail0",
+    "variant": "serial",
+    "jobs": 16,
+    "codes": [
+      3,
+      0,
+      0,
+      0
+    ],
+    "rc": 2,
+    "peak_passes": 1,
+    "passes_started": [
+      0
+    ],
+    "passes_finished": [
+      0
+    ],
+    "normalized_sha256": "c09eea4d37293966fb6bcdb7ead6bce7ccf29fe037fe8a76e85ca42fd5cc067f",
+    "recipe_sha256": "dd3d0e3959a869579760d9fb74c4d7161d87a56f83eaa8ed37dc1ecf8f8e8829"
+  },
+  {
+    "case": "fail0",
+    "variant": "parallel",
+    "jobs": 16,
+    "codes": [
+      3,
+      0,
+      0,
+      0
+    ],
+    "rc": 2,
+    "peak_passes": 4,
+    "passes_started": [
+      2,
+      3,
+      1,
+      0
+    ],
+    "passes_finished": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "normalized_sha256": "c09eea4d37293966fb6bcdb7ead6bce7ccf29fe037fe8a76e85ca42fd5cc067f",
+    "recipe_sha256": "617c8fd6b35bf9abdf23980633c4908ae414b7e904aad8926993ea0fe3b746e3"
+  },
+  {
+    "case": "fail1",
+    "variant": "serial",
+    "jobs": 16,
+    "codes": [
+      0,
+      3,
+      0,
+      0
+    ],
+    "rc": 2,
+    "peak_passes": 1,
+    "passes_started": [
+      0,
+      1
+    ],
+    "passes_finished": [
+      0,
+      1
+    ],
+    "normalized_sha256": "9103ad619b63272d66c061cfc2b9356f1a5ca91ceaded56c67cdb781bdf71462",
+    "recipe_sha256": "dd3d0e3959a869579760d9fb74c4d7161d87a56f83eaa8ed37dc1ecf8f8e8829"
+  },
+  {
+    "case": "fail1",
+    "variant": "parallel",
+    "jobs": 16,
+    "codes": [
+      0,
+      3,
+      0,
+      0
+    ],
+    "rc": 2,
+    "peak_passes": 4,
+    "passes_started": [
+      1,
+      3,
+      0,
+      2
+    ],
+    "passes_finished": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "normalized_sha256": "9103ad619b63272d66c061cfc2b9356f1a5ca91ceaded56c67cdb781bdf71462",
+    "recipe_sha256": "617c8fd6b35bf9abdf23980633c4908ae414b7e904aad8926993ea0fe3b746e3"
+  },
+  {
+    "case": "fail2",
+    "variant": "serial",
+    "jobs": 16,
+    "codes": [
+      0,
+      0,
+      3,
+      0
+    ],
+    "rc": 2,
+    "peak_passes": 1,
+    "passes_started": [
+      0,
+      1,
+      2
+    ],
+    "passes_finished": [
+      0,
+      1,
+      2
+    ],
+    "normalized_sha256": "0680a202b1f0c9441f8a6230dc76208284a5845d788313fa287b95272ec4c7a3",
+    "recipe_sha256": "dd3d0e3959a869579760d9fb74c4d7161d87a56f83eaa8ed37dc1ecf8f8e8829"
+  },
+  {
+    "case": "fail2",
+    "variant": "parallel",
+    "jobs": 16,
+    "codes": [
+      0,
+      0,
+      3,
+      0
+    ],
+    "rc": 2,
+    "peak_passes": 4,
+    "passes_started": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "passes_finished": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "normalized_sha256": "0680a202b1f0c9441f8a6230dc76208284a5845d788313fa287b95272ec4c7a3",
+    "recipe_sha256": "617c8fd6b35bf9abdf23980633c4908ae414b7e904aad8926993ea0fe3b746e3"
+  },
+  {
+    "case": "fail3",
+    "variant": "serial",
+    "jobs": 16,
+    "codes": [
+      0,
+      0,
+      0,
+      3
+    ],
+    "rc": 2,
+    "peak_passes": 1,
+    "passes_started": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "passes_finished": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "normalized_sha256": "3ab097c7bfaffef7b11bdaab412909b4c2eef65bfd3d1403b1067ddd757b92b9",
+    "recipe_sha256": "dd3d0e3959a869579760d9fb74c4d7161d87a56f83eaa8ed37dc1ecf8f8e8829"
+  },
+  {
+    "case": "fail3",
+    "variant": "parallel",
+    "jobs": 16,
+    "codes": [
+      0,
+      0,
+      0,
+      3
+    ],
+    "rc": 2,
+    "peak_passes": 4,
+    "passes_started": [
+      1,
+      2,
+      0,
+      3
+    ],
+    "passes_finished": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "normalized_sha256": "3ab097c7bfaffef7b11bdaab412909b4c2eef65bfd3d1403b1067ddd757b92b9",
+    "recipe_sha256": "617c8fd6b35bf9abdf23980633c4908ae414b7e904aad8926993ea0fe3b746e3"
+  },
+  {
+    "case": "multi-fail",
+    "variant": "serial",
+    "jobs": 16,
+    "codes": [
+      0,
+      3,
+      7,
+      0
+    ],
+    "rc": 2,
+    "peak_passes": 1,
+    "passes_started": [
+      0,
+      1
+    ],
+    "passes_finished": [
+      0,
+      1
+    ],
+    "normalized_sha256": "9103ad619b63272d66c061cfc2b9356f1a5ca91ceaded56c67cdb781bdf71462",
+    "recipe_sha256": "dd3d0e3959a869579760d9fb74c4d7161d87a56f83eaa8ed37dc1ecf8f8e8829"
+  },
+  {
+    "case": "multi-fail",
+    "variant": "parallel",
+    "jobs": 16,
+    "codes": [
+      0,
+      3,
+      7,
+      0
+    ],
+    "rc": 2,
+    "peak_passes": 4,
+    "passes_started": [
+      2,
+      1,
+      3,
+      0
+    ],
+    "passes_finished": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "normalized_sha256": "9103ad619b63272d66c061cfc2b9356f1a5ca91ceaded56c67cdb781bdf71462",
+    "recipe_sha256": "617c8fd6b35bf9abdf23980633c4908ae414b7e904aad8926993ea0fe3b746e3"
+  },
+  {
+    "case": "read-fault",
+    "variant": "serial",
+    "jobs": 16,
+    "codes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "rc": 0,
+    "peak_passes": 1,
+    "passes_started": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "passes_finished": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "normalized_sha256": "76ab2e016406dfd3179c4bd8a1d774c3dc8b3c68b9245548341c65dbd57f2025",
+    "recipe_sha256": "dd3d0e3959a869579760d9fb74c4d7161d87a56f83eaa8ed37dc1ecf8f8e8829"
+  },
+  {
+    "case": "read-fault",
+    "variant": "parallel",
+    "jobs": 16,
+    "codes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "rc": 0,
+    "peak_passes": 4,
+    "passes_started": [
+      1,
+      3,
+      2,
+      0
+    ],
+    "passes_finished": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "normalized_sha256": "55d0c7cfd7c6e300cd5868a8b2621badea767c82a1bd267b7bac0c9f0ec76911",
+    "recipe_sha256": "617c8fd6b35bf9abdf23980633c4908ae414b7e904aad8926993ea0fe3b746e3"
+  }
+]

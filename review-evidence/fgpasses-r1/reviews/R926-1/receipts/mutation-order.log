@@ -1,0 +1,14 @@
+python3 ../../mutation_order_test.py mutants.py
+INFO --jobs 1: exit 0, 63402 bytes, 168 verdicts, 2.2 s
+INFO --jobs 8: exit 0, 63402 bytes, 168 verdicts, 0.6 s
+PASS --jobs 1 exits 0 (got 0)
+PASS --jobs 1 prints 168 [PASS] lines in list order
+PASS --jobs 1 tallies 168 checks
+PASS --jobs 1 gives each of the 168 entries its own run directory (got 168)
+PASS --jobs 8 exits 0 (got 0)
+PASS --jobs 8 prints 168 [PASS] lines in list order
+PASS --jobs 8 tallies 168 checks
+PASS --jobs 8 gives each of the 168 entries its own run directory (got 168)
+PASS --jobs 8: the entries finished out of list order
+PASS --jobs 1 and --jobs 8 print the same bytes
+10 checks: 10 PASS, 0 FAIL

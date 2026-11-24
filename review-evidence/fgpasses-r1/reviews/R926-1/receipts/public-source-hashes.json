@@ -1,0 +1,80 @@
+[
+  {
+    "path": "receipts/gptp/branch.txt",
+    "blob": "bdc66df9825d2b007691fb7272875af701673bc1",
+    "sha256": "97ab0ceba9cfbd774576a20d5e1e7643c20026f67cee5c84da77f1f30bb18bac",
+    "bytes": 118
+  },
+  {
+    "path": "receipts/gptp/docs-gate.log",
+    "blob": "ec8b77915ca1b14417120c45386843ee9a3dcc6b",
+    "sha256": "f938dbab97cd90ab766b6f3e5ab1a6757e73de0d290938442129745e4fbe8f05",
+    "bytes": 2543
+  },
+  {
+    "path": "receipts/gptp/engine-run-passes-at-once.patch",
+    "blob": "fac1d07370f687419297dc322b40112917b7dac0",
+    "sha256": "314f3907aabccfcddd5406a7d637831fa36c4eb46107138d506d2b6da5617fce",
+    "bytes": 4750
+  },
+  {
+    "path": "receipts/gptp/fail-test.log",
+    "blob": "7aa1b7fdbcbb4a0043c19626dbe9ff877f6b6e90",
+    "sha256": "b1c3be59d4b9694d41128dab65c92ca6b32e91cfae79398e0ffee5ade52fb779",
+    "bytes": 1349
+  },
+  {
+    "path": "receipts/gptp/identity.txt",
+    "blob": "251ca9e32eace7f1ba9f342600b5e5b814bc1341",
+    "sha256": "da4aa730a16aa5e6cea06c24420a8378e89b0d4235ba90f421d90651d20301e2",
+    "bytes": 33
+  },
+  {
+    "path": "receipts/gptp/parallel/log",
+    "blob": "04eb3a6c00536be6732e631ede8bb4b9ef38e4f8",
+    "sha256": "21bda5d5bf4bd45659b753db8127acc41faa02f2fd4d673f4a4404f6c7b6dc47",
+    "bytes": 19501
+  },
+  {
+    "path": "receipts/gptp/parallel/perf",
+    "blob": "f1de8f62acdd97bb72b0cf835f4e5161a42f69e7",
+    "sha256": "b7108b2c68f7177ee43d568e58409ba9765efb81080592def29870c125275f66",
+    "bytes": 187
+  },
+  {
+    "path": "receipts/gptp/parallel/time",
+    "blob": "db41419bf99669d846ee8f10400306a889f0dfc3",
+    "sha256": "049d3aef38be6ffbed6108ecfbec62c282a43e20b59166379f75e8e1ab603f7e",
+    "bytes": 39
+  },
+  {
+    "path": "receipts/gptp/serial/log",
+    "blob": "0be4cefbe3c424d7eed7be14c73b4d77356938b0",
+    "sha256": "9669350983f435b469b405c19df7b4f1ee8bd02df24d1b5fbae8a55c5b96310f",
+    "bytes": 19500
+  },
+  {
+    "path": "receipts/gptp/serial/perf",
+    "blob": "bb13bfe1146fefe50eb69f06871d1df17f3a3582",
+    "sha256": "cdfac0c8c49f8204c7a4f59cc79cb6efa92b836d364359abbee64bf90d086c98",
+    "bytes": 187
+  },
+  {
+    "path": "receipts/gptp/serial/time",
+    "blob": "7864dbf0a7099154bc18952c83e13f1c44c452e0",
+    "sha256": "a5c003aea77a5a7ded096a07922b26fbbb35da38f5e64999de151ac006ad53d9",
+    "bytes": 40
+  },
+  {
+    "path": "receipts/gptp/term-test.log",
+    "blob": "6e8f947b0d686e4a6bc278d8d435d0f74a172cd5",
+    "sha256": "88c1273f0098afa83f9a0838c67b95fd9512f1e35e9c2f8919b43c125b8ca51b",
+    "bytes": 1183
+  },
+  {
+    "path": "receipts/tools/logcmp.py",
+    "blob": "f0b2e4db17e1f514bcb173300954229dbda70e9d",
+    "sha256": "53ee5c73214f560dd545536c3e9eb6dad099a9a738550c9955599457bc28fc0d",
+    "bytes": 2275
+  }
+]

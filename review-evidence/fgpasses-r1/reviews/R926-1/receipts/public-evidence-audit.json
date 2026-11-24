@@ -1,0 +1,41 @@
+{
+  "source_commit": "0e37e261d07b7fd332590bfe57ae90ddaad2dc57",
+  "runs": {
+    "serial": {
+      "wall_s": 2721.59,
+      "user_s": 807.56,
+      "system_s": 10.16,
+      "cpu_s": 817.7199999999999,
+      "exit": "rc=0",
+      "kept_lines": 170,
+      "removed_build_lines": 11,
+      "sha256": "ae968df76bb48c7726c94f7a39947953d124151bf37dcce9fa0266fcfe9bb460",
+      "tallies": [
+        "2199 checks: 2199 PASS, 0 FAIL",
+        "2199 checks: 2199 PASS, 0 FAIL",
+        "2199 checks: 2199 PASS, 0 FAIL",
+        "61 checks: 61 PASS, 0 FAIL"
+      ]
+    },
+    "parallel": {
+      "wall_s": 974.61,
+      "user_s": 824.43,
+      "system_s": 12.36,
+      "cpu_s": 836.79,
+      "exit": "rc=0",
+      "kept_lines": 170,
+      "removed_build_lines": 11,
+      "sha256": "ae968df76bb48c7726c94f7a39947953d124151bf37dcce9fa0266fcfe9bb460",
+      "tallies": [
+        "2199 checks: 2199 PASS, 0 FAIL",
+        "2199 checks: 2199 PASS, 0 FAIL",
+        "2199 checks: 2199 PASS, 0 FAIL",
+        "61 checks: 61 PASS, 0 FAIL"
+      ]
+    }
+  },
+  "strict_ordered_equal": true,
+  "speedup": 2.7924913555165656,
+  "cpu_change_percent": 2.332094115345118,
+  "scope": "Published clean real simulations; failing receipt uses a stand-in executable."
+}

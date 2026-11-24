@@ -1,0 +1,23 @@
+{
+  "head": "bbda770befae8748c1139c4e843c5874c5330048",
+  "issue_url": "https://github.com/Mister-M-alt/FPGA-gPTP/issues/111",
+  "issue_comment_count": 0,
+  "pr_url": "https://github.com/Mister-M-alt/FPGA-gPTP/pull/112",
+  "pr_comments": [
+    {
+      "url": "https://github.com/Mister-M-alt/FPGA-gPTP/pull/112#issuecomment-7140397183",
+      "kind": "review-start announcement"
+    },
+    {
+      "url": "https://github.com/Mister-M-alt/FPGA-gPTP/pull/112#issuecomment-7140409057",
+      "kind": "review-start announcement"
+    }
+  ],
+  "prior_public_findings": [],
+  "manager_source_bank": "NOT RUN; neither required nor inferred at source head",
+  "manager_evidence_comments": "None present in fetched issue/PR timeline",
+  "pull_request_workflow_runs": [],
+  "commit_statuses": [],
+  "check_runs": [],
+  "note": "Read-only snapshot after independent-verdict.md was written; absence is not passed execution or skipped execution."
+}

@@ -1,0 +1,44 @@
+[
+  {
+    "kind": "start",
+    "pass": 0,
+    "time_ns": 153261707763934,
+    "image_sha256": "38d4506ab8c56937496c5183c58eb267106a21b6d2bf49b12f93b2b9501bc233",
+    "args": []
+  },
+  {
+    "kind": "end",
+    "pass": 0,
+    "time_ns": 153262308167727,
+    "image_sha256": "38d4506ab8c56937496c5183c58eb267106a21b6d2bf49b12f93b2b9501bc233",
+    "args": []
+  },
+  {
+    "kind": "start",
+    "pass": 1,
+    "time_ns": 153262626065360,
+    "image_sha256": "1b36ee806104fb6280e0e2b6847f7397bd4691d813833e450debe82d849c0df9",
+    "args": []
+  },
+  {
+    "kind": "end",
+    "pass": 1,
+    "time_ns": 153263076461378,
+    "image_sha256": "1b36ee806104fb6280e0e2b6847f7397bd4691d813833e450debe82d849c0df9",
+    "args": []
+  },
+  {
+    "kind": "start",
+    "pass": 2,
+    "time_ns": 153263231596960,
+    "image_sha256": "2d93143d7af6b9ad6f6f4894e2f210b24bae78797d0d587481dd7c4a3b52341b",
+    "args": []
+  },
+  {
+    "kind": "end",
+    "pass": 2,
+    "time_ns": 153263532146333,
+    "image_sha256": "2d93143d7af6b9ad6f6f4894e2f210b24bae78797d0d587481dd7c4a3b52341b",
+    "args": []
+  }
+]

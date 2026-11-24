@@ -1,0 +1,16 @@
+[
+  {
+    "kind": "start",
+    "pass": 0,
+    "time_ns": 153258619657143,
+    "image_sha256": "38d4506ab8c56937496c5183c58eb267106a21b6d2bf49b12f93b2b9501bc233",
+    "args": []
+  },
+  {
+    "kind": "end",
+    "pass": 0,
+    "time_ns": 153259220202599,
+    "image_sha256": "38d4506ab8c56937496c5183c58eb267106a21b6d2bf49b12f93b2b9501bc233",
+    "args": []
+  }
+]
