@@ -123,13 +123,21 @@ def run(n: int, directory: str | None, generate: str | None, argv: list[str], ig
     if directory is not None:
         Path(directory).mkdir(parents=True, exist_ok=True)
     if generate is not None and "stopped" not in record:
-        # The serial line itself, its redirection included, so a signal death ends as the shell reported it there.
-        done = subprocess.run(["/bin/sh", "-c", generate + " >/dev/null"], stdout=subprocess.DEVNULL,
-                              stderr=subprocess.PIPE)
-        if done.stderr:
-            record["gen_stderr"] = done.stderr.decode(errors="surrogateescape")
-        record["gen"] = done.returncode if done.returncode >= 0 else 128 - done.returncode
-        if done.returncode and not ignoring:
+        # The serial line itself, its redirection included, through the same shell: a shell that forks reports a
+        # signal death as 128+n, which is kept; a shell that execs dies of the signal itself, which is recorded and
+        # re-raised at replay, as for the simulator.
+        gen = subprocess.Popen(["/bin/sh", "-c", generate + " >/dev/null"], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE)
+        err = gen.stderr.read()
+        gen.stderr.close()
+        _, status = os.waitpid(gen.pid, 0)
+        gen.returncode = os.waitstatus_to_exitcode(status)
+        if err:
+            record["gen_stderr"] = err.decode(errors="surrogateescape")
+        if os.WIFSIGNALED(status):
+            record.update(gen_signal=os.WTERMSIG(status), gen_core=os.WCOREDUMP(status))
+        record["gen"] = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 0
+        if gen.returncode and not ignoring:
             stop_later(n)
             record["stopped"] = True
     if "stopped" not in record and not received:
@@ -209,8 +217,10 @@ def replay_gen(n: int, ignoring: bool) -> int:
     except OSError as exc:
         print(f"engine pass {n}: its image generator's output could not be printed ({exc})", file=sys.stderr)
         return 1
-    if record.get("gen"):
+    if record.get("gen") or record.get("gen_signal"):
         (STATE / f"{n}.stop").touch()
+    if record.get("gen_signal"):
+        reraise(record["gen_signal"], record.get("gen_core", False))
     return record.get("gen", 0)
 
 
@@ -232,13 +242,18 @@ def replay(n: int, banner: str | None, ignoring: bool) -> int:
     if record.get("exit") or record.get("signal"):
         (STATE / f"{n}.stop").touch()
     if record.get("signal"):
-        if not record.get("core"):
-            resource.setrlimit(resource.RLIMIT_CORE, (0, resource.getrlimit(resource.RLIMIT_CORE)[1]))
-        if record["signal"] != signal.SIGKILL:
-            signal.signal(record["signal"], signal.SIG_DFL)
-        os.chdir(STATE)  # a file core_pattern writes this process's core here, never over the simulator's
-        os.kill(os.getpid(), record["signal"])
+        reraise(record["signal"], record.get("core", False))
     return record.get("exit", 0)
+
+
+def reraise(signum: int, core: bool) -> None:
+    """End as the recorded process ended: by its signal, dumping core only if it did."""
+    if not core:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, resource.getrlimit(resource.RLIMIT_CORE)[1]))
+    if signum != signal.SIGKILL:
+        signal.signal(signum, signal.SIG_DFL)
+    os.chdir(STATE)  # a file core_pattern writes this process's core here, never over the simulator's
+    os.kill(os.getpid(), signum)
 
 
 def main() -> int:

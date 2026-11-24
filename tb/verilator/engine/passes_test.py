@@ -14,8 +14,8 @@ The checks:
 1. The transcript and the exit status equal the serial recipe's, byte for
    byte apart from the recipe line numbers in make's own messages, for a clean
    run, a failing pass at each position, two failing passes, a pass killed by
-   SIGSEGV, SIGABRT and SIGKILL, a failing image generator and a failing
-   build; each with no option, -s, -i and -k, and at -j4 and -j1. Standard
+   SIGSEGV, SIGABRT and SIGKILL, a failing image generator, an image
+   generator killed by SIGSEGV and a failing build; each with no option, -s, -i and -k, and at -j4 and -j1. Standard
    output and standard error are compared apart, with only the tree's own
    path and make's recipe line numbers masked. The clean -j4 run must have
    finished its passes out of order, or the ordering was not exercised.
@@ -28,6 +28,12 @@ The checks:
    leave no stub simulator running.
 5. A pass's kept transcript that cannot be read back fails the run with a
    diagnostic, after the passes before it and with nothing after it.
+6. A replayed signal death is re-raised from obj_dir/engine-passes/, so a
+   file core_pattern never replaces the simulator's core.
+7. An image generator whose shell died of a signal (a shell that execs the
+   line, as dash does) ends as the serial line did: make reports the signal
+   for SIGSEGV and SIGKILL. A crafted record stands in for the run, so the
+   check holds on any host's /bin/sh.
 Nothing is built or simulated; it takes seconds.
 """
 
@@ -343,11 +349,37 @@ def replay_cwd(trees: dict[str, Path], scratch: Path) -> int:
     return not ok
 
 
+def gen_signal(trees: dict[str, Path], scratch: Path) -> int:
+    """Check 7: an image generator whose shell died of a signal (a shell that execs, as dash does) ends as the serial
+    line did: make reports the signal, not 128+n. A crafted record stands in for the run on any host's shell."""
+    bad = 0
+    tool = Path(__file__).resolve().parent / "pass_run.py"
+    for signum in (signal.SIGSEGV, signal.SIGKILL):
+        runs = {}
+        for form in ("replay", "serial"):
+            d = scratch / f"gensig-{form}-{int(signum)}"
+            state = d / "obj_dir" / "engine-passes"
+            state.mkdir(parents=True)
+            (state / "build.ok").touch()
+            (state / "1.json").write_text(json.dumps({"gen_signal": int(signum), "gen_core": False}))
+            line = (f"python3 {tool} replay-gen 1" if form == "replay"
+                    else f"python3 -c 'import os; os.kill(os.getpid(), {int(signum)})'")
+            (d / "Makefile").write_text(f"all:\n\t@{line}\n")
+            runs[form] = subprocess.run(["make", "--no-print-directory"], cwd=d, capture_output=True, text=True,
+                                        preexec_fn=no_cores, env={**os.environ, "MAKEFLAGS": ""})
+        same = (runs["replay"].returncode == runs["serial"].returncode
+                and runs["replay"].stderr == runs["serial"].stderr)
+        bad += not same
+        print(f"[{'PASS' if same else 'FAIL'}] an image generator killed by {signal.Signals(signum).name} replays as the "
+              f"serial line ended: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
+    return bad
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="engine-passes-test-") as name:
         scratch = Path(name)
         trees = tree(scratch)
-        bad = sum(check(trees, scratch) for check in (transcripts, budget, fail_fast, signals, unprintable, replay_cwd))
+        bad = sum(check(trees, scratch) for check in (transcripts, budget, fail_fast, signals, unprintable, replay_cwd, gen_signal))
     print(f"engine passes test: {'PASS' if not bad else f'{bad} FAIL'}")
     return 1 if bad else 0
 
