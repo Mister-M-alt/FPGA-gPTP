@@ -1,0 +1,12 @@
+base: 159 entries, 159 unique names
+branch: 167 entries, 167 unique names
+main: 159 entries, 159 unique names
+merge: 167 entries, 167 unique names
+branch adds 13 removes 5
+main adds 0 removes 0
+merge == base - removals + both sides' additions: True
+  branch removed: a rate unknown since reset is taken as zero
+  branch removed: a slewing mastership reports its last trim
+  branch removed: scaledLastGmFreqChange is the rate estimate
+  branch removed: scaledLastGmFreqChange is zero
+  branch removed: the Follow_Up TLV is sent zero

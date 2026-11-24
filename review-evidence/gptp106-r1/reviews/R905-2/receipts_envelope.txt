@@ -1,0 +1,5 @@
+fast corner 200.020002 ppm, slow corner -199.980002 ppm
+50 MHz: addend 67109, envelope 200.000405 ppm, beyond 0.019597 ppm, 19.597 ns/s, steps every 5102.9 s
+100 MHz: addend 33554, envelope 199.997425 ppm, beyond 0.022577 ppm, 22.577 ns/s, steps every 4429.3 s
+125 MHz: addend 26844, envelope 200.003386 ppm, beyond 0.016616 ppm, 16.616 ns/s, steps every 6018.1 s
+2 MHz: addend 1677722, envelope 200.000048 ppm, beyond 0.019954 ppm, 19.954 ns/s, steps every 5011.4 s
