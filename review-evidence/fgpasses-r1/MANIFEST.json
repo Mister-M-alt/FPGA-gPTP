@@ -4666,5 +4666,41 @@
     "original_sha256": "f506cd2bcaac34829e84284e2053cc07d18ec6eda33c982f9254ea4e54f32bf4",
     "published_sha256": "f506cd2bcaac34829e84284e2053cc07d18ec6eda33c982f9254ea4e54f32bf4",
     "path_redacted": false
+  },
+  {
+    "file": "author-r5/REVIEW-READY.md",
+    "original_sha256": "3a13b0cf2c5d84277e0c9f4e763702ccb5fc65f67e938175f715a418f28b0c66",
+    "published_sha256": "3a13b0cf2c5d84277e0c9f4e763702ccb5fc65f67e938175f715a418f28b0c66",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r5/receipts/diff.txt",
+    "original_sha256": "c9698140a71767061022e6f84b714fba7f5a4eb483550fa0fc6136b2fc329c75",
+    "published_sha256": "c9698140a71767061022e6f84b714fba7f5a4eb483550fa0fc6136b2fc329c75",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r5/receipts/passes-test-plant-gensig.log",
+    "original_sha256": "fc4f129834840eff4680893f677ad38de5790547bb3b8ab75c36a1fedc3d549a",
+    "published_sha256": "fc4f129834840eff4680893f677ad38de5790547bb3b8ab75c36a1fedc3d549a",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r5/receipts/passes-test-pt-g1.log",
+    "original_sha256": "ce265223ede1199507b816ffb5eb38815e4e1ef65ef7954c0187a7767de6fb43",
+    "published_sha256": "ce265223ede1199507b816ffb5eb38815e4e1ef65ef7954c0187a7767de6fb43",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r5/receipts/passes-test-pt-g2.log",
+    "original_sha256": "3743424daa13085975729e4126f01b880e753ce4fb4167371099a0b579f98f65",
+    "published_sha256": "3743424daa13085975729e4126f01b880e753ce4fb4167371099a0b579f98f65",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r5/receipts/passes-test-pt-g3.log",
+    "original_sha256": "b2808814543221e98a4e78066607e12c10b11193027b706654856f96acf1a388",
+    "published_sha256": "b2808814543221e98a4e78066607e12c10b11193027b706654856f96acf1a388",
+    "path_redacted": false
   }
 ]

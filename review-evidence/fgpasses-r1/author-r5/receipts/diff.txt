@@ -1,0 +1,139 @@
+diff --git a/tb/verilator/engine/pass_run.py b/tb/verilator/engine/pass_run.py
+index 34c36a1..fd1bfd9 100644
+--- a/tb/verilator/engine/pass_run.py
++++ b/tb/verilator/engine/pass_run.py
+@@ -123,13 +123,21 @@ def run(n: int, directory: str | None, generate: str | None, argv: list[str], ig
+     if directory is not None:
+         Path(directory).mkdir(parents=True, exist_ok=True)
+     if generate is not None and "stopped" not in record:
+-        # The serial line itself, its redirection included, so a signal death ends as the shell reported it there.
+-        done = subprocess.run(["/bin/sh", "-c", generate + " >/dev/null"], stdout=subprocess.DEVNULL,
+-                              stderr=subprocess.PIPE)
+-        if done.stderr:
+-            record["gen_stderr"] = done.stderr.decode(errors="surrogateescape")
+-        record["gen"] = done.returncode if done.returncode >= 0 else 128 - done.returncode
+-        if done.returncode and not ignoring:
++        # The serial line itself, its redirection included, through the same shell: a shell that forks reports a
++        # signal death as 128+n, which is kept; a shell that execs dies of the signal itself, which is recorded and
++        # re-raised at replay, as for the simulator.
++        gen = subprocess.Popen(["/bin/sh", "-c", generate + " >/dev/null"], stdout=subprocess.DEVNULL,
++                               stderr=subprocess.PIPE)
++        err = gen.stderr.read()
++        gen.stderr.close()
++        _, status = os.waitpid(gen.pid, 0)
++        gen.returncode = os.waitstatus_to_exitcode(status)
++        if err:
++            record["gen_stderr"] = err.decode(errors="surrogateescape")
++        if os.WIFSIGNALED(status):
++            record.update(gen_signal=os.WTERMSIG(status), gen_core=os.WCOREDUMP(status))
++        record["gen"] = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 0
++        if gen.returncode and not ignoring:
+             stop_later(n)
+             record["stopped"] = True
+     if "stopped" not in record and not received:
+@@ -209,8 +217,10 @@ def replay_gen(n: int, ignoring: bool) -> int:
+     except OSError as exc:
+         print(f"engine pass {n}: its image generator's output could not be printed ({exc})", file=sys.stderr)
+         return 1
+-    if record.get("gen"):
++    if record.get("gen") or record.get("gen_signal"):
+         (STATE / f"{n}.stop").touch()
++    if record.get("gen_signal"):
++        reraise(record["gen_signal"], record.get("gen_core", False))
+     return record.get("gen", 0)
+ 
+ 
+@@ -232,15 +242,20 @@ def replay(n: int, banner: str | None, ignoring: bool) -> int:
+     if record.get("exit") or record.get("signal"):
+         (STATE / f"{n}.stop").touch()
+     if record.get("signal"):
+-        if not record.get("core"):
+-            resource.setrlimit(resource.RLIMIT_CORE, (0, resource.getrlimit(resource.RLIMIT_CORE)[1]))
+-        if record["signal"] != signal.SIGKILL:
+-            signal.signal(record["signal"], signal.SIG_DFL)
+-        os.chdir(STATE)  # a file core_pattern writes this process's core here, never over the simulator's
+-        os.kill(os.getpid(), record["signal"])
++        reraise(record["signal"], record.get("core", False))
+     return record.get("exit", 0)
+ 
+ 
++def reraise(signum: int, core: bool) -> None:
++    """End as the recorded process ended: by its signal, dumping core only if it did."""
++    if not core:
++        resource.setrlimit(resource.RLIMIT_CORE, (0, resource.getrlimit(resource.RLIMIT_CORE)[1]))
++    if signum != signal.SIGKILL:
++        signal.signal(signum, signal.SIG_DFL)
++    os.chdir(STATE)  # a file core_pattern writes this process's core here, never over the simulator's
++    os.kill(os.getpid(), signum)
++
++
+ def main() -> int:
+     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+     parser.add_argument("--ignore-errors", action="store_true", help="make runs with -i")
+diff --git a/tb/verilator/engine/passes_test.py b/tb/verilator/engine/passes_test.py
+index 0bf2961..2a5cd7f 100644
+--- a/tb/verilator/engine/passes_test.py
++++ b/tb/verilator/engine/passes_test.py
+@@ -14,8 +14,8 @@ The checks:
+ 1. The transcript and the exit status equal the serial recipe's, byte for
+    byte apart from the recipe line numbers in make's own messages, for a clean
+    run, a failing pass at each position, two failing passes, a pass killed by
+-   SIGSEGV, SIGABRT and SIGKILL, a failing image generator and a failing
+-   build; each with no option, -s, -i and -k, and at -j4 and -j1. Standard
++   SIGSEGV, SIGABRT and SIGKILL, a failing image generator, an image
++   generator killed by SIGSEGV and a failing build; each with no option, -s, -i and -k, and at -j4 and -j1. Standard
+    output and standard error are compared apart, with only the tree's own
+    path and make's recipe line numbers masked. The clean -j4 run must have
+    finished its passes out of order, or the ordering was not exercised.
+@@ -28,6 +28,12 @@ The checks:
+    leave no stub simulator running.
+ 5. A pass's kept transcript that cannot be read back fails the run with a
+    diagnostic, after the passes before it and with nothing after it.
++6. A replayed signal death is re-raised from obj_dir/engine-passes/, so a
++   file core_pattern never replaces the simulator's core.
++7. An image generator whose shell died of a signal (a shell that execs the
++   line, as dash does) ends as the serial line did: make reports the signal
++   for SIGSEGV and SIGKILL. A crafted record stands in for the run, so the
++   check holds on any host's /bin/sh.
+ Nothing is built or simulated; it takes seconds.
+ """
+ 
+@@ -343,11 +349,37 @@ def replay_cwd(trees: dict[str, Path], scratch: Path) -> int:
+     return not ok
+ 
+ 
++def gen_signal(trees: dict[str, Path], scratch: Path) -> int:
++    """Check 7: an image generator whose shell died of a signal (a shell that execs, as dash does) ends as the serial
++    line did: make reports the signal, not 128+n. A crafted record stands in for the run on any host's shell."""
++    bad = 0
++    tool = Path(__file__).resolve().parent / "pass_run.py"
++    for signum in (signal.SIGSEGV, signal.SIGKILL):
++        runs = {}
++        for form in ("replay", "serial"):
++            d = scratch / f"gensig-{form}-{int(signum)}"
++            state = d / "obj_dir" / "engine-passes"
++            state.mkdir(parents=True)
++            (state / "build.ok").touch()
++            (state / "1.json").write_text(json.dumps({"gen_signal": int(signum), "gen_core": False}))
++            line = (f"python3 {tool} replay-gen 1" if form == "replay"
++                    else f"python3 -c 'import os; os.kill(os.getpid(), {int(signum)})'")
++            (d / "Makefile").write_text(f"all:\n\t@{line}\n")
++            runs[form] = subprocess.run(["make", "--no-print-directory"], cwd=d, capture_output=True, text=True,
++                                        preexec_fn=no_cores, env={**os.environ, "MAKEFLAGS": ""})
++        same = (runs["replay"].returncode == runs["serial"].returncode
++                and runs["replay"].stderr == runs["serial"].stderr)
++        bad += not same
++        print(f"[{'PASS' if same else 'FAIL'}] an image generator killed by {signal.Signals(signum).name} replays as the "
++              f"serial line ended: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
++    return bad
++
++
+ def main() -> int:
+     with tempfile.TemporaryDirectory(prefix="engine-passes-test-") as name:
+         scratch = Path(name)
+         trees = tree(scratch)
+-        bad = sum(check(trees, scratch) for check in (transcripts, budget, fail_fast, signals, unprintable, replay_cwd))
++        bad = sum(check(trees, scratch) for check in (transcripts, budget, fail_fast, signals, unprintable, replay_cwd, gen_signal))
+     print(f"engine passes test: {'PASS' if not bad else f'{bad} FAIL'}")
+     return 1 if bad else 0
+ 
