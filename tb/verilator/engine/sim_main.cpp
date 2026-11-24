@@ -145,7 +145,7 @@
 //         identity in the compare order
 // 21d     the delayed-dispatch shape with a BETTER announce adopts from its
 //         frozen context
-// 22..26  the pdelay verdict tail: the Milan floor, the threshold,
+// 22..26  the pdelay verdict tail: a negative delay, the threshold,
 //         two-exchange recovery, the stale ratio window. 25 (#90, #91):
 //         four lost responses keep asCapable and the fifth clears it, for
 //         no response, no Follow_Up, a duplicated response and three
@@ -281,6 +281,17 @@
 // 61      #107: under +-8 ns origin noise, after grandmasters at +10, -10
 //         and +10 ppm, scaledLastGmFreqChange is within 50 % of the time
 //         base's change (or 1 ppb), the qual's grading (11.4.4.3.9)
+// 62      #109, after 61 and ahead of the whole-run grades: computed link
+//         delays of -3, -80, -81 and -263 ns keep asCapable, are published
+//         as computed and enter the next Follow_Up's offset exactly; a
+//         100 ns link with both latency constants 400 ns over-stated
+//         computes -300 ns and measures the true offset, 0, exactly
+// 63      #109: -800, -801 and -5,000,000 ns, and the most negative delay
+//         the wire can make the datapath compute, keep asCapable and are
+//         used and published as -800 ns, with no PHC step
+// 64      #109: 800 ns keeps asCapable; 801 ns clears it, and the next
+//         Follow_Up is not used; so does the most positive delay the wire
+//         can make the datapath compute, above 2^60 ns
 //
 // A fourth pass (+not-gm-capable, an image built with --p1 255 and
 // --clock-accuracy 0xFE) runs only the phases a self publication passes
@@ -490,6 +501,7 @@ class GptpEngineHarness {
     run_the_followup_tlv_phases();
     run_the_mastership_wire_phases();
     run_the_rate_phases();
+    run_the_negative_delay_phases();
     hold_every_committed_path_coherent();
     keep_sync_ok_in_every_master_cycle();
     end_every_peer_path_with_thisclock();
@@ -1029,9 +1041,40 @@ class GptpEngineHarness {
   //! identical Pdelay_Resp and one Follow_Up, PD_DUP3 with three (#90, #91).
   //! None of the three completes an exchange (802.1AS-2011 Figure 11-8: a
   //! second response is RESET), so none of them feeds the pdelay model
-  //! PD_EDGE answers at the #100 late bound, PD_LATE 1 ns past it
+  //! PD_EDGE answers at the #100 late bound, PD_LATE 1 ns past it.
+  //! #109: PD_SET answers so that the computed delay is exactly pd_target;
+  //! PD_WIRE sends pd_t2_wire and pd_t3_wire as raw timestamp fields
   enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_SELF, PD_DUAL,
-                PD_DUP, PD_DUAL_LATE, PD_NOFU, PD_DUP3, PD_EDGE, PD_LATE };
+                PD_DUP, PD_DUAL_LATE, PD_NOFU, PD_DUP3, PD_EDGE, PD_LATE,
+                PD_SET, PD_WIRE };
+  int64_t pd_target = 0;
+  //! a PTP Timestamp as sent: 48-bit seconds, 32-bit nanoseconds
+  struct WireTs { uint64_t sec; uint32_t ns; };
+  WireTs pd_t2_wire{0, 0};
+  WireTs pd_t3_wire{0, 0};
+  //! the nanosecond count a receiver folds from `w` as the ROM does
+  //! (e_full_ts): the low 32 bits of the seconds field taken signed (MULS is
+  //! signed 32 x 32) times 1e9, plus the nanoseconds field, which nothing
+  //! range-checks. The spec formula holds on these folded values
+  static uint64_t wire_ns(WireTs w) {
+    const int64_t s = static_cast<int32_t>(static_cast<uint32_t>(w.sec));
+    return static_cast<uint64_t>(s * 1000000000ll) + w.ns;
+  }
+
+  //! #109: the residence time t3 - t2 for which the spec formula computes
+  //! exactly `d` from these stamps, the ratio window included (it reads t3)
+  uint64_t resid_for(uint64_t t1, uint64_t t2, uint64_t t4, int64_t d) {
+    uint64_t resid = 20000;
+    for (int k = 0; k < 8; k++) {
+      const PdelayModelState save = pdm;
+      model_exchange(t1, t2, t2 + resid, t4);
+      const int64_t got = pdm.d;
+      pdm = save;
+      if (got == d) break;
+      resid += static_cast<uint64_t>(2 * (got - d));
+    }
+    return resid;
+  }
   PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
   size_t pd_seen = 0;
   int pd_self_sent = 0;             // PD_SELF pairs actually sent
@@ -1074,10 +1117,11 @@ class GptpEngineHarness {
         continue;
       }
       uint64_t resid = 20000;              // D = +600 after correction
-      if (pd_mode == PD_NEG) resid = 21300;   // D ~ -49: the Milan floor
+      if (pd_mode == PD_NEG) resid = 21300;   // D ~ -49: Milan 4.2.6.2.7
       if (pd_mode == PD_FAR) resid = 19200;   // D ~ +1001: over threshold
       uint64_t t3 = t2 + resid;
       uint64_t t4 = t1 + 21200;
+      if (pd_mode == PD_SET) t3 = t2 + resid_for(t1, t2, t4, pd_target);
       if (pd_mode == PD_EDGE || pd_mode == PD_LATE) {
         // #100: a response P100_LATE_NS after its request, or 1 ns later.
         // At the bound its residence keeps the corrected delay at 600 ns;
@@ -1088,8 +1132,12 @@ class GptpEngineHarness {
         t4 = t1 + turn;
         t3 = t2 + (pdm.nrr != 0 ? (pdm.nrr * turn) >> 30 : turn) - trip;
       }
+      const bool wire = pd_mode == PD_WIRE;
+      if (wire) { t2 = wire_ns(pd_t2_wire); t3 = wire_ns(pd_t3_wire); }
       Frame f = ptp(0x3, seq, 0, 0x0200, 20);
-      f.ts(t2); f.u64(OUR_CID); f.u16(1);
+      if (wire) { f.u48(pd_t2_wire.sec); f.u32(pd_t2_wire.ns); }
+      else f.ts(t2);
+      f.u64(OUR_CID); f.u16(1);
       send_frame(f.b, t4);
       run(400);
       if (pd_mode == PD_NOFU) continue;   // the Follow_Up never comes
@@ -1105,7 +1153,9 @@ class GptpEngineHarness {
         run(400);
       }
       Frame g = ptp(0xA, seq, 0, 0x0000, 20);
-      g.ts(t3); g.u64(OUR_CID); g.u16(1);
+      if (wire) { g.u48(pd_t3_wire.sec); g.u32(pd_t3_wire.ns); }
+      else g.ts(t3);
+      g.u64(OUR_CID); g.u16(1);
       send_frame(g.b, t4 + 1000);
       run(400);
       if (pd_mode == PD_DUAL_LATE) {
@@ -2185,8 +2235,8 @@ class GptpEngineHarness {
   // else is ignored and neither neighborPropDelay nor the ladder moves.
   // The auto-peer is silenced so every frame is hand-built against the
   // DUT's own request; a wrongly consumed Follow_Up carries a t3 skewed
-  // +2 us, so the published delay would move by -1 us and the verdict
-  // would fall below the Milan floor (FPGA-gPTP #8)
+  // +2 us, so the published delay would move by -1 us (FPGA-gPTP #8); a
+  // negative delay keeps asCapable since #109, so the delay is the witness
   void pair_a_follow_up_only_with_the_outstanding_resp() {
     const uint64_t STRANGER = 0x00BAD0FFFE000002ull;
     pd_mode = PD_SKIP;
@@ -4492,7 +4542,9 @@ class GptpEngineHarness {
     }
   }
 
-  // ---- 22: negative pdelay inside the Milan floor is accepted -----------
+  // ---- 22: a negative pdelay inside Milan's -80..0 ns is accepted -------
+  // Milan v1.2 4.2.6.2.7's minimum tolerance; since #109 every negative
+  // delay is (phases 62 and 63), and this one is published as computed
   void accept_a_negative_delay_inside_the_milan_floor() {
     pd_mode = PD_NEG;
     {
@@ -4502,7 +4554,7 @@ class GptpEngineHarness {
     }
     expect("neg pdelay published", dut->pub_pdelay_ns_o,
            static_cast<uint32_t>(pdm.d));
-    expect("neg pdelay in floor",
+    expect("neg pdelay inside Milan's tolerance",
            pdm.d < 0 && pdm.d >= -80, 1);
     expect("neg keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
   }
@@ -8354,6 +8406,286 @@ class GptpEngineHarness {
     }
     p107_noise = 0;
   }
+  // ---- 62..64: #109, a negative computed link delay ----------------------
+  //! #109, phases 62 to 64, in file order
+  void run_the_negative_delay_phases() {
+    use_a_small_negative_delay_exactly();
+    floor_a_large_negative_delay_at_the_threshold();
+    judge_the_threshold_at_800_and_801();
+  }
+
+  //! the #109 grandmaster, announcing from its own port
+  static constexpr uint64_t P109_GM = 0x00A109FFFE000001ull;
+  static constexpr uint64_t P109_SRC = 0x00A109FFFE000002ull;
+  //! Milan v1.2 4.2.6.1.1 neighborPropDelayThresh, the floor's magnitude
+  static constexpr int64_t P109_THRESH = 800;
+  uint16_t p109_seq = 0xC001;
+  uint16_t p109_aseq = 0xC101;
+  int p109_k = 0;
+
+  //! the link delay the Sync path uses for a computed delay `d`: d itself,
+  //! floored at -800 ns (the manager's ruling on #109)
+  static int64_t p109_used(int64_t d) {
+    return d < -P109_THRESH ? -P109_THRESH : d;
+  }
+
+  //! what one #109 Sync/Follow_Up pair did on the PHC face and the publish
+  //! face: consumed is one addend pulse, stepped any step pulse
+  struct P109Pair { bool consumed; bool stepped; int32_t off; };
+
+  //! One #109 Sync/Follow_Up pair, received at our PHC's time less
+  //! `rx_early` ns (an ingress latency constant over-stated by that much)
+  //! and stamped so that the plane, subtracting the link delay `link`,
+  //! measures `off`: origin = rx - link - off
+  P109Pair p109_pair(int64_t link, int64_t off, int64_t rx_early = 0) {
+    const size_t s0 = steps_seen.size();
+    const size_t a0 = adj_seen.size();
+    const uint64_t local_rx = phc() + 150 - static_cast<uint64_t>(rx_early);
+    const uint64_t origin = local_rx - static_cast<uint64_t>(link) -
+                            static_cast<uint64_t>(off);
+    const uint16_t seq = p109_seq++;
+    Frame f = ptp(0x0, seq, 0, 0x0208, 10, P109_SRC);
+    f.ts(0);
+    send_frame(f.b, local_rx);
+    run(1000);
+    send_frame(follow_up(seq, 0, origin, P109_SRC).b, local_rx + 500);
+    run(4000);
+    return {adj_seen.size() == a0 + 1, steps_seen.size() != s0,
+            static_cast<int32_t>(dut->pub_offset_o)};
+  }
+
+  //! The #109 grandmaster's Announce, from its own port with the path
+  //! {grandmaster, port}: it refreshes the 3 s Announce receipt watch
+  void p109_announce() {
+    Frame a = ptp(0xB, p109_aseq++, 0, 0x0008, 30 + 4 + 16, P109_SRC);
+    for (int i = 0; i < 10; i++) a.u8(0);
+    a.u16(0xFFC4); a.u8(0);
+    a.u8(50); a.u32(OUR_CQ); a.u8(248);
+    a.u64(P109_GM);
+    a.u16(1); a.u8(0xA0);
+    a.u16(0x0008); a.u16(16); a.u64(P109_GM); a.u64(P109_SRC);
+    send_frame(a.b, phc() + 100);
+    run(4000);
+  }
+
+  //! the offset of every #109 pair but a graded one, which measures 0, so
+  //! a graded pair the plane does not use cannot leave its offset published
+  static constexpr int64_t P109_BG_OFF = 11;
+
+  //! One 125 ms interval of the #109 grandmaster: an Announce every eighth
+  //! interval, service, then, unless `until` exchanges have completed by
+  //! then, one pair built for the delay the plane should be using, at
+  //! offset P109_BG_OFF
+  void p109_interval(int until = 0x7FFFFFFF) {
+    if (p109_k++ % 8 == 0) p109_announce();
+    run_svc(250000);
+    if (pdm.count < until) p109_pair(p109_used(pdm.d), P109_BG_OFF);
+  }
+
+  bool p109_elected() {
+    return (dut->pub_flags_o & (FL_ASCAP | 3)) == (FL_ASCAP | FL_PRESENT) &&
+           dut->pub_gm_id_o == P109_GM;
+  }
+
+  //! Bring the port to a capable slave of the #109 grandmaster after two
+  //! ordinary exchanges (the second has an ordinary ratio window too), from
+  //! wherever the previous trial left it, so that each trial is graded from
+  //! the same state. True if so
+  bool p109_ready() {
+    pd_mode = PD_NORMAL;
+    const int base = pdm.count;
+    for (int k = 0; k < 120 && !(p109_elected() && pdm.count >= base + 2);
+         k++)
+      p109_interval();
+    for (int k = 0; k < 8; k++) p109_interval();   // a settled servo
+    return p109_elected() && pdm.count >= base + 2;
+  }
+
+  //! One #109 trial: from a capable slave, the peer's next response makes
+  //! the plane compute `d` (PD_SET) or fold `t2w`/`t3w` (PD_WIRE); the
+  //! intervals keep the grandmaster's Announce and Sync flowing until that
+  //! exchange completes, and the peer answers normally afterwards. True if
+  //! the exchange ran
+  bool p109_exchange(const char *tag, PdMode mode, int64_t d,
+                     WireTs t2w = {0, 0}, WireTs t3w = {0, 0}) {
+    char n[160];
+    snprintf(n, sizeof n, "%s: runs from a capable slave", tag);
+    expect(n, p109_ready(), 1);
+    pd_target = d;
+    pd_t2_wire = t2w;
+    pd_t3_wire = t3w;
+    const int base = pdm.count;
+    pd_mode = mode;
+    for (int k = 0; k < 24 && pdm.count == base; k++)
+      p109_interval(base + 1);
+    pd_mode = PD_NORMAL;
+    run(4000);
+    snprintf(n, sizeof n, "%s: the exchange ran", tag);
+    expect(n, pdm.count, base + 1);
+    return pdm.count == base + 1;
+  }
+
+  //! The grades of a delay the plane must accept: asCapable kept, the
+  //! published (engine) delay is the used one, the next Follow_Up is used
+  //! with `want_link` and measures exactly `want_off` with no step pulse, and
+  //! the grandmaster stays elected through its next Announce
+  void p109_expect_kept(const char *tag, int64_t want_link, int64_t want_off,
+                        int64_t rx_early = 0, int64_t built_link = INT64_MIN) {
+    char n[160];
+    snprintf(n, sizeof n, "%s: asCapable kept", tag);
+    expect(n, dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+    snprintf(n, sizeof n, "%s: the engine publishes the used delay", tag);
+    expect(n, dut->pub_pdelay_ns_o, static_cast<uint32_t>(want_link));
+    const P109Pair pr =
+        p109_pair(built_link == INT64_MIN ? want_link : built_link, 0,
+                  rx_early);
+    snprintf(n, sizeof n, "%s: the next Follow_Up is used", tag);
+    expect(n, pr.consumed, 1);
+    snprintf(n, sizeof n, "%s: its offset uses the delay exactly", tag);
+    expect(n, static_cast<uint32_t>(pr.off), static_cast<uint32_t>(want_off));
+    snprintf(n, sizeof n, "%s: no PHC step", tag);
+    expect(n, pr.stepped, 0);
+    p109_announce();
+    snprintf(n, sizeof n, "%s: the grandmaster stays elected", tag);
+    expect(n, p109_elected(), 1);
+  }
+
+  // ---- 62: #109, a small negative delay is used exactly ------------------
+  // Milan v1.2 4.2.6.2.7 only requires -80..0 ns to keep asCapable, and no
+  // clause of 802.1AS clears it for a negative delay: 11.2.2 and Figure
+  // 11-8 clear it when the delay EXCEEDS neighborPropDelayThresh. The owner
+  // asked for every negative delay to keep asCapable. The delay enters the
+  // Sync path signed (the manager's ruling): the next Follow_Up's offset is
+  // rx - (origin + correction + D), so -3, -80, -81 and -263 ns (the
+  // board's value) each keep asCapable and are subtracted exactly. Then a
+  // link of 100 ns whose two latency constants are both over-stated by
+  // 400 ns: the plane computes -300 ns, its Sync arrives stamped 400 ns
+  // early, and the true offset, 0, is measured exactly; a delay clamped to
+  // 0 would leave a 300 ns error
+  void use_a_small_negative_delay_exactly() {
+    pd_mode = PD_NORMAL;
+    auto_txts = true;
+    expect("#109 runs from a capable port",
+           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
+    const int64_t ds[] = {-3, -80, -81, -263};
+    for (const int64_t d : ds) {
+      char tag[64];
+      snprintf(tag, sizeof tag, "#109 D %lld", static_cast<long long>(d));
+      if (!p109_exchange(tag, PD_SET, d)) continue;
+      char n[160];
+      snprintf(n, sizeof n, "%s: the plane computes it", tag);
+      expect(n, static_cast<uint64_t>(pdm.d), static_cast<uint64_t>(d));
+      p109_expect_kept(tag, d, 0);
+    }
+    // the over-stated constants: true link L = 100 ns, each of the egress
+    // and ingress constants 400 ns too large, so t4 - t1 is 800 ns short
+    // and the computed delay is L - 400; the true offset is 0
+    const char *tag = "#109 latency constants over-stated by 400 ns";
+    const int64_t L = 100;
+    const int64_t E = 400;
+    if (p109_exchange(tag, PD_SET, L - E)) {
+      char n[160];
+      snprintf(n, sizeof n, "%s: the plane computes L - 400", tag);
+      expect(n, static_cast<uint64_t>(pdm.d), static_cast<uint64_t>(L - E));
+      // the Sync's true arrival is phc() + 150; it is stamped E early, and
+      // the master's origin is true arrival - L (offset 0): built as the
+      // stamped arrival less (L - E), the computed delay
+      p109_expect_kept(tag, L - E, 0, E, L - E);
+    }
+  }
+
+  // ---- 63: #109, a large negative delay is floored at -800 ns ------------
+  // With every negative delay accepted, a wrong compensation or a faulty
+  // peer could inject an arbitrarily negative delay and step the clock; the
+  // Sync path floors it at -neighborPropDelayThresh and never rejects the
+  // exchange (the manager's ruling). -800 is used as itself, -801 and -5 ms
+  // as -800, and so is the most negative delay the datapath can compute
+  // from the wire: t2's seconds field 0x80000000 (the fold takes its low 32
+  // bits signed) and t3 the largest fold, 0x7FFFFFFF s and 2^32 - 1 ns.
+  // Each keeps asCapable and steps nothing
+  void floor_a_large_negative_delay_at_the_threshold() {
+    const int64_t ds[] = {-800, -801, -5000000};
+    for (const int64_t d : ds) {
+      char tag[64];
+      snprintf(tag, sizeof tag, "#109 D %lld", static_cast<long long>(d));
+      if (!p109_exchange(tag, PD_SET, d)) continue;
+      char n[160];
+      snprintf(n, sizeof n, "%s: the plane computes it", tag);
+      expect(n, static_cast<uint64_t>(pdm.d), static_cast<uint64_t>(d));
+      p109_expect_kept(tag, -P109_THRESH, 0);
+    }
+    const char *tag = "#109 the most negative delay of the wire";
+    const WireTs t2w{0x80000000ull, 0u};
+    const WireTs t3w{0x7FFFFFFFull, 0xFFFFFFFFu};
+    if (p109_exchange(tag, PD_WIRE, 0, t2w, t3w)) {
+      // t3 - t2 = (2^32 - 1)(1e9 + 1), the widest the fold allows, and the
+      // correction is never negative, so no delay is more negative than
+      // -(t3 - t2) / 2
+      const int64_t bound = -2147483649647483648ll;
+      printf("INFO %s: computed %lld ns, the wire's bound %lld ns\n", tag,
+             static_cast<long long>(pdm.d), static_cast<long long>(bound));
+      char n[160];
+      snprintf(n, sizeof n, "%s: the plane computes below -2^60 ns", tag);
+      expect(n, pdm.d >= bound && pdm.d < -(1ll << 60), 1);
+      p109_expect_kept(tag, -P109_THRESH, 0);
+    }
+  }
+
+  // ---- 64: #109, the +800 ns threshold is unchanged ----------------------
+  // 800 ns keeps asCapable and is used; 801 ns exceeds
+  // neighborPropDelayThresh (Milan v1.2 4.2.6.1.1), so the exchange is bad:
+  // asCapable falls, and the next Follow_Up is not used and steps nothing.
+  // So is the most positive delay the wire can make the datapath compute,
+  // the mirror of phase 63's (t2 the largest fold, t3's seconds field
+  // 0x80000000): the verdict reads the sign of the whole 64-bit D - 801,
+  // and a narrower one would judge such a delay good
+  void judge_the_threshold_at_800_and_801() {
+    {
+      const char *tag = "#109 D 800";
+      if (p109_exchange(tag, PD_SET, P109_THRESH)) {
+        char n[160];
+        snprintf(n, sizeof n, "%s: the plane computes it", tag);
+        expect(n, static_cast<uint64_t>(pdm.d), 800);
+        p109_expect_kept(tag, P109_THRESH, 0);
+      }
+    }
+    const char *tag = "#109 D 801";
+    if (p109_exchange(tag, PD_SET, P109_THRESH + 1)) {
+      char n[160];
+      snprintf(n, sizeof n, "%s: the plane computes it", tag);
+      expect(n, static_cast<uint64_t>(pdm.d), 801);
+      snprintf(n, sizeof n, "%s: asCapable falls", tag);
+      expect(n, dut->pub_flags_o & FL_ASCAP, 0);
+      const P109Pair pr = p109_pair(P109_THRESH + 1, 0);
+      snprintf(n, sizeof n, "%s: the next Follow_Up is not used", tag);
+      expect(n, pr.consumed || pr.stepped, 0);
+    }
+    expect("#109 capable again after 801", p109_ready(), 1);
+    judge_the_most_positive_delay_of_the_wire();
+  }
+
+  //! #109: the most positive delay the wire can make the datapath compute
+  //! is a bad exchange
+  void judge_the_most_positive_delay_of_the_wire() {
+    const char *tag = "#109 the most positive delay of the wire";
+    const WireTs t2w{0x7FFFFFFFull, 0xFFFFFFFFu};
+    const WireTs t3w{0x80000000ull, 0u};
+    if (p109_exchange(tag, PD_WIRE, 0, t2w, t3w)) {
+      printf("INFO %s: computed %lld ns\n", tag,
+             static_cast<long long>(pdm.d));
+      char n[160];
+      snprintf(n, sizeof n, "%s: the plane computes above 2^60 ns", tag);
+      expect(n, pdm.d > (1ll << 60), 1);
+      snprintf(n, sizeof n, "%s: asCapable falls", tag);
+      expect(n, dut->pub_flags_o & FL_ASCAP, 0);
+      const P109Pair pr = p109_pair(P109_THRESH, 0);
+      snprintf(n, sizeof n, "%s: the next Follow_Up is not used", tag);
+      expect(n, pr.consumed || pr.stepped, 0);
+    }
+    expect("#109 capable again after the most positive delay", p109_ready(),
+           1);
+  }
+
 };
 
 }  // namespace

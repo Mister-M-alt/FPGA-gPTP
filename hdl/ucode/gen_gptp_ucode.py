@@ -573,7 +573,6 @@ UTC_OFF_C = 37
 
 # ---- Milan v1.2 profile numbers --------------------------------------------
 NPD_HI_C = 800                  # neighborPropDelayThresh ns, 4.2.6.1.1
-NPD_LO_C = 80                   # negative-delay floor ns, 4.2.6.2.7
 ASCAP_UP_C = 2                  # exchanges to asCapable, 4.2.6.2.4 in [2,5]
 LOST_N_C = 3                    # allowedLostResponses, 802.1AS-2011 11.5.3
 # Figure 11-8 RESET increments lostResponses while it is at most
@@ -2237,8 +2236,17 @@ def _pdpost_neighbor_rate_ratio(p):
 
 
 def _pdpost_corrected_delay(p):
-    """The published link delay: D = (nrr*(t4-t1) - (t3-t2)) / 2, with
-    turn = t4 - t1 in RW from the late-response check."""
+    """The link delay: D = (nrr*(t4-t1) - (t3-t2)) / 2, with turn = t4 - t1
+    in RW from the late-response check, floored at -NPD_HI_C.
+
+    #109, the manager's ruling: D enters the Sync path signed, because the
+    computation (802.1AS-2020 11.2.19.3.4) has no clamp and the same value
+    enters the Sync receipt time (11.2.14.2.1), so latency constants that
+    are both over-stated by the same amount cancel in the offset. The floor
+    bounds what a wrong compensation or a faulty peer can inject; it never
+    rejects the exchange. The floored value is also the one published: it
+    is signed, and the parent's public bank clamps a negative to 0, which a
+    D below -2^31 could not reach through this 32-bit word unfloored."""
     p.emit("RDST", rd=RV, imm=RG_SCR | S_NRR, fmt=FMT_Q)
     p.emit("CMP", ra=RV, rb=0, fmt=FMT_Q, imm=0)
     p.emit("BRS", cnd=BRS_Z, label="uncorr")         # no ratio yet
@@ -2249,28 +2257,34 @@ def _pdpost_corrected_delay(p):
     p.emit("ALU", rd=RC, ra=RC, rb=RT, cnd=ALU_SUB)  # resid = t3 - t2
     p.emit("ALU", rd=RD_, ra=RW, rb=RC, cnd=ALU_SUB)
     p.emit("ALU", rd=RD_, ra=RD_, rb=0, cnd=ALU_SAR, imm=1)
+    # D = max(D, -NPD_HI_C), branch-free: with m = (D + NPD_HI_C) >>arith
+    # 63, all ones exactly when D is below the floor, D -= (D + NPD_HI_C) & m.
+    # |D| < 2^62 (an arithmetic halving), so the sum cannot overflow
+    p.emit("ALU", rd=RT, ra=RD_, rb=0, cnd=ALU_ADD, imm=NPD_HI_C)
+    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SAR, imm=63)
+    p.emit("ALU", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)
+    p.emit("ALU", rd=RD_, ra=RD_, rb=RT, cnd=ALU_SUB)
     p.emit("WRST", ra=RD_, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
     p.emit("WRST", ra=RD_, imm=RG_PUB | 3, fmt=FMT_Q)
 
 
 def _pdpost_verdict(p):
-    """The threshold verdict and the asCapable ladder: good iff
-    -80 <= D <= 800, i.e. (D + 80) u<= 880. The one asCapable setter, so
-    it also arms the #68 link-up, and nothing else does: a rise, which it
-    tells by finding the flag clear, writes S_LOCK zero (see the invariant
-    at the scratch map).
+    """The threshold verdict and the asCapable ladder: good iff D <= 800,
+    i.e. the sign of D - 801 is set. #109: a negative delay of any
+    magnitude is a good exchange. Milan v1.2 4.2.6.2.7 sets only a minimum
+    tolerance (-80..0 ns shall not clear asCapable); 802.1AS-2011 11.2.2
+    and Figure 11-8, and 802.1AS-2020 11.2.2 and 11.2.13.7, clear asCapable
+    only when the delay EXCEEDS neighborPropDelayThresh. The one asCapable
+    setter, so it also arms the #68 link-up, and nothing else does: a rise,
+    which it tells by finding the flag clear, writes S_LOCK zero (see the
+    invariant at the scratch map).
     Both verdicts mark the exchange answered, so that write leads."""
     p.emit("MOVE", rd=RT, ra=0, imm=1)
     p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)  # it DID answer
-    p.emit("ALU", rd=RT, ra=RD_, rb=0, cnd=ALU_ADD, imm=NPD_LO_C)
-    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
-    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
-    p.emit("BRS", cnd=BRS_Z, label="lowck")
-    p.emit("BR", label="bad")
-    p.label("lowck")
-    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=NPD_HI_C + NPD_LO_C + 1)
-    p.emit("BRS", cnd=BRS_LT, label="good")
-    p.emit("BR", label="bad")
+    p.emit("ALU", rd=RT, ra=RD_, rb=0, cnd=ALU_SUB, imm=NPD_HI_C + 1)
+    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SHR, imm=63)
+    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
+    p.emit("BRS", cnd=BRS_Z, label="bad")            # D - 801 >= 0
     p.label("good")
     # lostResponses restarts at the next beat, its only reader, which finds
     # S_PDGOT set by either verdict (#90); no completion outlives that beat
