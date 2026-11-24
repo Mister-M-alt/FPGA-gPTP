@@ -1,0 +1,4 @@
+command: $VALIDATION_TOOLS/pinned-verilator-5.050/verilator --cc --exe --top-module KL_gptp_engine -Wall -Wno-fatal -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDPARAM -GUCODE_HEX_P="gptp_ucode.hex" -GCLK_HZ_P=2000000 --Mdir $REVIEWS/gptp109-r922-1-packet/scratch/obj -CFLAGS -std=c++17 -O2 -I$REVIEWS/gptp109-r922-1-packet/scratch/head/tb/verilator/engine -Wall -Wextra ucpu/gptp_ucpu_pkg.sv ucpu/KL_gptp_ucpu.sv wire/KL_gptp_rx_parser.sv wire/KL_gptp_tx_slot.sv common/KL_gptp_timer.sv top/KL_gptp_engine.sv $REVIEWS/gptp109-r922-1-packet/scratch/head/tb/verilator/engine/sim_main.cpp -o Vreview
+- V e r i l a t i o n   R e p o r t: Verilator 5.050 2026-07-01 rev v5.050
+- Verilator: Built from 0.413 MB sources in 7 modules, into 0.441 MB in 6 C++ files needing 0.001 MB
+- Verilator: Walltime 0.419 s (elab=0.039, cvt=0.257, bld=0.000); cpu 0.113 s on 1 threads; allocated 24.387 MB

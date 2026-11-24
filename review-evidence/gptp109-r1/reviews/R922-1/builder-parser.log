@@ -1,0 +1,3 @@
+1213ac5b9e09b8759ba76cc70c53652b5e108996 (1, {'priority2': 248, 'clock_class': 248, 'offset_scaled_log_variance': 17258, 'log_sync_interval': -3, 'log_announce_interval': 0, 'log_pdelay_interval': 0})
+8e4889bba462d14d4e5a34068769872510d4775d (1, {'priority2': 248, 'clock_class': 248, 'offset_scaled_log_variance': 17258, 'log_sync_interval': -3, 'log_announce_interval': 0, 'log_pdelay_interval': 0})
+PASS: retiring NPD_LO_C leaves the parent parsed dataset unchanged. Focused function execution only; no builder bank.

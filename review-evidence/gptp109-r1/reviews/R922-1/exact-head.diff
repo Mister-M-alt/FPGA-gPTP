@@ -1,0 +1,844 @@
+diff --git a/docs/INTEGRATION.md b/docs/INTEGRATION.md
+index e8d927e..2f5476b 100644
+--- a/docs/INTEGRATION.md
++++ b/docs/INTEGRATION.md
+@@ -951,6 +951,46 @@ Its asCapable recommendation is deliberately not taken.
+ 
+ A late pair moves no delay, ratio or ladder.
+ 
++### Link delay verdict
++
++Values here come from the [protocol constants](#protocol-constants).
++
++A completed exchange computes the mean link delay D.
++
++D above [`NPD_HI_C`](#protocol-constants) is a bad exchange.
++
++802.1AS-2011 Figure 11-8 then clears asCapable at once.
++
++Every other D is a good exchange, however negative (#109).
++
++Milan requires only a minimum negative tolerance.
++
++See Milan v1.2 4.2.6.2.7.
++
++802.1AS clears asCapable only above the threshold.
++
++See 802.1AS-2020 11.2.2.
++
++The engine floors D at minus [`NPD_HI_C`](#protocol-constants).
++
++The Sync path subtracts the floored D, signed.
++
++That follows 11.2.13.2.1 f).
++
++Equally over-stated latency constants then cancel in the offset.
++
++The floor bounds what a faulty peer can inject.
++
++`pub_pdelay_ns_o` carries the same floored, signed value.
++
++Unfloored, a large negative D could wrap its sign.
++
++The parent clamps a negative published value to zero.
++
++So the published and used values differ by design.
++
++[The manager's ruling](https://github.com/Mister-M-alt/FPGA-gPTP/issues/109#issuecomment-7123290416) sets the floor and the signed use.
++
+ ### Follow_Up information TLV
+ 
+ A grandmaster's Follow_Up carries this plane's own TLV values.
+@@ -1041,7 +1081,6 @@ Clauses without a prefix are IEEE 802.1AS-2011.
+ | `LOST_N_C` | 3 | allowedLostResponses | 11.5.3 |
+ | `LOST_CLEARS_AT_C` | 5 | Consecutive lost response that clears asCapable | 11.2.15, Figure 11-8 |
+ | `NPD_HI_C` | 800 | neighborPropDelayThresh, ns | Milan 4.2.6.1.1 |
+-| `NPD_LO_C` | 80 | Largest tolerated negative delay magnitude, ns | Milan 4.2.6.2.7 |
+ | `SYNC_RTO_MS_C` | 375 | syncReceiptTimeout, ms | Milan 4.2.6.2.3, Table 4.2 |
+ | `FU_RTO_MS_C` | 125 | followUpReceiptTimeout, ms | Milan 4.2.6.2.3, Table 4.2 |
+ | `CEASE_N_C` | 3 | Successive multi-answered requests before the cease | Milan 4.2.6.2.5 |
+diff --git a/docs/SOURCE_EVIDENCE.md b/docs/SOURCE_EVIDENCE.md
+index 1b802af..61574ee 100644
+--- a/docs/SOURCE_EVIDENCE.md
++++ b/docs/SOURCE_EVIDENCE.md
+@@ -28,7 +28,7 @@ Line numbers describe the current branch layout.
+ | Python image generation | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
+ | Media-dependent transmit flags | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine and tsngen suites |
+ | Step-versus-slew policy | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
+-| Registered policy slew level | [Port](../hdl/top/KL_gptp_engine.sv#L125), [word 2](../hdl/top/KL_gptp_engine.sv#L1278), [word 3](../hdl/top/KL_gptp_engine.sv#L1283), [policy](../hdl/ucode/gen_gptp_ucode.py#L1116) | Engine suite and named mutation controls |
++| Registered policy slew level | [Port](../hdl/top/KL_gptp_engine.sv#L125), [word 2](../hdl/top/KL_gptp_engine.sv#L1278), [word 3](../hdl/top/KL_gptp_engine.sv#L1283), [policy](../hdl/ucode/gen_gptp_ucode.py#L1115) | Engine suite and named mutation controls |
+ | PHC rate envelope | [`gen_gptp_ucode.py`](../hdl/ucode/gen_gptp_ucode.py) | Engine suite |
+ | Ignored receive flag bits | [`KL_gptp_rx_parser`](../hdl/wire/KL_gptp_rx_parser.sv#L521) | Engine suite |
+ | C++ test harnesses | [`tb/verilator`](../tb/verilator) | `make` |
+diff --git a/hdl/ucode/gen_gptp_ucode.py b/hdl/ucode/gen_gptp_ucode.py
+index ce7b6ed..917335f 100755
+--- a/hdl/ucode/gen_gptp_ucode.py
++++ b/hdl/ucode/gen_gptp_ucode.py
+@@ -573,7 +573,6 @@ UTC_OFF_C = 37
+ 
+ # ---- Milan v1.2 profile numbers --------------------------------------------
+ NPD_HI_C = 800                  # neighborPropDelayThresh ns, 4.2.6.1.1
+-NPD_LO_C = 80                   # negative-delay floor ns, 4.2.6.2.7
+ ASCAP_UP_C = 2                  # exchanges to asCapable, 4.2.6.2.4 in [2,5]
+ LOST_N_C = 3                    # allowedLostResponses, 802.1AS-2011 11.5.3
+ # Figure 11-8 RESET increments lostResponses while it is at most
+@@ -2237,8 +2236,17 @@ def _pdpost_neighbor_rate_ratio(p):
+ 
+ 
+ def _pdpost_corrected_delay(p):
+-    """The published link delay: D = (nrr*(t4-t1) - (t3-t2)) / 2, with
+-    turn = t4 - t1 in RW from the late-response check."""
++    """The link delay: D = (nrr*(t4-t1) - (t3-t2)) / 2, with turn = t4 - t1
++    in RW from the late-response check, floored at -NPD_HI_C.
++
++    #109, the manager's ruling: D enters the Sync path signed, because the
++    computation (802.1AS-2020 11.2.19.3.4) has no clamp and the same value
++    enters the Sync receipt time (11.2.14.2.1), so latency constants that
++    are both over-stated by the same amount cancel in the offset. The floor
++    bounds what a wrong compensation or a faulty peer can inject; it never
++    rejects the exchange. The floored value is also the one published: it
++    is signed, and the parent's public bank clamps a negative to 0, which a
++    D below -2^31 could not reach through this 32-bit word unfloored."""
+     p.emit("RDST", rd=RV, imm=RG_SCR | S_NRR, fmt=FMT_Q)
+     p.emit("CMP", ra=RV, rb=0, fmt=FMT_Q, imm=0)
+     p.emit("BRS", cnd=BRS_Z, label="uncorr")         # no ratio yet
+@@ -2249,28 +2257,34 @@ def _pdpost_corrected_delay(p):
+     p.emit("ALU", rd=RC, ra=RC, rb=RT, cnd=ALU_SUB)  # resid = t3 - t2
+     p.emit("ALU", rd=RD_, ra=RW, rb=RC, cnd=ALU_SUB)
+     p.emit("ALU", rd=RD_, ra=RD_, rb=0, cnd=ALU_SAR, imm=1)
++    # D = max(D, -NPD_HI_C), branch-free: with m = (D + NPD_HI_C) >>arith
++    # 63, all ones exactly when D is below the floor, D -= (D + NPD_HI_C) & m.
++    # |D| < 2^62 (an arithmetic halving), so the sum cannot overflow
++    p.emit("ALU", rd=RT, ra=RD_, rb=0, cnd=ALU_ADD, imm=NPD_HI_C)
++    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SAR, imm=63)
++    p.emit("ALU", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)
++    p.emit("ALU", rd=RD_, ra=RD_, rb=RT, cnd=ALU_SUB)
+     p.emit("WRST", ra=RD_, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)
+     p.emit("WRST", ra=RD_, imm=RG_PUB | 3, fmt=FMT_Q)
+ 
+ 
+ def _pdpost_verdict(p):
+-    """The threshold verdict and the asCapable ladder: good iff
+-    -80 <= D <= 800, i.e. (D + 80) u<= 880. The one asCapable setter, so
+-    it also arms the #68 link-up, and nothing else does: a rise, which it
+-    tells by finding the flag clear, writes S_LOCK zero (see the invariant
+-    at the scratch map).
++    """The threshold verdict and the asCapable ladder: good iff D <= 800,
++    i.e. the sign of D - 801 is set. #109: a negative delay of any
++    magnitude is a good exchange. Milan v1.2 4.2.6.2.7 sets only a minimum
++    tolerance (-80..0 ns shall not clear asCapable); 802.1AS-2011 11.2.2
++    and Figure 11-8, and 802.1AS-2020 11.2.2 and 11.2.13.7, clear asCapable
++    only when the delay EXCEEDS neighborPropDelayThresh. The one asCapable
++    setter, so it also arms the #68 link-up, and nothing else does: a rise,
++    which it tells by finding the flag clear, writes S_LOCK zero (see the
++    invariant at the scratch map).
+     Both verdicts mark the exchange answered, so that write leads."""
+     p.emit("MOVE", rd=RT, ra=0, imm=1)
+     p.emit("WRST", ra=RT, imm=RG_SCR | S_PDGOT, fmt=FMT_Q)  # it DID answer
+-    p.emit("ALU", rd=RT, ra=RD_, rb=0, cnd=ALU_ADD, imm=NPD_LO_C)
+-    p.emit("ALU", rd=RU, ra=RT, rb=0, cnd=ALU_SHR, imm=32)
+-    p.emit("CMP", ra=RU, rb=0, fmt=FMT_D, imm=0)
+-    p.emit("BRS", cnd=BRS_Z, label="lowck")
+-    p.emit("BR", label="bad")
+-    p.label("lowck")
+-    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=NPD_HI_C + NPD_LO_C + 1)
+-    p.emit("BRS", cnd=BRS_LT, label="good")
+-    p.emit("BR", label="bad")
++    p.emit("ALU", rd=RT, ra=RD_, rb=0, cnd=ALU_SUB, imm=NPD_HI_C + 1)
++    p.emit("ALU", rd=RT, ra=RT, rb=0, cnd=ALU_SHR, imm=63)
++    p.emit("CMP", ra=RT, rb=0, fmt=FMT_D, imm=0)
++    p.emit("BRS", cnd=BRS_Z, label="bad")            # D - 801 >= 0
+     p.label("good")
+     # lostResponses restarts at the next beat, its only reader, which finds
+     # S_PDGOT set by either verdict (#90); no completion outlives that beat
+diff --git a/scripts/check_docs.py b/scripts/check_docs.py
+index 3eb06c1..b496cda 100644
+--- a/scripts/check_docs.py
++++ b/scripts/check_docs.py
+@@ -117,7 +117,7 @@ CONSTANT_ROW_RE = re.compile(r"^\|\s*`([A-Za-z_][A-Za-z0-9_]*)`\s*\|\s*([^|]*?)\
+ DECIMAL_RE = re.compile(r"[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+")
+ CONSTANTS = (
+     "P1_C", "ASCAP_UP_C", "LOST_N_C", "LOST_CLEARS_AT_C", "NPD_HI_C",
+-    "NPD_LO_C", "SYNC_RTO_MS_C", "FU_RTO_MS_C", "CEASE_N_C", "CEASE_MS_C",
++    "SYNC_RTO_MS_C", "FU_RTO_MS_C", "CEASE_N_C", "CEASE_MS_C",
+     "STEP_LINKUP_NS_C", "STEP_LOCKED_NS_C", "SLEW_SETTLED_NS_C", "RATE_PPM_C",
+     "DEPTH", "ROM_CID_HI_C", "ROM_GMCAP_BIT_C",
+ )
+diff --git a/syn/ooc/work/gptp_ucode.hex b/syn/ooc/work/gptp_ucode.hex
+index 3b11fcf..d24c078 100644
+--- a/syn/ooc/work/gptp_ucode.hex
++++ b/syn/ooc/work/gptp_ucode.hex
+@@ -664,18 +664,18 @@ EDD80600001E
+ E99A81000000
+ EA5981000000
+ EA2007000001
++EAA000000320
++EB280700003F
++EAAB02000000
++EA2281000000
+ 482030020004
+ 482030030003
+ 228000000001
+ 48283002000B
+-EAA000000050
+-EB2806000020
+-283020000000
+-1000020002A3
+-0800000002B4
+-282820000371
+-1000030002A6
+-0800000002B4
++EAA001000321
++EAA80600003F
++282820000000
++1000020002B4
+ 428030020007
+ EAA800000001
+ 482830020007
+diff --git a/tb/tsngen/gptp_ucode.hex b/tb/tsngen/gptp_ucode.hex
+index 649ada9..89dcfc3 100644
+--- a/tb/tsngen/gptp_ucode.hex
++++ b/tb/tsngen/gptp_ucode.hex
+@@ -664,18 +664,18 @@ EDD80600001E
+ E99A81000000
+ EA5981000000
+ EA2007000001
++EAA000000320
++EB280700003F
++EAAB02000000
++EA2281000000
+ 482030020004
+ 482030030003
+ 228000000001
+ 48283002000B
+-EAA000000050
+-EB2806000020
+-283020000000
+-1000020002A3
+-0800000002B4
+-282820000371
+-1000030002A6
+-0800000002B4
++EAA001000321
++EAA80600003F
++282820000000
++1000020002B4
+ 428030020007
+ EAA800000001
+ 482830020007
+diff --git a/tb/verilator/engine/gptp_ucode.hex b/tb/verilator/engine/gptp_ucode.hex
+index d2025c9..d14eb5b 100644
+--- a/tb/verilator/engine/gptp_ucode.hex
++++ b/tb/verilator/engine/gptp_ucode.hex
+@@ -664,18 +664,18 @@ EDD80600001E
+ E99A81000000
+ EA5981000000
+ EA2007000001
++EAA000000320
++EB280700003F
++EAAB02000000
++EA2281000000
+ 482030020004
+ 482030030003
+ 228000000001
+ 48283002000B
+-EAA000000050
+-EB2806000020
+-283020000000
+-1000020002A3
+-0800000002B4
+-282820000371
+-1000030002A6
+-0800000002B4
++EAA001000321
++EAA80600003F
++282820000000
++1000020002B4
+ 428030020007
+ EAA800000001
+ 482830020007
+diff --git a/tb/verilator/engine/mutants.py b/tb/verilator/engine/mutants.py
+index bee38bb..5e7099d 100644
+--- a/tb/verilator/engine/mutants.py
++++ b/tb/verilator/engine/mutants.py
+@@ -93,6 +93,7 @@ from port_mutants import PORT_MUTATIONS  # noqa: E402
+ from p100_mutants import P100_MUTATIONS  # noqa: E402
+ from p106_mutants import P106_MUTATIONS  # noqa: E402
+ from p107_mutants import P107_MUTATIONS  # noqa: E402
++from p109_mutants import P109_MUTATIONS  # noqa: E402
+ from path_mutants import PATH_MUTATIONS  # noqa: E402
+ 
+ #: the RTL the suite builds, in the order the Makefile lists it
+@@ -540,6 +541,7 @@ MUTATIONS = [
+     *PORT_MUTATIONS,                                  # #94: port_mutants.py
+     *P100_MUTATIONS,                                  # #100: p100_mutants.py
+     *P106_MUTATIONS, *P107_MUTATIONS,                 # p106/p107_mutants.py
++    *P109_MUTATIONS,                                  # #109: p109_mutants.py
+     ("dispatch ignores a busy serializer", "top/KL_gptp_engine.sv",
+      "                 disp_ready_w && ser_idle_w && !disp_valid_r;",
+      "                 disp_ready_w && !disp_valid_r;",
+@@ -691,7 +693,7 @@ def named_verdict(answer: str, breaks: str, output: str,
+     # same reason: each of those checks needs its own failing defect.
+     if breaks.startswith(("#82 ", "#84 ", "#85 ", "#87 ", "#88 ", "#89 ",
+                           "#90 ", "#91 ", "#94 ", "#100 ", "#106 ", "#107 ",
+-                          P1_PREFIX)) and answer == "caught":
++                          "#109 ", P1_PREFIX)) and answer == "caught":
+         failed = [line for line in output.splitlines()
+                   if line.startswith("FAIL ")]
+         missed = [want for want in breaks.split(" | ")
+diff --git a/tb/verilator/engine/p109_mutants.py b/tb/verilator/engine/p109_mutants.py
+new file mode 100644
+index 0000000..d0a7717
+--- /dev/null
++++ b/tb/verilator/engine/p109_mutants.py
+@@ -0,0 +1,109 @@
++# SPDX-FileCopyrightText: 2026 Kebag Logic
++# SPDX-License-Identifier: CERN-OHL-W-2.0
++"""The #109 controls of the engine mutation arm (`mutants.py`).
++
++FPGA-gPTP #109: a negative computed link delay of any magnitude is a good
++exchange toward asCapable (Milan v1.2 4.2.6.2.7 sets only a minimum
++tolerance; 802.1AS clears asCapable only above neighborPropDelayThresh),
++and, by the manager's ruling, the Sync path and the engine's publication
++keep that delay signed, floored at -NPD_HI_C. The parent's public bank is
++the only clamp to 0. Each control here lists, after its issue number,
++every named check it must fail. `mutants.py` runs them with the rest of
++the arm.
++
++The table lives in its own module so that the arm stays under the parent
++repository's module length ratchet. It is data only.
++"""
++
++from receipt_mutants import GENERATOR
++
++#: the floor of the delay the Sync path uses, D = max(D, -NPD_HI_C)
++FLOOR = ("    p.emit(\"ALU\", rd=RT, ra=RD_, rb=0, cnd=ALU_ADD, imm=NPD_HI_C)\n"
++         "    p.emit(\"ALU\", rd=RU, ra=RT, rb=0, cnd=ALU_SAR, imm=63)\n"
++         "    p.emit(\"ALU\", rd=RT, ra=RT, rb=RU, cnd=ALU_AND)\n"
++         "    p.emit(\"ALU\", rd=RD_, ra=RD_, rb=RT, cnd=ALU_SUB)\n")
++#: the two writes of the floored delay: the Sync path's, then the publication
++USED = "    p.emit(\"WRST\", ra=RD_, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)\n"
++PUB = "    p.emit(\"WRST\", ra=RD_, imm=RG_PUB | 3, fmt=FMT_Q)\n"
++#: the threshold verdict: bad iff D - (NPD_HI_C + 1) is not negative
++VERDICT = ("    p.emit(\"ALU\", rd=RT, ra=RD_, rb=0, cnd=ALU_SUB,"
++           " imm=NPD_HI_C + 1)\n"
++           "    p.emit(\"ALU\", rd=RT, ra=RT, rb=0, cnd=ALU_SHR, imm=63)\n"
++           "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=0)\n"
++           "    p.emit(\"BRS\", cnd=BRS_Z, label=\"bad\")"
++           "            # D - 801 >= 0\n")
++
++
++def kept(*ds: str) -> str:
++    """The asCapable checks of the #109 trials named by `ds`."""
++    return " | ".join(f"#109 {d}: asCapable kept" for d in ds)
++
++
++#: the trials a floor at -80 ns, the defect #109 repairs, must fail
++BELOW_80 = ("D -81", "D -263", "latency constants over-stated by 400 ns",
++            "D -800", "D -801", "D -5000000",
++            "the most negative delay of the wire")
++EXACT = "its offset uses the delay exactly"
++OVER = "#109 latency constants over-stated by 400 ns"
++
++#: (name, file under hdl/, pattern, replacement, the checks it must fail);
++#: a replacement of None makes the pattern a list of pairs
++P109_MUTATIONS = [
++    # word-neutral: the defect #109 repairs, a delay below -80 ns is a bad
++    # exchange. (D + 80) u< 881 on the low 32 bits, as 1213ac5b judged it
++    ("a delay below -80 ns is a bad exchange", GENERATOR,
++     VERDICT,
++     "    p.emit(\"ALU\", rd=RT, ra=RD_, rb=0, cnd=ALU_ADD, imm=80)\n"
++     "    p.emit(\"CMP\", ra=RT, rb=0, fmt=FMT_D, imm=NPD_HI_C + 80 + 1)\n"
++     "    p.emit(\"BRS\", cnd=BRS_LT, label=\"good\")\n"
++     "    p.emit(\"BR\", label=\"bad\")\n",
++     kept(*BELOW_80)),
++    # the Sync path clamps a negative delay to 0; the publication stays
++    # signed. Over-stated latency constants then leave their error in full
++    ("the Sync path uses a negative delay as 0", GENERATOR,
++     USED,
++     "    p.emit(\"ALU\", rd=RT, ra=RD_, rb=0, cnd=ALU_SAR, imm=63)\n"
++     "    p.emit(\"ALU\", rd=RT, ra=RD_, rb=RT, cnd=ALU_AND)\n"
++     "    p.emit(\"ALU\", rd=RT, ra=RD_, rb=RT, cnd=ALU_SUB)\n"
++     "    p.emit(\"WRST\", ra=RT, imm=RG_SCR | S_PDELAY, fmt=FMT_Q)\n",
++     f"#109 D -3: {EXACT} | #109 D -81: {EXACT} | #109 D -263: {EXACT}"
++     f" | {OVER}: {EXACT}"),
++    # word-neutral: the floor at 0 instead of -800, for both writes
++    ("a negative delay is floored at 0", GENERATOR,
++     FLOOR,
++     FLOOR.replace("imm=NPD_HI_C)", "imm=0)"),
++     f"#109 D -263: the engine publishes the used delay"
++     f" | #109 D -263: {EXACT} | {OVER}: {EXACT}"),
++    # the floor is missing: -5 ms reaches the servo and steps the clock
++    ("a negative delay has no floor", GENERATOR,
++     FLOOR,
++     "",
++     f"#109 D -801: {EXACT} | #109 D -5000000: no PHC step"
++     " | #109 the most negative delay of the wire: no PHC step"
++     " | #109 the most negative delay of the wire: the engine publishes the"
++     " used delay"),
++    # word-neutral: the floor 1 ns short, at -799
++    ("the floor is -799 ns", GENERATOR,
++     FLOOR,
++     FLOOR.replace("imm=NPD_HI_C)", "imm=NPD_HI_C - 1)"),
++     f"#109 D -800: {EXACT} | #109 D -800: the engine publishes the used"
++     " delay"),
++    # word-neutral: the publication precedes the floor, so a delay below
++    # -2^31 ns reaches the parent's 32-bit word with an arbitrary sign
++    ("the engine publishes the unfloored delay", GENERATOR,
++     FLOOR + USED + PUB,
++     PUB + FLOOR + USED,
++     "#109 D -5000000: the engine publishes the used delay"
++     " | #109 the most negative delay of the wire: the engine publishes the"
++     " used delay"),
++    # word-neutral: the threshold boundary, both ways
++    ("801 ns is a good exchange", GENERATOR,
++     VERDICT,
++     VERDICT.replace("imm=NPD_HI_C + 1)", "imm=NPD_HI_C + 2)"),
++     "#109 D 801: asCapable falls | #109 D 801: the next Follow_Up is not"
++     " used"),
++    ("800 ns is a bad exchange", GENERATOR,
++     VERDICT,
++     VERDICT.replace("imm=NPD_HI_C + 1)", "imm=NPD_HI_C)"),
++     kept("D 800")),
++]
+diff --git a/tb/verilator/engine/sim_main.cpp b/tb/verilator/engine/sim_main.cpp
+index 2f3c13e..d6a1a18 100644
+--- a/tb/verilator/engine/sim_main.cpp
++++ b/tb/verilator/engine/sim_main.cpp
+@@ -145,7 +145,7 @@
+ //         identity in the compare order
+ // 21d     the delayed-dispatch shape with a BETTER announce adopts from its
+ //         frozen context
+-// 22..26  the pdelay verdict tail: the Milan floor, the threshold,
++// 22..26  the pdelay verdict tail: a negative delay, the threshold,
+ //         two-exchange recovery, the stale ratio window. 25 (#90, #91):
+ //         four lost responses keep asCapable and the fifth clears it, for
+ //         no response, no Follow_Up, a duplicated response and three
+@@ -281,6 +281,16 @@
+ // 61      #107: under +-8 ns origin noise, after grandmasters at +10, -10
+ //         and +10 ppm, scaledLastGmFreqChange is within 50 % of the time
+ //         base's change (or 1 ppb), the qual's grading (11.4.4.3.9)
++// 62      #109, after 61 and ahead of the whole-run grades: computed link
++//         delays of -3, -80, -81 and -263 ns keep asCapable, are published
++//         as computed and enter the next Follow_Up's offset exactly; a
++//         100 ns link with both latency constants 400 ns over-stated
++//         computes -300 ns and measures the true offset, 0, exactly
++// 63      #109: -800, -801 and -5,000,000 ns, and the most negative delay
++//         the wire can make the datapath compute, keep asCapable and are
++//         used and published as -800 ns, with no PHC step
++// 64      #109: 800 ns keeps asCapable; 801 ns clears it, and the next
++//         Follow_Up is not used
+ //
+ // A fourth pass (+not-gm-capable, an image built with --p1 255 and
+ // --clock-accuracy 0xFE) runs only the phases a self publication passes
+@@ -490,6 +500,7 @@ class GptpEngineHarness {
+     run_the_followup_tlv_phases();
+     run_the_mastership_wire_phases();
+     run_the_rate_phases();
++    run_the_negative_delay_phases();
+     hold_every_committed_path_coherent();
+     keep_sync_ok_in_every_master_cycle();
+     end_every_peer_path_with_thisclock();
+@@ -1029,9 +1040,40 @@ class GptpEngineHarness {
+   //! identical Pdelay_Resp and one Follow_Up, PD_DUP3 with three (#90, #91).
+   //! None of the three completes an exchange (802.1AS-2011 Figure 11-8: a
+   //! second response is RESET), so none of them feeds the pdelay model
+-  //! PD_EDGE answers at the #100 late bound, PD_LATE 1 ns past it
++  //! PD_EDGE answers at the #100 late bound, PD_LATE 1 ns past it.
++  //! #109: PD_SET answers so that the computed delay is exactly pd_target;
++  //! PD_WIRE sends pd_t2_wire and pd_t3_wire as raw timestamp fields
+   enum PdMode { PD_OFF, PD_NORMAL, PD_NEG, PD_FAR, PD_SKIP, PD_SELF, PD_DUAL,
+-                PD_DUP, PD_DUAL_LATE, PD_NOFU, PD_DUP3, PD_EDGE, PD_LATE };
++                PD_DUP, PD_DUAL_LATE, PD_NOFU, PD_DUP3, PD_EDGE, PD_LATE,
++                PD_SET, PD_WIRE };
++  int64_t pd_target = 0;
++  //! a PTP Timestamp as sent: 48-bit seconds, 32-bit nanoseconds
++  struct WireTs { uint64_t sec; uint32_t ns; };
++  WireTs pd_t2_wire{0, 0};
++  WireTs pd_t3_wire{0, 0};
++  //! the nanosecond count a receiver folds from `w` as the ROM does
++  //! (e_full_ts): the low 32 bits of the seconds field taken signed (MULS is
++  //! signed 32 x 32) times 1e9, plus the nanoseconds field, which nothing
++  //! range-checks. The spec formula holds on these folded values
++  static uint64_t wire_ns(WireTs w) {
++    const int64_t s = static_cast<int32_t>(static_cast<uint32_t>(w.sec));
++    return static_cast<uint64_t>(s * 1000000000ll) + w.ns;
++  }
++
++  //! #109: the residence time t3 - t2 for which the spec formula computes
++  //! exactly `d` from these stamps, the ratio window included (it reads t3)
++  uint64_t resid_for(uint64_t t1, uint64_t t2, uint64_t t4, int64_t d) {
++    uint64_t resid = 20000;
++    for (int k = 0; k < 8; k++) {
++      const PdelayModelState save = pdm;
++      model_exchange(t1, t2, t2 + resid, t4);
++      const int64_t got = pdm.d;
++      pdm = save;
++      if (got == d) break;
++      resid += static_cast<uint64_t>(2 * (got - d));
++    }
++    return resid;
++  }
+   PdMode pd_mode = PD_SKIP;         // SKIP: consume silently
+   size_t pd_seen = 0;
+   int pd_self_sent = 0;             // PD_SELF pairs actually sent
+@@ -1074,10 +1116,11 @@ class GptpEngineHarness {
+         continue;
+       }
+       uint64_t resid = 20000;              // D = +600 after correction
+-      if (pd_mode == PD_NEG) resid = 21300;   // D ~ -49: the Milan floor
++      if (pd_mode == PD_NEG) resid = 21300;   // D ~ -49: Milan 4.2.6.2.7
+       if (pd_mode == PD_FAR) resid = 19200;   // D ~ +1001: over threshold
+       uint64_t t3 = t2 + resid;
+       uint64_t t4 = t1 + 21200;
++      if (pd_mode == PD_SET) t3 = t2 + resid_for(t1, t2, t4, pd_target);
+       if (pd_mode == PD_EDGE || pd_mode == PD_LATE) {
+         // #100: a response P100_LATE_NS after its request, or 1 ns later.
+         // At the bound its residence keeps the corrected delay at 600 ns;
+@@ -1088,8 +1131,12 @@ class GptpEngineHarness {
+         t4 = t1 + turn;
+         t3 = t2 + (pdm.nrr != 0 ? (pdm.nrr * turn) >> 30 : turn) - trip;
+       }
++      const bool wire = pd_mode == PD_WIRE;
++      if (wire) { t2 = wire_ns(pd_t2_wire); t3 = wire_ns(pd_t3_wire); }
+       Frame f = ptp(0x3, seq, 0, 0x0200, 20);
+-      f.ts(t2); f.u64(OUR_CID); f.u16(1);
++      if (wire) { f.u48(pd_t2_wire.sec); f.u32(pd_t2_wire.ns); }
++      else f.ts(t2);
++      f.u64(OUR_CID); f.u16(1);
+       send_frame(f.b, t4);
+       run(400);
+       if (pd_mode == PD_NOFU) continue;   // the Follow_Up never comes
+@@ -1105,7 +1152,9 @@ class GptpEngineHarness {
+         run(400);
+       }
+       Frame g = ptp(0xA, seq, 0, 0x0000, 20);
+-      g.ts(t3); g.u64(OUR_CID); g.u16(1);
++      if (wire) { g.u48(pd_t3_wire.sec); g.u32(pd_t3_wire.ns); }
++      else g.ts(t3);
++      g.u64(OUR_CID); g.u16(1);
+       send_frame(g.b, t4 + 1000);
+       run(400);
+       if (pd_mode == PD_DUAL_LATE) {
+@@ -2185,8 +2234,8 @@ class GptpEngineHarness {
+   // else is ignored and neither neighborPropDelay nor the ladder moves.
+   // The auto-peer is silenced so every frame is hand-built against the
+   // DUT's own request; a wrongly consumed Follow_Up carries a t3 skewed
+-  // +2 us, so the published delay would move by -1 us and the verdict
+-  // would fall below the Milan floor (FPGA-gPTP #8)
++  // +2 us, so the published delay would move by -1 us (FPGA-gPTP #8); a
++  // negative delay keeps asCapable since #109, so the delay is the witness
+   void pair_a_follow_up_only_with_the_outstanding_resp() {
+     const uint64_t STRANGER = 0x00BAD0FFFE000002ull;
+     pd_mode = PD_SKIP;
+@@ -4492,7 +4541,9 @@ class GptpEngineHarness {
+     }
+   }
+ 
+-  // ---- 22: negative pdelay inside the Milan floor is accepted -----------
++  // ---- 22: a negative pdelay inside Milan's -80..0 ns is accepted -------
++  // Milan v1.2 4.2.6.2.7's minimum tolerance; since #109 every negative
++  // delay is (phases 62 and 63), and this one is published as computed
+   void accept_a_negative_delay_inside_the_milan_floor() {
+     pd_mode = PD_NEG;
+     {
+@@ -4502,7 +4553,7 @@ class GptpEngineHarness {
+     }
+     expect("neg pdelay published", dut->pub_pdelay_ns_o,
+            static_cast<uint32_t>(pdm.d));
+-    expect("neg pdelay in floor",
++    expect("neg pdelay inside Milan's tolerance",
+            pdm.d < 0 && pdm.d >= -80, 1);
+     expect("neg keeps capable", dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
+   }
+@@ -8354,6 +8405,259 @@ class GptpEngineHarness {
+     }
+     p107_noise = 0;
+   }
++  // ---- 62..64: #109, a negative computed link delay ----------------------
++  //! #109, phases 62 to 64, in file order
++  void run_the_negative_delay_phases() {
++    use_a_small_negative_delay_exactly();
++    floor_a_large_negative_delay_at_the_threshold();
++    judge_the_threshold_at_800_and_801();
++  }
++
++  //! the #109 grandmaster, announcing from its own port
++  static constexpr uint64_t P109_GM = 0x00A109FFFE000001ull;
++  static constexpr uint64_t P109_SRC = 0x00A109FFFE000002ull;
++  //! Milan v1.2 4.2.6.1.1 neighborPropDelayThresh, the floor's magnitude
++  static constexpr int64_t P109_THRESH = 800;
++  uint16_t p109_seq = 0xC001;
++  uint16_t p109_aseq = 0xC101;
++  int p109_k = 0;
++
++  //! the link delay the Sync path uses for a computed delay `d`: d itself,
++  //! floored at -800 ns (the manager's ruling on #109)
++  static int64_t p109_used(int64_t d) {
++    return d < -P109_THRESH ? -P109_THRESH : d;
++  }
++
++  //! what one #109 Sync/Follow_Up pair did on the PHC face and the publish
++  //! face: consumed is one addend pulse, stepped any step pulse
++  struct P109Pair { bool consumed; bool stepped; int32_t off; };
++
++  //! One #109 Sync/Follow_Up pair, received at our PHC's time less
++  //! `rx_early` ns (an ingress latency constant over-stated by that much)
++  //! and stamped so that the plane, subtracting the link delay `link`,
++  //! measures `off`: origin = rx - link - off
++  P109Pair p109_pair(int64_t link, int64_t off, int64_t rx_early = 0) {
++    const size_t s0 = steps_seen.size();
++    const size_t a0 = adj_seen.size();
++    const uint64_t local_rx = phc() + 150 - static_cast<uint64_t>(rx_early);
++    const uint64_t origin = local_rx - static_cast<uint64_t>(link) -
++                            static_cast<uint64_t>(off);
++    const uint16_t seq = p109_seq++;
++    Frame f = ptp(0x0, seq, 0, 0x0208, 10, P109_SRC);
++    f.ts(0);
++    send_frame(f.b, local_rx);
++    run(1000);
++    send_frame(follow_up(seq, 0, origin, P109_SRC).b, local_rx + 500);
++    run(4000);
++    return {adj_seen.size() == a0 + 1, steps_seen.size() != s0,
++            static_cast<int32_t>(dut->pub_offset_o)};
++  }
++
++  //! The #109 grandmaster's Announce, from its own port with the path
++  //! {grandmaster, port}: it refreshes the 3 s Announce receipt watch
++  void p109_announce() {
++    Frame a = ptp(0xB, p109_aseq++, 0, 0x0008, 30 + 4 + 16, P109_SRC);
++    for (int i = 0; i < 10; i++) a.u8(0);
++    a.u16(0xFFC4); a.u8(0);
++    a.u8(50); a.u32(OUR_CQ); a.u8(248);
++    a.u64(P109_GM);
++    a.u16(1); a.u8(0xA0);
++    a.u16(0x0008); a.u16(16); a.u64(P109_GM); a.u64(P109_SRC);
++    send_frame(a.b, phc() + 100);
++    run(4000);
++  }
++
++  //! the offset of every #109 pair but a graded one, which measures 0, so
++  //! a graded pair the plane does not use cannot leave its offset published
++  static constexpr int64_t P109_BG_OFF = 11;
++
++  //! One 125 ms interval of the #109 grandmaster: an Announce every eighth
++  //! interval, service, then, unless `until` exchanges have completed by
++  //! then, one pair built for the delay the plane should be using, at
++  //! offset P109_BG_OFF
++  void p109_interval(int until = 0x7FFFFFFF) {
++    if (p109_k++ % 8 == 0) p109_announce();
++    run_svc(250000);
++    if (pdm.count < until) p109_pair(p109_used(pdm.d), P109_BG_OFF);
++  }
++
++  bool p109_elected() {
++    return (dut->pub_flags_o & (FL_ASCAP | 3)) == (FL_ASCAP | FL_PRESENT) &&
++           dut->pub_gm_id_o == P109_GM;
++  }
++
++  //! Bring the port to a capable slave of the #109 grandmaster after two
++  //! ordinary exchanges (the second has an ordinary ratio window too), from
++  //! wherever the previous trial left it, so that each trial is graded from
++  //! the same state. True if so
++  bool p109_ready() {
++    pd_mode = PD_NORMAL;
++    const int base = pdm.count;
++    for (int k = 0; k < 120 && !(p109_elected() && pdm.count >= base + 2);
++         k++)
++      p109_interval();
++    for (int k = 0; k < 8; k++) p109_interval();   // a settled servo
++    return p109_elected() && pdm.count >= base + 2;
++  }
++
++  //! One #109 trial: from a capable slave, the peer's next response makes
++  //! the plane compute `d` (PD_SET) or fold `t2w`/`t3w` (PD_WIRE); the
++  //! intervals keep the grandmaster's Announce and Sync flowing until that
++  //! exchange completes, and the peer answers normally afterwards. True if
++  //! the exchange ran
++  bool p109_exchange(const char *tag, PdMode mode, int64_t d,
++                     WireTs t2w = {0, 0}, WireTs t3w = {0, 0}) {
++    char n[160];
++    snprintf(n, sizeof n, "%s: runs from a capable slave", tag);
++    expect(n, p109_ready(), 1);
++    pd_target = d;
++    pd_t2_wire = t2w;
++    pd_t3_wire = t3w;
++    const int base = pdm.count;
++    pd_mode = mode;
++    for (int k = 0; k < 24 && pdm.count == base; k++)
++      p109_interval(base + 1);
++    pd_mode = PD_NORMAL;
++    run(4000);
++    snprintf(n, sizeof n, "%s: the exchange ran", tag);
++    expect(n, pdm.count, base + 1);
++    return pdm.count == base + 1;
++  }
++
++  //! The grades of a delay the plane must accept: asCapable kept, the
++  //! published (engine) delay is the used one, the next Follow_Up is used
++  //! with `want_link` and measures exactly `want_off` with no step pulse, and
++  //! the grandmaster stays elected through its next Announce
++  void p109_expect_kept(const char *tag, int64_t want_link, int64_t want_off,
++                        int64_t rx_early = 0, int64_t built_link = INT64_MIN) {
++    char n[160];
++    snprintf(n, sizeof n, "%s: asCapable kept", tag);
++    expect(n, dut->pub_flags_o & FL_ASCAP, FL_ASCAP);
++    snprintf(n, sizeof n, "%s: the engine publishes the used delay", tag);
++    expect(n, dut->pub_pdelay_ns_o, static_cast<uint32_t>(want_link));
++    const P109Pair pr =
++        p109_pair(built_link == INT64_MIN ? want_link : built_link, 0,
++                  rx_early);
++    snprintf(n, sizeof n, "%s: the next Follow_Up is used", tag);
++    expect(n, pr.consumed, 1);
++    snprintf(n, sizeof n, "%s: its offset uses the delay exactly", tag);
++    expect(n, static_cast<uint32_t>(pr.off), static_cast<uint32_t>(want_off));
++    snprintf(n, sizeof n, "%s: no PHC step", tag);
++    expect(n, pr.stepped, 0);
++    p109_announce();
++    snprintf(n, sizeof n, "%s: the grandmaster stays elected", tag);
++    expect(n, p109_elected(), 1);
++  }
++
++  // ---- 62: #109, a small negative delay is used exactly ------------------
++  // Milan v1.2 4.2.6.2.7 only requires -80..0 ns to keep asCapable, and no
++  // clause of 802.1AS clears it for a negative delay: 11.2.2 and Figure
++  // 11-8 clear it when the delay EXCEEDS neighborPropDelayThresh. The owner
++  // asked for every negative delay to keep asCapable. The delay enters the
++  // Sync path signed (the manager's ruling): the next Follow_Up's offset is
++  // rx - (origin + correction + D), so -3, -80, -81 and -263 ns (the
++  // board's value) each keep asCapable and are subtracted exactly. Then a
++  // link of 100 ns whose two latency constants are both over-stated by
++  // 400 ns: the plane computes -300 ns, its Sync arrives stamped 400 ns
++  // early, and the true offset, 0, is measured exactly; a delay clamped to
++  // 0 would leave a 300 ns error
++  void use_a_small_negative_delay_exactly() {
++    pd_mode = PD_NORMAL;
++    auto_txts = true;
++    expect("#109 runs from a capable port",
++           wait_flags(FL_ASCAP, FL_ASCAP, 8000000ull), 1);
++    const int64_t ds[] = {-3, -80, -81, -263};
++    for (const int64_t d : ds) {
++      char tag[64];
++      snprintf(tag, sizeof tag, "#109 D %lld", static_cast<long long>(d));
++      if (!p109_exchange(tag, PD_SET, d)) continue;
++      char n[160];
++      snprintf(n, sizeof n, "%s: the plane computes it", tag);
++      expect(n, static_cast<uint64_t>(pdm.d), static_cast<uint64_t>(d));
++      p109_expect_kept(tag, d, 0);
++    }
++    // the over-stated constants: true link L = 100 ns, each of the egress
++    // and ingress constants 400 ns too large, so t4 - t1 is 800 ns short
++    // and the computed delay is L - 400; the true offset is 0
++    const char *tag = "#109 latency constants over-stated by 400 ns";
++    const int64_t L = 100;
++    const int64_t E = 400;
++    if (p109_exchange(tag, PD_SET, L - E)) {
++      char n[160];
++      snprintf(n, sizeof n, "%s: the plane computes L - 400", tag);
++      expect(n, static_cast<uint64_t>(pdm.d), static_cast<uint64_t>(L - E));
++      // the Sync's true arrival is phc() + 150; it is stamped E early, and
++      // the master's origin is true arrival - L (offset 0): built as the
++      // stamped arrival less (L - E), the computed delay
++      p109_expect_kept(tag, L - E, 0, E, L - E);
++    }
++  }
++
++  // ---- 63: #109, a large negative delay is floored at -800 ns ------------
++  // With every negative delay accepted, a wrong compensation or a faulty
++  // peer could inject an arbitrarily negative delay and step the clock; the
++  // Sync path floors it at -neighborPropDelayThresh and never rejects the
++  // exchange (the manager's ruling). -800 is used as itself, -801 and -5 ms
++  // as -800, and so is the most negative delay the datapath can compute
++  // from the wire: t2's seconds field 0x80000000 (the fold takes its low 32
++  // bits signed) and t3 the largest fold, 0x7FFFFFFF s and 2^32 - 1 ns.
++  // Each keeps asCapable and steps nothing
++  void floor_a_large_negative_delay_at_the_threshold() {
++    const int64_t ds[] = {-800, -801, -5000000};
++    for (const int64_t d : ds) {
++      char tag[64];
++      snprintf(tag, sizeof tag, "#109 D %lld", static_cast<long long>(d));
++      if (!p109_exchange(tag, PD_SET, d)) continue;
++      char n[160];
++      snprintf(n, sizeof n, "%s: the plane computes it", tag);
++      expect(n, static_cast<uint64_t>(pdm.d), static_cast<uint64_t>(d));
++      p109_expect_kept(tag, -P109_THRESH, 0);
++    }
++    const char *tag = "#109 the most negative delay of the wire";
++    const WireTs t2w{0x80000000ull, 0u};
++    const WireTs t3w{0x7FFFFFFFull, 0xFFFFFFFFu};
++    if (p109_exchange(tag, PD_WIRE, 0, t2w, t3w)) {
++      // t3 - t2 = (2^32 - 1)(1e9 + 1), the widest the fold allows, and the
++      // correction is never negative, so no delay is more negative than
++      // -(t3 - t2) / 2
++      const int64_t bound = -2147483649647483648ll;
++      printf("INFO %s: computed %lld ns, the wire's bound %lld ns\n", tag,
++             static_cast<long long>(pdm.d), static_cast<long long>(bound));
++      char n[160];
++      snprintf(n, sizeof n, "%s: the plane computes below -2^60 ns", tag);
++      expect(n, pdm.d >= bound && pdm.d < -(1ll << 60), 1);
++      p109_expect_kept(tag, -P109_THRESH, 0);
++    }
++  }
++
++  // ---- 64: #109, the +800 ns threshold is unchanged ----------------------
++  // 800 ns keeps asCapable and is used; 801 ns exceeds
++  // neighborPropDelayThresh (Milan v1.2 4.2.6.1.1), so the exchange is bad:
++  // asCapable falls, and the next Follow_Up is not used and steps nothing
++  void judge_the_threshold_at_800_and_801() {
++    {
++      const char *tag = "#109 D 800";
++      if (p109_exchange(tag, PD_SET, P109_THRESH)) {
++        char n[160];
++        snprintf(n, sizeof n, "%s: the plane computes it", tag);
++        expect(n, static_cast<uint64_t>(pdm.d), 800);
++        p109_expect_kept(tag, P109_THRESH, 0);
++      }
++    }
++    const char *tag = "#109 D 801";
++    if (p109_exchange(tag, PD_SET, P109_THRESH + 1)) {
++      char n[160];
++      snprintf(n, sizeof n, "%s: the plane computes it", tag);
++      expect(n, static_cast<uint64_t>(pdm.d), 801);
++      snprintf(n, sizeof n, "%s: asCapable falls", tag);
++      expect(n, dut->pub_flags_o & FL_ASCAP, 0);
++      const P109Pair pr = p109_pair(P109_THRESH + 1, 0);
++      snprintf(n, sizeof n, "%s: the next Follow_Up is not used", tag);
++      expect(n, pr.consumed || pr.stepped, 0);
++    }
++    expect("#109 capable again after 801", p109_ready(), 1);
++  }
++
+ };
+ 
+ }  // namespace
+diff --git a/tb/verilator/ucpu/gptp_ucode.hex b/tb/verilator/ucpu/gptp_ucode.hex
+index 3b11fcf..d24c078 100644
+--- a/tb/verilator/ucpu/gptp_ucode.hex
++++ b/tb/verilator/ucpu/gptp_ucode.hex
+@@ -664,18 +664,18 @@ EDD80600001E
+ E99A81000000
+ EA5981000000
+ EA2007000001
++EAA000000320
++EB280700003F
++EAAB02000000
++EA2281000000
+ 482030020004
+ 482030030003
+ 228000000001
+ 48283002000B
+-EAA000000050
+-EB2806000020
+-283020000000
+-1000020002A3
+-0800000002B4
+-282820000371
+-1000030002A6
+-0800000002B4
++EAA001000321
++EAA80600003F
++282820000000
++1000020002B4
+ 428030020007
+ EAA800000001
+ 482830020007

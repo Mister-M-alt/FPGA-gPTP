@@ -1,0 +1,163 @@
+[
+  {
+    "task": "shipping",
+    "checks": 2296,
+    "failures": 0,
+    "rc": 0
+  },
+  {
+    "task": "request-seed",
+    "checks": 2296,
+    "failures": 0,
+    "rc": 0
+  },
+  {
+    "task": "sync-seed",
+    "checks": 2296,
+    "failures": 0,
+    "rc": 0
+  },
+  {
+    "task": "p1-255",
+    "checks": 61,
+    "failures": 0,
+    "rc": 0
+  },
+  {
+    "task": "mutation-01",
+    "name": "a delay below -80 ns is a bad exchange",
+    "rc": 1,
+    "verdict": "caught",
+    "witnesses": [
+      "FAIL #109 D -81: asCapable kept   got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 D -263: asCapable kept  got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 latency constants over-stated by 400 ns: asCapable kept got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 D -800: asCapable kept  got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 D -801: asCapable kept  got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 D -5000000: asCapable kept got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 the most negative delay of the wire: asCapable kept got 0000000000000000 exp 0000000000000004"
+    ]
+  },
+  {
+    "task": "mutation-02",
+    "name": "the Sync path uses a negative delay as 0",
+    "rc": 1,
+    "verdict": "caught",
+    "witnesses": [
+      "FAIL #109 D -3: its offset uses the delay exactly got 00000000fffffffd exp 0000000000000000",
+      "FAIL #109 D -81: its offset uses the delay exactly got 00000000ffffffaf exp 0000000000000000",
+      "FAIL #109 D -263: its offset uses the delay exactly got 00000000fffffef9 exp 0000000000000000",
+      "FAIL #109 latency constants over-stated by 400 ns: its offset uses the delay exactly got 00000000fffffed4 exp 0000000000000000"
+    ]
+  },
+  {
+    "task": "mutation-03",
+    "name": "a negative delay is floored at 0",
+    "rc": 1,
+    "verdict": "caught",
+    "witnesses": [
+      "FAIL #109 D -263: the engine publishes the used delay got 0000000000000000 exp 00000000fffffef9",
+      "FAIL #109 D -263: its offset uses the delay exactly got 00000000fffffef9 exp 0000000000000000",
+      "FAIL #109 latency constants over-stated by 400 ns: its offset uses the delay exactly got 00000000fffffed4 exp 0000000000000000"
+    ]
+  },
+  {
+    "task": "mutation-04",
+    "name": "a negative delay has no floor",
+    "rc": 1,
+    "verdict": "caught",
+    "witnesses": [
+      "FAIL #109 D -801: its offset uses the delay exactly got 0000000000000001 exp 0000000000000000",
+      "FAIL #109 D -5000000: no PHC step got 0000000000000001 exp 0000000000000000",
+      "FAIL #109 the most negative delay of the wire: no PHC step got 0000000000000001 exp 0000000000000000",
+      "FAIL #109 the most negative delay of the wire: the engine publishes the used delay got 000000009dcd2145 exp 00000000fffffce0"
+    ]
+  },
+  {
+    "task": "mutation-05",
+    "name": "the floor is -799 ns",
+    "rc": 1,
+    "verdict": "caught",
+    "witnesses": [
+      "FAIL #109 D -800: its offset uses the delay exactly got 00000000ffffffff exp 0000000000000000",
+      "FAIL #109 D -800: the engine publishes the used delay got 00000000fffffce1 exp 00000000fffffce0"
+    ]
+  },
+  {
+    "task": "mutation-06",
+    "name": "the engine publishes the unfloored delay",
+    "rc": 1,
+    "verdict": "caught",
+    "witnesses": [
+      "FAIL #109 D -5000000: the engine publishes the used delay got 00000000ffb3b4c0 exp 00000000fffffce0",
+      "FAIL #109 the most negative delay of the wire: the engine publishes the used delay got 000000009dcd1f9b exp 00000000fffffce0"
+    ]
+  },
+  {
+    "task": "mutation-07",
+    "name": "801 ns is a good exchange",
+    "rc": 1,
+    "verdict": "caught",
+    "witnesses": [
+      "FAIL #109 D 801: asCapable falls  got 0000000000000004 exp 0000000000000000",
+      "FAIL #109 D 801: the next Follow_Up is not used got 0000000000000001 exp 0000000000000000"
+    ]
+  },
+  {
+    "task": "mutation-08",
+    "name": "800 ns is a bad exchange",
+    "rc": 1,
+    "verdict": "caught",
+    "witnesses": [
+      "FAIL #109 D 800: asCapable kept   got 0000000000000000 exp 0000000000000004"
+    ]
+  },
+  {
+    "task": "base-reproduction",
+    "rc": 1,
+    "checks": 2296,
+    "passes": 2265,
+    "failures": 31,
+    "fail_lines": [
+      "FAIL #109 D -81: asCapable kept   got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 D -81: the next Follow_Up is used got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 D -81: its offset uses the delay exactly got 000000000000000b exp 0000000000000000",
+      "FAIL #109 D -81: the grandmaster stays elected got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 D -263: asCapable kept  got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 D -263: the next Follow_Up is used got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 D -263: its offset uses the delay exactly got 000000000000000b exp 0000000000000000",
+      "FAIL #109 D -263: the grandmaster stays elected got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 latency constants over-stated by 400 ns: asCapable kept got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 latency constants over-stated by 400 ns: the next Follow_Up is used got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 latency constants over-stated by 400 ns: its offset uses the delay exactly got 000000000000000b exp 0000000000000000",
+      "FAIL #109 latency constants over-stated by 400 ns: the grandmaster stays elected got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 D -800: asCapable kept  got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 D -800: the next Follow_Up is used got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 D -800: its offset uses the delay exactly got 000000000000000b exp 0000000000000000",
+      "FAIL #109 D -800: the grandmaster stays elected got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 D -801: asCapable kept  got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 D -801: the engine publishes the used delay got 00000000fffffcdf exp 00000000fffffce0",
+      "FAIL #109 D -801: the next Follow_Up is used got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 D -801: its offset uses the delay exactly got 000000000000000b exp 0000000000000000",
+      "FAIL #109 D -801: the grandmaster stays elected got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 D -5000000: asCapable kept got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 D -5000000: the engine publishes the used delay got 00000000ffb3b4c0 exp 00000000fffffce0",
+      "FAIL #109 D -5000000: the next Follow_Up is used got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 D -5000000: its offset uses the delay exactly got 000000000000000b exp 0000000000000000",
+      "FAIL #109 D -5000000: the grandmaster stays elected got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 the most negative delay of the wire: asCapable kept got 0000000000000000 exp 0000000000000004",
+      "FAIL #109 the most negative delay of the wire: the engine publishes the used delay got 000000009dcd1f9c exp 00000000fffffce0",
+      "FAIL #109 the most negative delay of the wire: the next Follow_Up is used got 0000000000000000 exp 0000000000000001",
+      "FAIL #109 the most negative delay of the wire: its offset uses the delay exactly got 000000000000000b exp 0000000000000000",
+      "FAIL #109 the most negative delay of the wire: the grandmaster stays elected got 0000000000000000 exp 0000000000000001"
+    ]
+  },
+  {
+    "task": "docs",
+    "rc": 0
+  },
+  {
+    "task": "contract",
+    "rc": 0
+  }
+]

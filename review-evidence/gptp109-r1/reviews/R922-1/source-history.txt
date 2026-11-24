@@ -1,0 +1,3 @@
+8e4889bba462d14d4e5a34068769872510d4775d Declare the #109 over-statement constants one per line (Rule 11 of the consumer)
+124683aa8be9c5f318af6b0170eef1488cd74560 Document the link delay verdict and its -800 ns floor, and retire NPD_LO_C (#109)
+f3c33d0371f7d860343b0f4b3fdccf7eefa89081 Count a negative link delay of any magnitude as a good exchange and use it signed, floored at -800 ns (#109)

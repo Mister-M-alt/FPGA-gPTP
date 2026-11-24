@@ -1,0 +1,5 @@
+PR #110 discussion and formal reviews were checked after the independent source pass and initial reviewer-owned verdict/ledger. They were checked again after the completed final verdict and ledger were written.
+Both retrievals contained only the two public review-start notices and no prior FINDINGS. Formal reviews: 0.
+No prior finding exists to resolve or retain at 8e4889bba462d14d4e5a34068769872510d4775d. No other review report was read.
+Discussion: https://github.com/Mister-M-alt/FPGA-gPTP/pull/110
+Review start: https://github.com/Mister-M-alt/FPGA-gPTP/pull/110#issuecomment-7136641383

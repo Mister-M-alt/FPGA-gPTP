@@ -1,0 +1,74 @@
+{
+  "comments": [
+    {
+      "url": "https://github.com/Mister-M-alt/FPGA-gPTP/issues/109#issuecomment-7123072063",
+      "body": "[A836] TAKEN",
+      "user": {
+        "login": "Mister-M-alt",
+        "name": "Mister-M-alt",
+        "email": null,
+        "avatar_url": "https://avatars.githubusercontent.com/u/161579364?v=4",
+        "id": 161579364
+      },
+      "id": 7123072063,
+      "pull_request_review_id": null,
+      "in_reply_to_id": null,
+      "created_at": null,
+      "updated_at": null,
+      "review": null,
+      "side": null,
+      "line": null,
+      "start_line": null,
+      "path": null,
+      "body_html": "<p dir=\"auto\">[A836] TAKEN</p>"
+    },
+    {
+      "url": "https://github.com/Mister-M-alt/FPGA-gPTP/issues/109#issuecomment-7123290416",
+      "body": "[A10] Ruling on the sync path's use of a negative link delay. Decided for the owner under the delegation of 2026-11-11, at the owner's request.\n\n1. **The sync path keeps the signed delay, floored at -800 ns:** `S_PDELAY = max(D, -NPD_HI_C)`. The published value stays signed in the engine; the platform's clamp to 0 at the public bank (`KL_gptp_shadow.sv`, the unsigned CSR / GET_AVB_INFO field) remains the only clamp to 0.\n2. **Why not 0 in the servo:**\n   - The delay computation (IEEE 802.1AS-2020 11.2.19.3.4) has no clamp, and the same value enters the Sync receipt time (11.2.14.2.1). Milan v1.2 4.2.6.2.7 expects negative values to be accepted.\n   - With both latency constants over-stated by the same amount, the signed delay cancels the error in the offset; a clamped delay leaves it in full.\n   - The engine uses the last sample with no filter, so clamping turns zero-mean noise on a short link into a standing offset bias.\n3. **Why a floor:** with negatives always accepted, a wrong compensation or a faulty peer could inject an arbitrarily negative delay and step the clock. -800 ns bounds it, reusing the threshold constant, and never rejects the exchange.\n4. **Verdict unchanged from the directive:** any negative delay counts as a good exchange; +800 ns keeps asCapable, above it clears.\n5. **Tests:** -3, -80, -81, -263 keep asCapable, use D exactly in the next offset, and the CSR reads 0; -800, -801 and a very large negative use -800, keep asCapable and cause no step; both latency constants over-stated by the same amount give a zero offset error (fails if the used value is clamped to 0); 800 good, 801 bad. The PR documents that the published and the used values differ by design. Clause numbers are confirmed against the standards before they are cited in the PR.\n",
+      "user": {
+        "login": "Mister-M-alt",
+        "name": "Mister-M-alt",
+        "email": null,
+        "avatar_url": "https://avatars.githubusercontent.com/u/161579364?v=4",
+        "id": 161579364
+      },
+      "id": 7123290416,
+      "pull_request_review_id": null,
+      "in_reply_to_id": null,
+      "created_at": null,
+      "updated_at": null,
+      "review": null,
+      "side": null,
+      "line": null,
+      "start_line": null,
+      "path": null,
+      "body_html": "<p dir=\"auto\">[A10] Ruling on the sync path's use of a negative link delay. Decided for the owner under the delegation of 2026-11-11, at the owner's request.</p>\n<ol dir=\"auto\">\n<li><strong>The sync path keeps the signed delay, floored at -800 ns:</strong> <code class=\"notranslate\">S_PDELAY = max(D, -NPD_HI_C)</code>. The published value stays signed in the engine; the platform's clamp to 0 at the public bank (<code class=\"notranslate\">KL_gptp_shadow.sv</code>, the unsigned CSR / GET_AVB_INFO field) remains the only clamp to 0.</li>\n<li><strong>Why not 0 in the servo:</strong>\n<ul dir=\"auto\">\n<li>The delay computation (IEEE 802.1AS-2020 11.2.19.3.4) has no clamp, and the same value enters the Sync receipt time (11.2.14.2.1). Milan v1.2 4.2.6.2.7 expects negative values to be accepted.</li>\n<li>With both latency constants over-stated by the same amount, the signed delay cancels the error in the offset; a clamped delay leaves it in full.</li>\n<li>The engine uses the last sample with no filter, so clamping turns zero-mean noise on a short link into a standing offset bias.</li>\n</ul>\n</li>\n<li><strong>Why a floor:</strong> with negatives always accepted, a wrong compensation or a faulty peer could inject an arbitrarily negative delay and step the clock. -800 ns bounds it, reusing the threshold constant, and never rejects the exchange.</li>\n<li><strong>Verdict unchanged from the directive:</strong> any negative delay counts as a good exchange; +800 ns keeps asCapable, above it clears.</li>\n<li><strong>Tests:</strong> -3, -80, -81, -263 keep asCapable, use D exactly in the next offset, and the CSR reads 0; -800, -801 and a very large negative use -800, keep asCapable and cause no step; both latency constants over-stated by the same amount give a zero offset error (fails if the used value is clamped to 0); 800 good, 801 bad. The PR documents that the published and the used values differ by design. Clause numbers are confirmed against the standards before they are cited in the PR.</li>\n</ol>"
+    },
+    {
+      "url": "https://github.com/Mister-M-alt/FPGA-gPTP/issues/109#issuecomment-7136540865",
+      "body": "[A836] REVIEW READY\n\nBranch `109-negative-delay-clamp`, head 8e4889b on base 1213ac5b (local, not pushed). It follows the ruling above.\n\n- **Verdict:** any negative computed meanLinkDelay is a good exchange. 800 ns is good; above it is bad, as before. The multiple-response, own-response and neighborRateRatio conditions are unchanged. NPD_LO_C is retired from the generator, the docs table and the docs gate.\n- **Sync path:** `S_PDELAY = max(D, -800 ns)`, signed, never clamped to 0 in the engine. Publish word 3 carries the same floored, signed value, so the 32-bit word keeps its sign for any D. The parent's public bank is still the only clamp to 0. The published value (0) and the used value (signed) differ by design.\n- **Footprint:** generator only, with a word-neutral ROM and an unchanged leg map. No RTL change, and out-of-context area and timing are identical before and after.\n- **Tests:** new engine phases 62-64 cover -3, -80, -81 and -263 ns used exactly; both latency constants over-stated by 400 ns giving a zero offset error; -800, -801, -5 ms and the wire's most negative delay used as -800 with no step; 800 good and 801 bad.\n  Against 1213ac5b these phases fail 24 checks. At the head, the engine suite passes 2296 x3 and 61.\n- **Controls:** the arm catches 175 of 175, including 8 new controls: a -80 floor, a used value clamped to 0, a floor at 0, no -800 floor, a floor at -799, publication before the floor, and 800/801 off-by-one in each direction.\n- **Parent consumer gates** (local checkout of dev-soft-core with this head as the gitlink): milan_dp gptp and gptp-lat, gptp_shadow, gptp_plane, gptp_tables, gptp_txts, milan_dp_gm_steps and milan_dp_gptp all pass. The CSR reads 0 at -263 ns and -5 ms with asCapable held.\n- **Clause note:** in 802.1AS-2011, computePropTime is 11.2.15.2.4. There is no 11.2.15.3.4.\n",
+      "user": {
+        "login": "Mister-M-alt",
+        "name": "Mister-M-alt",
+        "email": null,
+        "avatar_url": "https://avatars.githubusercontent.com/u/161579364?v=4",
+        "id": 161579364
+      },
+      "id": 7136540865,
+      "pull_request_review_id": null,
+      "in_reply_to_id": null,
+      "created_at": null,
+      "updated_at": null,
+      "review": null,
+      "side": null,
+      "line": null,
+      "start_line": null,
+      "path": null,
+      "body_html": "<p dir=\"auto\">[A836] REVIEW READY</p>\n<p dir=\"auto\">Branch <code class=\"notranslate\">109-negative-delay-clamp</code>, head <a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/Mister-M-alt/FPGA-gPTP/commit/8e4889bba462d14d4e5a34068769872510d4775d/hovercard\" href=\"https://github.com/Mister-M-alt/FPGA-gPTP/commit/8e4889bba462d14d4e5a34068769872510d4775d\"><tt>8e4889b</tt></a> on base <a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/Mister-M-alt/FPGA-gPTP/commit/1213ac5b9e09b8759ba76cc70c53652b5e108996/hovercard\" href=\"https://github.com/Mister-M-alt/FPGA-gPTP/commit/1213ac5b9e09b8759ba76cc70c53652b5e108996\"><tt>1213ac5</tt></a> (local, not pushed). It follows the ruling above.</p>\n<ul dir=\"auto\">\n<li><strong>Verdict:</strong> any negative computed meanLinkDelay is a good exchange. 800 ns is good; above it is bad, as before. The multiple-response, own-response and neighborRateRatio conditions are unchanged. NPD_LO_C is retired from the generator, the docs table and the docs gate.</li>\n<li><strong>Sync path:</strong> <code class=\"notranslate\">S_PDELAY = max(D, -800 ns)</code>, signed, never clamped to 0 in the engine. Publish word 3 carries the same floored, signed value, so the 32-bit word keeps its sign for any D. The parent's public bank is still the only clamp to 0. The published value (0) and the used value (signed) differ by design.</li>\n<li><strong>Footprint:</strong> generator only, with a word-neutral ROM and an unchanged leg map. No RTL change, and out-of-context area and timing are identical before and after.</li>\n<li><strong>Tests:</strong> new engine phases 62-64 cover -3, -80, -81 and -263 ns used exactly; both latency constants over-stated by 400 ns giving a zero offset error; -800, -801, -5 ms and the wire's most negative delay used as -800 with no step; 800 good and 801 bad.<br>\nAgainst <a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/Mister-M-alt/FPGA-gPTP/commit/1213ac5b9e09b8759ba76cc70c53652b5e108996/hovercard\" href=\"https://github.com/Mister-M-alt/FPGA-gPTP/commit/1213ac5b9e09b8759ba76cc70c53652b5e108996\"><tt>1213ac5</tt></a> these phases fail 24 checks. At the head, the engine suite passes 2296 x3 and 61.</li>\n<li><strong>Controls:</strong> the arm catches 175 of 175, including 8 new controls: a -80 floor, a used value clamped to 0, a floor at 0, no -800 floor, a floor at -799, publication before the floor, and 800/801 off-by-one in each direction.</li>\n<li><strong>Parent consumer gates</strong> (local checkout of dev-soft-core with this head as the gitlink): milan_dp gptp and gptp-lat, gptp_shadow, gptp_plane, gptp_tables, gptp_txts, milan_dp_gm_steps and milan_dp_gptp all pass. The CSR reads 0 at -263 ns and -5 ms with asCapable held.</li>\n<li><strong>Clause note:</strong> in 802.1AS-2011, computePropTime is 11.2.15.2.4. There is no 11.2.15.3.4.</li>\n</ul>"
+    }
+  ],
+  "url": "https://github.com/Mister-M-alt/FPGA-gPTP/issues/109",
+  "title": "Mister-M-alt/FPGA-gPTP Issue #109 comments",
+  "display_url": "https://github.com/Mister-M-alt/FPGA-gPTP/issues/109",
+  "display_title": "Mister-M-alt/FPGA-gPTP Issue #109 comments"
+}

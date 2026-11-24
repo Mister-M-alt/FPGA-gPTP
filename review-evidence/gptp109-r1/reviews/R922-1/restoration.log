@@ -1,0 +1,7 @@
+HEAD: 8e4889bba462d14d4e5a34068769872510d4775d
+Tree: bcd69a8e01ba7856d093579faf0dfbf256e772e4
+Tracked blob bytes and modes: 121 PASS
+Index equality to HEAD: PASS
+Required nested submodule gitlinks: none (PASS)
+Working tree and untracked status: clean
+No source restoration was necessary: all probes used disposable copies.

@@ -1,0 +1,30 @@
+Source: kebag-logic/milan-fpga@e275d7950ef3385753e6a15d2e191ba855b171ed REQUIREMENTS.md
+
+- **REQ-PTP-01 (MUST):** The PHC supports enable, nominal increment, and
+  signed rate adjustment in Q8.24 nanoseconds per datapath tick.
+- **REQ-PTP-02 (MUST):** Absolute set, signed offset adjustment, and coherent
+  snapshot reads cross into the PHC domain exactly once per command.
+- **REQ-PTP-03 (MUST):** RX and TX event timestamps include direction,
+  sequence ID, and message type and cannot be re-paired across frames.
+- **REQ-PTP-04 (MUST):** Timestamp-ready events are observable through the CSR
+  interrupt contract.
+- **REQ-PTP-05 (MUST):** The fabric engine implements the Milan gPTP message
+  set, best-master selection, peer delay, receipt timers, and PHC servo.
+- **REQ-PTP-06 (MUST):** Ingress correction is subtracted and egress correction
+  is added at the documented timestamp boundary. The fabric gPTP plane is the
+  sole owner: the two corrections are per-board elaboration constants declared
+  in the end-station configuration and applied inside `KL_gptp_shadow`, and
+  the applied pair is published read-only at `GPTP_LAT` (`0x7F0`). The legacy
+  `PTP_INGRESS_LAT`/`PTP_EGRESS_LAT` words are NOT that control and must not
+  become it, so no correction can be applied twice. A board whose plane is on
+  and whose configuration omits either key is refused. #64 owns physical
+  measurement of the split; the sum is measured per board.
+- **REQ-PTP-07 (MUST):** GM, parent, PathTrace, peer delay, sync and asCapable
+  publish atomically from the fabric bank to every CSR/protocol consumer.
+- **REQ-PTP-08 (MUST):** AVTP `tu` asserts on loss of sync and on the same edge
+  as a GM/sync discontinuity, remains asserted for the Milan holdover interval,
+  and is never used to stop a licensed stream.
+- **REQ-PTP-09 (MUST):** No write outside the fabric engine can manufacture
+  live gPTP health. Option OFF remains ownerless under adversarial writes.
+
+

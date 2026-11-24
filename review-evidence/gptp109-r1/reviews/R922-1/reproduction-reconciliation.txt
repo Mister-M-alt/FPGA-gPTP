@@ -1,0 +1,13 @@
+Historical published reproduction: 24 named failures.
+Exact-head harness against base image: 31 named failures.
+All 24 historical failures remain; the seven added failures expose retained background offset 11 ns after refused Sync pairs.
+The public historical receipt explicitly records background zero; current sim_main.cpp:8472 declares P109_BG_OFF=11.
+
+Added witnesses:
+FAIL #109 D -263: its offset uses the delay exactly
+FAIL #109 D -5000000: its offset uses the delay exactly
+FAIL #109 D -800: its offset uses the delay exactly
+FAIL #109 D -801: its offset uses the delay exactly
+FAIL #109 D -81: its offset uses the delay exactly
+FAIL #109 latency constants over-stated by 400 ns: its offset uses the delay exactly
+FAIL #109 the most negative delay of the wire: its offset uses the delay exactly

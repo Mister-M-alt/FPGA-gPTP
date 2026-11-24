@@ -1,0 +1,8 @@
+command: $REVIEWS/gptp109-r922-1-packet/scratch/obj/Vreview +not-gm-capable
+INFO #82 cold release graded for 2400615 cycles to the first beat
+INFO #82 Pdelay loss: the fall commits flags 9, thisClock follows 1976 cycles later with flags 0
+INFO #82 Pdelay loss: mastership commits 2000630 cycles after asCapable rises
+INFO #82 108 commits graded for the self path
+INFO #84 15608 master cycles graded, 4 handovers to a peer
+INFO #85 92 peer commits graded for thisClock last
+61 checks: 61 PASS, 0 FAIL

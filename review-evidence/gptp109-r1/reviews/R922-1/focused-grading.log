@@ -1,0 +1,4 @@
+Four clean passes: 2296, 2296, 2296, 61.
+Eight #109 controls caught, each through every required named witness.
+Base image with exact-head harness: 2296 checks, 2265 PASS, 31 FAIL; all failures belong to #109.
+Documentation and interface-contract checks PASS.
