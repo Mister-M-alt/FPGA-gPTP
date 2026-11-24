@@ -1,0 +1,6 @@
+PASS HEAD 331e27de137a1d4f7acd4f3f2cc7e373b6e8e869
+PASS tree 7b579e33a97ff4f2bec8c0064f0f73c862bbb135
+PASS all 120 tracked blob bytes and executable modes match HEAD
+PASS index tree equals HEAD tree; clean tracked and untracked status
+PASS required nested gitlinks: zero; parent pin is assessed only through public receipts
+Index file SHA256 d17dbff5cf39ea39ac8cf620580a2a6b2164b0affc9ce76b0edea06296cf479c

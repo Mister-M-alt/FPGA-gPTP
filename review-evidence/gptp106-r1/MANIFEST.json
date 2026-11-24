@@ -1282,5 +1282,119 @@
     "original_sha256": "684bcb819b902fcf41853c366bfa058bce0795a14051ca61fc0a1df0bc939b9b",
     "published_sha256": "684bcb819b902fcf41853c366bfa058bce0795a14051ca61fc0a1df0bc939b9b",
     "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/execution.json",
+    "original_sha256": "61fdd4aeee8c3d9bdec737dfeaf1a2ebf6203ab680fca4ffd94964608a81a0ed",
+    "published_sha256": "0091137e9f02ce8336ce3b42bef476728d35c379179b64403b85bcae2cc0aa2e",
+    "path_redacted": true
+  },
+  {
+    "file": "reviews/R906-2/INDEPENDENT-PASS.md",
+    "original_sha256": "d014f216d904aa29af76547d485b39c514323a00afdfcae32c85fa645078b7a3",
+    "published_sha256": "d014f216d904aa29af76547d485b39c514323a00afdfcae32c85fa645078b7a3",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/MANIFEST.sha256",
+    "original_sha256": "de1632efd5a3bbd274753fc03e270698c3417e56692a66c82ff3ef8c68fdf41b",
+    "published_sha256": "de1632efd5a3bbd274753fc03e270698c3417e56692a66c82ff3ef8c68fdf41b",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/REPORT.md",
+    "original_sha256": "b1c665894f47b7099b4b97816d3b4f1acebcdd01e6f68365ac1ce73bc0f2a67e",
+    "published_sha256": "b1c665894f47b7099b4b97816d3b4f1acebcdd01e6f68365ac1ce73bc0f2a67e",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/audit.py",
+    "original_sha256": "970ec4df4b69393207902dc3502ace08f5631a8d208e0a29ef386f02428bf984",
+    "published_sha256": "970ec4df4b69393207902dc3502ace08f5631a8d208e0a29ef386f02428bf984",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/check_resources.py",
+    "original_sha256": "d13e82c69303b8ae52045b77cc8ae6e32f772bc433d0e0724790d6347b3200ff",
+    "published_sha256": "d13e82c69303b8ae52045b77cc8ae6e32f772bc433d0e0724790d6347b3200ff",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/check_review.py",
+    "original_sha256": "b1992c1804359ecbfd7481535b99457edb579630271f533468b428d990a193dc",
+    "published_sha256": "b1992c1804359ecbfd7481535b99457edb579630271f533468b428d990a193dc",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/compiler-identity.txt",
+    "original_sha256": "0e8adfc2c73aa5f22f486449e1d3ccfee2d1725cc4479be916af8fdb9be3aa47",
+    "published_sha256": "0e8adfc2c73aa5f22f486449e1d3ccfee2d1725cc4479be916af8fdb9be3aa47",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/docs-contract.rc",
+    "original_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "published_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/docs-contract.txt",
+    "original_sha256": "7e58bc4aa1c372f0ec180c1fcf18c3f67e66a2dae613b19f4e596bc31d2797fe",
+    "published_sha256": "7e58bc4aa1c372f0ec180c1fcf18c3f67e66a2dae613b19f4e596bc31d2797fe",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/integrity.rc",
+    "original_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "published_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/integrity.txt",
+    "original_sha256": "3ab2e80398db7fa50c72d11b54b39da44f841ca36b0161ccb1e1d3e85b0a5f48",
+    "published_sha256": "3ab2e80398db7fa50c72d11b54b39da44f841ca36b0161ccb1e1d3e85b0a5f48",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/order-check.txt",
+    "original_sha256": "2f45d9e024e7ff6b3a41c6f92319bb0b59b25f9595426d628f13d29312f2615c",
+    "published_sha256": "2f45d9e024e7ff6b3a41c6f92319bb0b59b25f9595426d628f13d29312f2615c",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/public-state.txt",
+    "original_sha256": "62de1f684705b6581fc8671dad6f1d3ec300b2c701a67a9651e5dfead85a6fc3",
+    "published_sha256": "62de1f684705b6581fc8671dad6f1d3ec300b2c701a67a9651e5dfead85a6fc3",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/reproduce.py",
+    "original_sha256": "4be81829bc3132b77944c535d95c6926f8022c03e9f058224a2342fe57e365b3",
+    "published_sha256": "4be81829bc3132b77944c535d95c6926f8022c03e9f058224a2342fe57e365b3",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/resource-checks.rc",
+    "original_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "published_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/resource-checks.txt",
+    "original_sha256": "fbe6aa74ce2eec23243a2ae90b5bb9e002e43a33b445dc632fd466db4c336b77",
+    "published_sha256": "fbe6aa74ce2eec23243a2ae90b5bb9e002e43a33b445dc632fd466db4c336b77",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/structural-checks.rc",
+    "original_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "published_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "path_redacted": false
+  },
+  {
+    "file": "reviews/R906-2/structural-checks.txt",
+    "original_sha256": "aa79afed80e27975960afa19209c5c81bdeb719a0896856c2e1af1e165ad6534",
+    "published_sha256": "aa79afed80e27975960afa19209c5c81bdeb719a0896856c2e1af1e165ad6534",
+    "path_redacted": false
   }
 ]

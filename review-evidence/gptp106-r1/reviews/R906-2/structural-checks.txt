@@ -1,0 +1,206 @@
+PASS exact head
+PASS exact tree
+PASS unchanged hdl tree since preceding review
+PASS unchanged committed images since preceding review
+PASS published digest author/HANDOFF-r2.md
+PASS published digest author/PR-BODY.md
+PASS published digest author/REVIEW-READY.md
+PASS published digest author/receipts/INDEX.md
+PASS published digest author/receipts/arm-a728cc3.txt
+PASS published digest author/receipts/controls-107-first-run.txt
+PASS published digest author/receipts/gates-processor.txt
+PASS published digest author/receipts/gates.txt
+PASS published digest author/receipts/near-clamp-C.txt
+PASS published digest author/receipts/ooc-r2.txt
+PASS published digest author/receipts/parent-gm_steps.txt
+PASS published digest author/receipts/parent-gptp_shadow.txt
+PASS published digest author/receipts/parent-milan_dp-gptp.txt
+PASS published digest author/receipts/parent-ratchets.txt
+PASS published digest author/receipts/parent-takeover-gate.txt
+PASS published digest author/receipts/routes.txt
+PASS published digest author/receipts/tools-r2/lane/armslice.sh
+PASS published digest author/receipts/tools-r2/lane/dpgptp.sh
+PASS published digest author/receipts/tools-r2/lane/gmsteps.sh
+PASS published digest author/receipts/tools-r2/lane/gmtake.sh
+PASS published digest author/receipts/tools-r2/lane/gmtake2.sh
+PASS published digest author/receipts/tools-r2/lane/leg4.sh
+PASS published digest author/receipts/tools-r2/lane/mutslice.py
+PASS published digest author/receipts/tools-r2/lane/oocsum.sh
+PASS published digest author/receipts/tools-r2/lane/penv.sh
+PASS published digest author/receipts/tools-r2/lane/privcheck.py
+PASS published digest author/receipts/tools-r2/lane/shadow2.sh
+PASS published digest author/receipts/tools-r2/near-clamp-experiment.patch
+PASS published digest author/receipts/tools-r2/parent-scratch-gate.commits
+PASS published digest author/receipts/tools-r2/parent-scratch-gate.patch
+PASS published digest author/receipts/tools-r2/route/clone.sh
+PASS published digest author/receipts/tools-r2/route/paths3.py
+PASS published digest author/receipts/tools-r2/route/prep.sh
+PASS published digest author/receipts/tools-r2/route/route.sh
+PASS published digest author/receipts/tools-r2/route/routes_receipt.sh
+PASS published digest author/receipts/tools-r2/route/signoff.py
+PASS published digest author/receipts/tools-r2/route/util.sh
+PASS published digest author/receipts/tools-r2/route/worst10.py
+PASS published digest author-r3/HANDOFF-r3.md
+PASS published digest author-r3/PR-BODY.md
+PASS published digest author-r3/REVIEW-READY.md
+PASS published digest author-r3/STOP-NOTE.md
+PASS published digest author-r3/receipts/INDEX.md
+PASS published digest author-r3/receipts/envelope.txt
+PASS published digest author-r3/receipts/gates-331e27d.txt
+PASS published digest author-r3/receipts/merge.txt
+PASS published digest author-r3/receipts/parent-r3.txt
+PASS published digest author-r3/receipts/privacy.txt
+PASS published digest author-r3/receipts/route-inputs.txt
+PASS published digest author-r3/receipts/route-repeat.txt
+PASS published digest author-r3/receipts/routes/1x1-base-aslh/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-aslh/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-aslh/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-aslh/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-aslh/run.txt
+PASS published digest author-r3/receipts/routes/1x1-base-aslh/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/1x1-base-eppo/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-eppo/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-eppo/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-eppo/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-eppo/run.txt
+PASS published digest author-r3/receipts/routes/1x1-base-eppo/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/1x1-base-eto/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-eto/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-eto/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-eto/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/1x1-base-eto/run.txt
+PASS published digest author-r3/receipts/routes/1x1-base-eto/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/1x1-head-aslh/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-aslh/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-aslh/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-aslh/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-aslh/run.txt
+PASS published digest author-r3/receipts/routes/1x1-head-aslh/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/1x1-head-eppo/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-eppo/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-eppo/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-eppo/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-eppo/run.txt
+PASS published digest author-r3/receipts/routes/1x1-head-eppo/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/1x1-head-eto/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-eto/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-eto/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-eto/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/1x1-head-eto/run.txt
+PASS published digest author-r3/receipts/routes/1x1-head-eto/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/8x8-base-aslh/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-aslh/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-aslh/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-aslh/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-aslh/run.txt
+PASS published digest author-r3/receipts/routes/8x8-base-aslh/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/8x8-base-eppo/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-eppo/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-eppo/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-eppo/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-eppo/run.txt
+PASS published digest author-r3/receipts/routes/8x8-base-eppo/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/8x8-base-eto/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-eto/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-eto/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-eto/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/8x8-base-eto/run.txt
+PASS published digest author-r3/receipts/routes/8x8-base-eto/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/8x8-head-aslh/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-aslh/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-aslh/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-aslh/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-aslh/run.txt
+PASS published digest author-r3/receipts/routes/8x8-head-aslh/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/8x8-head-eppo/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-eppo/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-eppo/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-eppo/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-eppo/run.txt
+PASS published digest author-r3/receipts/routes/8x8-head-eppo/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/8x8-head-eto/alinx_ax7101_route_status.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-eto/alinx_ax7101_utilization_place.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-eto/baseline_hierarchy.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-eto/baseline_utilization.rpt
+PASS published digest author-r3/receipts/routes/8x8-head-eto/run.txt
+PASS published digest author-r3/receipts/routes/8x8-head-eto/timing-summaries.txt
+PASS published digest author-r3/receipts/routes/prep/chain3-base-1x1.log
+PASS published digest author-r3/receipts/routes/prep/chain3-base-8x8.log
+PASS published digest author-r3/receipts/routes/prep/chain3-head-1x1.log
+PASS published digest author-r3/receipts/routes/prep/chain3-head-8x8.log
+PASS published digest author-r3/receipts/routes/prep/prep3-base-1x1.log
+PASS published digest author-r3/receipts/routes/prep/prep3-base-8x8.log
+PASS published digest author-r3/receipts/routes/prep/prep3-head-1x1.log
+PASS published digest author-r3/receipts/routes/prep/prep3-head-8x8.log
+PASS published digest author-r3/receipts/routes-r3.txt
+PASS published digest author-r3/receipts/tools/lane/armslice3.py
+PASS published digest author-r3/receipts/tools/lane/envelope.py
+PASS published digest author-r3/receipts/tools/lane/gates3.sh
+PASS published digest author-r3/receipts/tools/lane/leg4.sh
+PASS published digest author-r3/receipts/tools/lane/parent3.sh
+PASS published digest author-r3/receipts/tools/lane/privcheck.py
+PASS published digest author-r3/receipts/tools/route/body3.py
+PASS published digest author-r3/receipts/tools/route/chain3.sh
+PASS published digest author-r3/receipts/tools/route/collect3.sh
+PASS published digest author-r3/receipts/tools/route/comp3.py
+PASS published digest author-r3/receipts/tools/route/inputs3.py
+PASS published digest author-r3/receipts/tools/route/prep3.sh
+PASS published digest author-r3/receipts/tools/route/repeat3.py
+PASS published digest author-r3/receipts/tools/route/routes3.py
+PASS published digest author-r3/receipts/tools/route/run3.sh
+Verified publication counts {"author": 38, "author-r3": 108}
+Publication commit signature present: False
+PASS all 167 predecessor mutation tuples retained byte-for-byte, including order and named checks
+PASS all main controls outside the previously reviewed #100 retargeting retained exactly
+PASS #100 retargeting unchanged from predecessor, including renamed and combined word-3 controls
+Mutation counts: main 159, predecessor 167, head 167; #100 main 24, head 23
+PASS 167 unique mutation names
+PASS all-named control accepts complete evidence: the first master Announce waits for a beat
+PASS all-named control rejects missing check: #106 3.0 s, a clock after the tick: a master Announce on the wire after the instant
+PASS all-named control rejects missing check: #106 3.00006 s, the lab's tie: a master Announce on the wire after the instant
+PASS all-named control rejects missing check: #106 3.001 s: a master Announce on the wire after the instant
+PASS all-named control rejects missing check: #106 regain: the first master Announce leaves at once
+PASS all-named control rejects missing check: #106 regain race: one master Announce leaves before the better one is taken
+PASS all-named control accepts complete evidence: the first master Announce starts no cadence
+PASS all-named control rejects missing check: #106 regain: four more master Announces, each 1 s after the one before
+PASS all-named control accepts complete evidence: a mastership keeps the slave's rate
+PASS all-named control rejects missing check: #107 takeover: one rate write, this oscillator's within one trim unit
+PASS all-named control rejects missing check: slew: mastership runs on this oscillator
+PASS all-named control rejects missing check: #100 TLV settled: BECOME writes rate 0, this oscillator
+PASS all-named control accepts complete evidence: word 3 applies only during a slew
+PASS all-named control rejects missing check: #100 TLV settled: BECOME writes rate 0, this oscillator
+PASS all-named control rejects missing check: slew: idle timeout writes only mastership's rate 0
+PASS all-named control rejects missing check: #107 TLV unfollowed: BECOME writes rate 0, and only it
+PASS all-named control accepts complete evidence: scaledLastGmFreqChange has its sign inverted
+PASS all-named control rejects missing check: #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate
+PASS all-named control rejects missing check: #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate
+PASS all-named control rejects missing check: #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base
+PASS all-named control rejects missing check: #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base
+PASS all-named control accepts complete evidence: scaledLastGmFreqChange is the last trim's
+PASS all-named control rejects missing check: #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate
+PASS all-named control rejects missing check: #100 TLV slewing: scaledLastGmFreqChange is rate 0 less the estimate
+PASS all-named control accepts complete evidence: scaledLastGmFreqChange is scaled by 2^39
+PASS all-named control rejects missing check: #100 TLV settled: scaledLastGmFreqChange is rate 0 less the estimate
+PASS all-named control rejects missing check: #107 TLV after a grandmaster +10 ppm: scaledLastGmFreqChange is the change of the time base
+PASS all-named control rejects missing check: #107 TLV after a grandmaster -10 ppm: scaledLastGmFreqChange is the change of the time base
+PASS all-named control accepts complete evidence: a mastership leaves the slave rate seen
+PASS all-named control rejects missing check: #107 TLV unfollowed: scaledLastGmFreqChange is rate 0 less the estimate
+PASS all-named control accepts complete evidence: the trim stops short of a grandmaster 100 ppm away
+PASS all-named control rejects missing check: #107 a grandmaster +100 ppm: the trim settles within 0.2 ppm of it
+PASS all-named control rejects missing check: #107 a grandmaster +100 ppm: its offset stays within 1 us
+PASS all-named control rejects missing check: #107 a grandmaster -100 ppm: the trim settles within 0.2 ppm of it
+PASS all-named control rejects missing check: #107 a grandmaster -100 ppm: its offset stays within 1 us
+Named-check omissions rejected: 26
+PASS published split-arm receipts cover exact table and named checks once, in order
+PASS both split-arm receipts have positive controls
+Corners: +200.020002, -199.980002 ppm
+PASS documented envelope at 50000000 Hz: 200.000405 ppm, gap 0.019597 ppm, interval 5,103 s
+PASS slow corner inside, fast corner outside
+PASS documented envelope at 100000000 Hz: 199.997425 ppm, gap 0.022577 ppm, interval 4,429 s
+PASS slow corner inside, fast corner outside
+PASS documented envelope at 125000000 Hz: 200.003386 ppm, gap 0.016616 ppm, interval 6,018 s
+PASS slow corner inside, fast corner outside
+PASS documented envelope at 2000000 Hz: 200.000048 ppm, gap 0.019954 ppm, interval 5,011 s
+PASS slow corner inside, fast corner outside
+PASS merged ordering check passes at jobs 1 and 8
+COMPLETE

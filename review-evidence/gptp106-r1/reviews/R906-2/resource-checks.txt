@@ -1,0 +1,31 @@
+PASS 1x1 base eppo: LUT 32647, WNS +0.099, WHS +0.036, floor True, fit and routing clean; corners {'Slow_85C': (0.099, 0.102), 'Slow_0C': (0.099, 0.102), 'Fast_85C': (1.687, 0.036), 'Fast_0C': (1.687, 0.036)}
+PASS 1x1 base aslh: LUT 32794, WNS +0.136, WHS +0.033, floor True, fit and routing clean; corners {'Slow_85C': (0.136, 0.064), 'Slow_0C': (0.136, 0.064), 'Fast_85C': (1.66, 0.033), 'Fast_0C': (1.66, 0.033)}
+PASS 1x1 base eto: LUT 32777, WNS +0.158, WHS +0.033, floor True, fit and routing clean; corners {'Slow_85C': (0.158, 0.064), 'Slow_0C': (0.158, 0.064), 'Fast_85C': (1.66, 0.033), 'Fast_0C': (1.66, 0.033)}
+SELECT 1x1 base eto
+PASS 1x1 head eppo: LUT 32398, WNS +0.161, WHS +0.032, floor True, fit and routing clean; corners {'Slow_85C': (0.161, 0.092), 'Slow_0C': (0.161, 0.092), 'Fast_85C': (1.687, 0.032), 'Fast_0C': (1.687, 0.032)}
+PASS 1x1 head aslh: LUT 32466, WNS +0.190, WHS +0.036, floor True, fit and routing clean; corners {'Slow_85C': (0.19, 0.102), 'Slow_0C': (0.19, 0.102), 'Fast_85C': (1.691, 0.036), 'Fast_0C': (1.691, 0.036)}
+PASS 1x1 head eto: LUT 32455, WNS +0.276, WHS +0.036, floor True, fit and routing clean; corners {'Slow_85C': (0.276, 0.102), 'Slow_0C': (0.276, 0.102), 'Fast_85C': (1.691, 0.036), 'Fast_0C': (1.691, 0.036)}
+SELECT 1x1 head eto
+PASS 8x8 base eppo: LUT 43022, WNS +0.073, WHS +0.034, floor True, fit and routing clean; corners {'Slow_85C': (0.073, 0.102), 'Slow_0C': (0.073, 0.102), 'Fast_85C': (1.636, 0.034), 'Fast_0C': (1.636, 0.034)}
+PASS 8x8 base aslh: LUT 43000, WNS +0.006, WHS +0.036, floor False, fit and routing clean; corners {'Slow_85C': (0.006, 0.102), 'Slow_0C': (0.006, 0.102), 'Fast_85C': (1.412, 0.036), 'Fast_0C': (1.412, 0.036)}
+PASS 8x8 base eto: LUT 42998, WNS +0.064, WHS +0.027, floor True, fit and routing clean; corners {'Slow_85C': (0.064, 0.102), 'Slow_0C': (0.064, 0.102), 'Fast_85C': (1.412, 0.027), 'Fast_0C': (1.412, 0.027)}
+SELECT 8x8 base eppo
+PASS 8x8 head eppo: LUT 43477, WNS +0.332, WHS +0.036, floor True, fit and routing clean; corners {'Slow_85C': (0.332, 0.102), 'Slow_0C': (0.332, 0.102), 'Fast_85C': (1.636, 0.036), 'Fast_0C': (1.636, 0.036)}
+PASS 8x8 head aslh: LUT 43536, WNS +0.237, WHS +0.036, floor True, fit and routing clean; corners {'Slow_85C': (0.237, 0.102), 'Slow_0C': (0.237, 0.102), 'Fast_85C': (1.66, 0.036), 'Fast_0C': (1.66, 0.036)}
+PASS 8x8 head eto: LUT 43589, WNS +0.244, WHS +0.036, floor True, fit and routing clean; corners {'Slow_85C': (0.244, 0.102), 'Slow_0C': (0.244, 0.102), 'Fast_85C': (1.66, 0.036), 'Fast_0C': (1.66, 0.036)}
+SELECT 8x8 head eppo
+DELTA 1x1 {'LUT': -322.0, 'FF': -4.0, 'SLICE': -3.0, 'BRAM': 0.0, 'RAMB36': 0.0, 'RAMB18': 0.0, 'DSP': 0.0}
+PARTITION 1x1: 137 disjoint pieces, LUT change -306, shared sites 144->160, reconciled -322; all piece RAMB/DSP unchanged
+CELL 1x1 /u_engine: (4717, 3610, 1, 1, 6) -> (4637, 3610, 1, 1, 6), delta (-80, 0, 0, 0, 0)
+CELL 1x1 /u_edit/@own: (499, 138, 0, 0, 0) -> (497, 138, 0, 0, 0), delta (-2, 0, 0, 0, 0)
+CELL 1x1 /csr: (2418, 1718, 0, 2, 0) -> (2239, 1719, 0, 2, 0), delta (-179, 1, 0, 0, 0)
+CELL 1x1 /g_gptp_plane.u_gptp_shadow/@own: (877, 1033, 0, 0, 0) -> (618, 1033, 0, 0, 0), delta (-259, 0, 0, 0, 0)
+CELL 1x1 /milan_datapath/@own: (1591, 2884, 0, 0, 0) -> (1626, 2883, 0, 0, 0), delta (35, -1, 0, 0, 0)
+DELTA 8x8 {'LUT': 455.0, 'FF': -110.0, 'SLICE': -80.0, 'BRAM': 0.0, 'RAMB36': 0.0, 'RAMB18': 0.0, 'DSP': 0.0}
+PARTITION 8x8: 129 disjoint pieces, LUT change +470, shared sites 202->217, reconciled +455; all piece RAMB/DSP unchanged
+CELL 8x8 /u_engine: (3811, 3608, 1, 1, 6) -> (3737, 3609, 1, 1, 6), delta (-74, 1, 0, 0, 0)
+CELL 8x8 /u_edit/@own: (3733, 165, 0, 0, 0) -> (5302, 159, 0, 0, 0), delta (1569, -6, 0, 0, 0)
+CELL 8x8 /csr: (4105, 1836, 0, 2, 0) -> (2767, 1827, 0, 2, 0), delta (-1338, -9, 0, 0, 0)
+CELL 8x8 /g_gptp_plane.u_gptp_shadow/@own: (1776, 1033, 0, 0, 0) -> (2111, 1033, 0, 0, 0), delta (335, 0, 0, 0, 0)
+CELL 8x8 /milan_datapath/@own: (4165, 7052, 0, 0, 0) -> (4385, 7070, 0, 0, 0), delta (220, 18, 0, 0, 0)
+COMPLETE: all 12 routes, 48 corners, both qualifying images and resource partitions checked

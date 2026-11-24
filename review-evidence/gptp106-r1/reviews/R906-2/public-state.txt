@@ -1,0 +1,16 @@
+Repository: Mister-M-alt/FPGA-gPTP
+PR: 108
+Reviewed head: 331e27de137a1d4f7acd4f3f2cc7e373b6e8e869
+Published tree: 7b579e33a97ff4f2bec8c0064f0f73c862bbb135
+PR metadata: open, not draft, mergeable true; main base 7cfd6a025698de9e3536006eefb46f0fb114692a.
+The PR-filtered exact-head workflow query returned workflow_runs: [].
+No executed or skipped hosted context is claimed from that empty query.
+No manager source bank is present or inferred.
+Owner exception: https://github.com/Mister-M-alt/FPGA-gPTP/pull/108#issuecomment-7121892317
+Review start: https://github.com/Mister-M-alt/FPGA-gPTP/pull/108#issuecomment-7121929415
+Publication: 2c2ba060bc802cef25ccb95767d657d4e3c6b260, review-evidence/gptp106-r1.
+Published hashes matched: 38 author files and 108 author-r3 files.
+Publication commit: no embedded cryptographic signature. Hash integrity was verified; a signature was not verified.
+Prior reports opened only after INDEPENDENT-PASS.md was written:
+https://github.com/Mister-M-alt/FPGA-gPTP/pull/108#issuecomment-7110191993
+https://github.com/Mister-M-alt/FPGA-gPTP/pull/108#issuecomment-7110828786
