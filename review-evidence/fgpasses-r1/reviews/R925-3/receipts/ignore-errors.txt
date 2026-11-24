@@ -1,0 +1,82 @@
+=== serial make -j4: rc 2; passes started ['pass0', 'pass1']
+stdout:
+  pass 0: first line
+  pass 0: 12 checks: 12 PASS, 0 FAIL
+  -- again, with the request counter seeded above 16 bits --
+  pass 1: first line
+  pass 1: 12 checks: 11 PASS, 1 FAIL
+stderr:
+  make: *** [MK: run] Error 1
+=== parallel make -j4: rc 2; passes started ['pass0', 'pass1', 'pass2', 'pass3']
+stdout:
+  pass 0: first line
+  pass 0: 12 checks: 12 PASS, 0 FAIL
+  -- again, with the request counter seeded above 16 bits --
+  pass 1: first line
+  pass 1: 12 checks: 11 PASS, 1 FAIL
+stderr:
+  make: *** [MK: run] Error 1
+=== serial make -j4 -i: rc 0; passes started ['pass0', 'pass1', 'pass2', 'pass3']
+stdout:
+  pass 0: first line
+  pass 0: 12 checks: 12 PASS, 0 FAIL
+  -- again, with the request counter seeded above 16 bits --
+  pass 1: first line
+  pass 1: 12 checks: 11 PASS, 1 FAIL
+  -- again, with the Sync counter seeded above 16 bits --
+  pass 2: first line
+  pass 2: 12 checks: 11 PASS, 1 FAIL
+  -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+  pass 3: first line
+  pass 3: 12 checks: 12 PASS, 0 FAIL
+stderr:
+  make: [MK: run] Error 1 (ignored)
+  make: [MK: run] Error 1 (ignored)
+=== parallel make -j4 -i: rc 0; passes started ['pass0', 'pass1', 'pass2', 'pass3']
+stdout:
+  pass 0: first line
+  pass 0: 12 checks: 12 PASS, 0 FAIL
+  -- again, with the request counter seeded above 16 bits --
+  pass 1: first line
+  pass 1: 12 checks: 11 PASS, 1 FAIL
+  -- again, with the Sync counter seeded above 16 bits --
+  pass 2: first line
+  pass 2: 12 checks: 11 PASS, 1 FAIL
+  -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+  pass 3: first line
+  pass 3: 12 checks: 12 PASS, 0 FAIL
+stderr:
+  make: [MK: run] Error 1 (ignored)
+  make: [MK: run] Error 1 (ignored)
+=== serial make -j1 -i: rc 0; passes started ['pass0', 'pass1', 'pass2', 'pass3']
+stdout:
+  pass 0: first line
+  pass 0: 12 checks: 12 PASS, 0 FAIL
+  -- again, with the request counter seeded above 16 bits --
+  pass 1: first line
+  pass 1: 12 checks: 11 PASS, 1 FAIL
+  -- again, with the Sync counter seeded above 16 bits --
+  pass 2: first line
+  pass 2: 12 checks: 11 PASS, 1 FAIL
+  -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+  pass 3: first line
+  pass 3: 12 checks: 12 PASS, 0 FAIL
+stderr:
+  make: [MK: run] Error 1 (ignored)
+  make: [MK: run] Error 1 (ignored)
+=== parallel make -j1 -i: rc 0; passes started ['pass0', 'pass1', 'pass2', 'pass3']
+stdout:
+  pass 0: first line
+  pass 0: 12 checks: 12 PASS, 0 FAIL
+  -- again, with the request counter seeded above 16 bits --
+  pass 1: first line
+  pass 1: 12 checks: 11 PASS, 1 FAIL
+  -- again, with the Sync counter seeded above 16 bits --
+  pass 2: first line
+  pass 2: 12 checks: 11 PASS, 1 FAIL
+  -- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --
+  pass 3: first line
+  pass 3: 12 checks: 12 PASS, 0 FAIL
+stderr:
+  make: [MK: run] Error 1 (ignored)
+  make: [MK: run] Error 1 (ignored)

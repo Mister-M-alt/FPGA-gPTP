@@ -1,0 +1,8 @@
+HEAD f1b566a881573611637e7bd6ecd257799b8c991c
+tree c4cd0d38763e6d99ad35d8b6dc7e30db6fa38924
+index-tree c4cd0d38763e6d99ad35d8b6dc7e30db6fa38924
+status-porcelain-lines 0
+untracked-or-ignored: 
+gitlinks: 0
+worktree==HEAD bytes and modes
+ls-files-s sha256 28f49e18681483a2caeb2806004bc96c7f80fca42d09c5e70c217d83f379d7a9  -

@@ -1,0 +1,4 @@
+c-head-j4 vs c-base-j4: instructions +0.293 %  CPU +30.279 %  cycles +29.95 %
+r-head-j4 vs r-base-j4: instructions +0.293 %  CPU -16.549 %  cycles -16.72 %
+r-head-j4-b vs r-base-j4: instructions +0.293 %  CPU -24.205 %  cycles -24.31 %
+c-head-j1 vs c-base-j1: instructions +0.040 %  CPU +3.553 %  cycles +3.48 %
