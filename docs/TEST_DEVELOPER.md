@@ -59,6 +59,14 @@ No handwritten C harness exists.
 
 Bare `make` in parser, engine, gaskets and tsngen adds mutants.
 
+The engine suite's four passes run at once.
+
+Their outputs print afterwards, in the serial order.
+
+The first failing pass in order sets the exit status.
+
+Four free cores run it in about its longest pass.
+
 By default, up to eight engine mutants run at once.
 
 Its `--jobs` option sets that number.

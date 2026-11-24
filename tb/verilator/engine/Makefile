@@ -36,7 +36,7 @@ run: export CCACHE_BASEDIR ?= $(abspath ../../..)
 .DEFAULT_GOAL := all
 all: run mutants-order-test mutants
 
-# The suite runs THREE times against the same build. Regression images seed
+# The suite runs FOUR times against the same build. Regression images seed
 # the request and Sync counters independently above 16 bits, where an
 # unbounded counter aliases into the claim's flags or messageType. Ordinary
 # runs need 2,097,152 requests (24.3 days) or 65,536 Syncs (2 h 16 min at
@@ -46,21 +46,37 @@ all: run mutants-order-test mutants
 # only the self-publication phases, from an image whose priority1 is 255.
 # That image also states clockAccuracy 0xFE, so the pass proves the #100
 # --clock-accuracy build parameter against the 0x22 of the shipping image.
+#
+# The four passes are independent: each reads its own image from its own
+# directory, and none writes anything another reads. So the images are written
+# first and the passes run at once. Each pass's output is kept, then printed in
+# the serial order under the serial echo lines, so the transcript is the one
+# the passes printed one after another; the recipe stops at the first failing
+# pass in that order, with that pass's status, after its output. On four free
+# cores the run takes about as long as its longest pass. An INT or a TERM to
+# the recipe stops all four passes.
 run: gptp_ucode.hex
 	$(VERILATOR) $(VFLAGS) $(SRCS) $(CPP) -o Vengine_sim
-	./obj_dir/Vengine_sim
-	@mkdir -p seedrun
+	@mkdir -p seedrun syncseedrun p1run
 	@python3 $(GEN) $(GENARGS) --seq-seed 0x200000 -o seedrun/gptp_ucode.hex >/dev/null
-	@echo "-- again, with the request counter seeded above 16 bits --"
-	@cd seedrun && ../obj_dir/Vengine_sim
-	@mkdir -p syncseedrun
 	@python3 $(GEN) $(GENARGS) --sync-seq-seed 0x10000 -o syncseedrun/gptp_ucode.hex >/dev/null
-	@echo "-- again, with the Sync counter seeded above 16 bits --"
-	@cd syncseedrun && ../obj_dir/Vengine_sim
-	@mkdir -p p1run
 	@python3 $(GEN) $(GENARGS) --p1 255 --clock-accuracy 0xFE -o p1run/gptp_ucode.hex >/dev/null
-	@echo "-- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --"
-	@cd p1run && ../obj_dir/Vengine_sim +not-gm-capable
+	@echo ./obj_dir/Vengine_sim
+	@p0= p1= p2= p3=; \
+	 trap 'kill $$p0 $$p1 $$p2 $$p3 2>/dev/null; exit 130' INT; \
+	 trap 'kill $$p0 $$p1 $$p2 $$p3 2>/dev/null; exit 143' TERM; \
+	 ./obj_dir/Vengine_sim > obj_dir/pass0.out 2>&1 & p0=$$!; \
+	 (cd seedrun && exec ../obj_dir/Vengine_sim) > obj_dir/pass1.out 2>&1 & p1=$$!; \
+	 (cd syncseedrun && exec ../obj_dir/Vengine_sim) > obj_dir/pass2.out 2>&1 & p2=$$!; \
+	 (cd p1run && exec ../obj_dir/Vengine_sim +not-gm-capable) > obj_dir/pass3.out 2>&1 & p3=$$!; \
+	 wait $$p0; r0=$$?; wait $$p1; r1=$$?; wait $$p2; r2=$$?; wait $$p3; r3=$$?; \
+	 cat obj_dir/pass0.out; [ $$r0 -eq 0 ] || exit $$r0; \
+	 echo "-- again, with the request counter seeded above 16 bits --"; \
+	 cat obj_dir/pass1.out; [ $$r1 -eq 0 ] || exit $$r1; \
+	 echo "-- again, with the Sync counter seeded above 16 bits --"; \
+	 cat obj_dir/pass2.out; [ $$r2 -eq 0 ] || exit $$r2; \
+	 echo "-- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --"; \
+	 cat obj_dir/pass3.out; exit $$r3
 
 # Rule 8: prove the checks above are load-bearing. Defects are injected into
 # the real engine RTL and the real micro-code generator, one per mutant, and
