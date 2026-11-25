@@ -5290,5 +5290,53 @@
     "original_sha256": "1d8ec2fbd1a5d175c3752348ae8d849e12325e891e3f1e1853e4da2ac8229142",
     "published_sha256": "1d8ec2fbd1a5d175c3752348ae8d849e12325e891e3f1e1853e4da2ac8229142",
     "path_redacted": false
+  },
+  {
+    "file": "author-r7/REVIEW-READY.md",
+    "original_sha256": "5b6cbaec908afd40b84302c76672500fd408940b56ed336573102356a66fd122",
+    "published_sha256": "5b6cbaec908afd40b84302c76672500fd408940b56ed336573102356a66fd122",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r7/receipts/diff.txt",
+    "original_sha256": "99e164175b530f61c4f07fb71d38e13292ef698deb940e0f70f4335faffc9458",
+    "published_sha256": "99e164175b530f61c4f07fb71d38e13292ef698deb940e0f70f4335faffc9458",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r7/receipts/passes-test-plant-prctl.log",
+    "original_sha256": "c26b3a6b1b6c464431b213c1f8d31409e7ec3230beee04da999aa6b52c3aaeab",
+    "published_sha256": "c26b3a6b1b6c464431b213c1f8d31409e7ec3230beee04da999aa6b52c3aaeab",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r7/receipts/passes-test-pt-k0.log",
+    "original_sha256": "c3f7b544cc014bb50545786e4991a8a05007ed5386b19061f79a9d2f562a4eee",
+    "published_sha256": "c3f7b544cc014bb50545786e4991a8a05007ed5386b19061f79a9d2f562a4eee",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r7/receipts/passes-test-pt-k1.log",
+    "original_sha256": "76600dd5d62cbf0eda80d1c473c108f0c6c5724054eb47af8a8ef2f01b46db88",
+    "published_sha256": "76600dd5d62cbf0eda80d1c473c108f0c6c5724054eb47af8a8ef2f01b46db88",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r7/receipts/passes-test-pt-k2.log",
+    "original_sha256": "e8f7cab996c25dcd3dd8922805a9adf42c8d648c7899cc26955789a5ac900a56",
+    "published_sha256": "e8f7cab996c25dcd3dd8922805a9adf42c8d648c7899cc26955789a5ac900a56",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r7/receipts/passes-test-pt-k3.log",
+    "original_sha256": "f276ec9a8769af2775675db8eaa0615dda0578ede90cad784b360e61bcbdb09e",
+    "published_sha256": "f276ec9a8769af2775675db8eaa0615dda0578ede90cad784b360e61bcbdb09e",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r7/receipts/passes-test-pt-k4.log",
+    "original_sha256": "79ea65faef1ec39ec31053c964175d121d485353914145247f68cada75eb9874",
+    "published_sha256": "79ea65faef1ec39ec31053c964175d121d485353914145247f68cada75eb9874",
+    "path_redacted": false
   }
 ]
