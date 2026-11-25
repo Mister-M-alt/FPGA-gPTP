@@ -39,6 +39,7 @@ killed as it saw the serial recipe's.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import resource
@@ -50,6 +51,7 @@ from pathlib import Path
 
 #: Everything one `make run` records, removed by `run`'s first rule.
 STATE = Path("obj_dir/engine-passes")
+PR_SET_DUMPABLE = 4  # the prctl(2) option number
 FORWARDED = (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT, signal.SIGHUP)
 
 
@@ -248,12 +250,15 @@ def replay(n: int, banner: str | None, ignoring: bool) -> int:
 
 
 def reraise(signum: int, core: bool) -> None:
-    """End as the recorded process ended: by its signal, dumping core only if it did. A soft core limit of one byte
-    suppresses the dump on a piped core_pattern (the kernel skips a pipe only at exactly 1) and on a file one (below
-    the smallest dump); 0 would still dump to a pipe."""
+    """End as the recorded process ended: by its signal, dumping core only if it did. A death that did not dump is
+    re-raised non-dumpable (prctl PR_SET_DUMPABLE 0), which suppresses the dump whatever the core limits and the
+    core_pattern, piped or file; the soft limit also drops to 1 where the hard limit allows (0 still dumps to a
+    pipe)."""
     if not core:
         hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
-        resource.setrlimit(resource.RLIMIT_CORE, (1 if hard == resource.RLIM_INFINITY or hard >= 1 else 0, hard))
+        soft = 1 if hard == resource.RLIM_INFINITY or hard >= 1 else 0
+        resource.setrlimit(resource.RLIMIT_CORE, (soft, hard))
+        ctypes.CDLL(None, use_errno=True).prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
     if signum != signal.SIGKILL:
         signal.signal(signum, signal.SIG_DFL)
     os.chdir(STATE)  # a relative file core_pattern writes this process's core here, never over the simulator's

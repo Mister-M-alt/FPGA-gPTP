@@ -36,8 +36,8 @@ The checks:
    for SIGSEGV and SIGKILL. A crafted record stands in for the run, so the
    check holds on any host's /bin/sh. The reference line execs its process,
    so it dies of the signal itself whether the shell forks or not.
-8. A replayed signal death that did not dump core ends without a dump under
-   a one-byte caller core limit, as the serial line does, on a piped
+8. A replayed signal death that did not dump core ends as a non-dumpable
+   serial death does, under caller core limits of 0 and of 1, on a piped
    core_pattern too.
 Nothing is built or simulated; it takes about 90 seconds.
 """
@@ -369,7 +369,8 @@ def gen_signal(trees: dict[str, Path], scratch: Path) -> int:
             (state / "build.ok").touch()
             (state / "1.json").write_text(json.dumps({"gen_signal": int(signum), "gen_core": False}))
             line = (f"python3 {tool} replay-gen 1" if form == "replay"
-                    else f"exec python3 -c 'import os; os.kill(os.getpid(), {int(signum)})'")
+                    else f"exec python3 -c 'import ctypes, os; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); "
+                         f"os.kill(os.getpid(), {int(signum)})'")  # no core, as the record says
             (d / "Makefile").write_text(f"all:\n\t@{line}\n")
             runs[form] = subprocess.run(["make", "--no-print-directory"], cwd=d, capture_output=True, text=True,
                                         preexec_fn=no_cores, env={**os.environ, "MAKEFLAGS": ""})
@@ -383,30 +384,37 @@ def gen_signal(trees: dict[str, Path], scratch: Path) -> int:
 
 
 def no_core_replay(trees: dict[str, Path], scratch: Path) -> int:
-    """Check 8: a replayed signal death recorded without a core ends without one under a one-byte caller core limit,
-    as the serial line does there, whatever the host's core_pattern (a limit of 0 still dumps to a pipe)."""
-    def one_byte() -> None:
-        resource.setrlimit(resource.RLIMIT_CORE, (1, resource.getrlimit(resource.RLIMIT_CORE)[1]))
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
-        signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+    """Check 8: a replayed signal death recorded without a core ends as a non-dumpable serial death does, under a
+    caller core limit of (0, 0) and of (1, unlimited hard), whatever the host's core_pattern."""
+    bad = 0
     tool = Path(__file__).resolve().parent / "pass_run.py"
-    runs = {}
-    for form in ("replay", "serial"):
-        d = scratch / f"nocore-{form}"
-        state = d / "obj_dir" / "engine-passes"
-        state.mkdir(parents=True)
-        (state / "build.ok").touch()
-        (state / "0.json").write_text(json.dumps({"signal": int(signal.SIGSEGV), "core": False}))
-        (state / "0.log").write_bytes(b"")
-        line = (f"python3 {tool} replay 0" if form == "replay"
-                else f"exec python3 -c 'import os; os.kill(os.getpid(), {int(signal.SIGSEGV)})'")
-        (d / "Makefile").write_text(f"all:\n\t@{line}\n")
-        runs[form] = subprocess.run(["make", "--no-print-directory"], cwd=d, capture_output=True, text=True,
-                                    preexec_fn=one_byte, env={**os.environ, "MAKEFLAGS": ""})
-    same = runs["replay"].returncode == runs["serial"].returncode and runs["replay"].stderr == runs["serial"].stderr
-    print(f"[{'PASS' if same else 'FAIL'}] a no-core signal death replays without a dump under a one-byte core "
-          f"limit: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
-    return not same
+    die = (f"exec python3 -c 'import ctypes, os; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); "
+           f"os.kill(os.getpid(), {int(signal.SIGSEGV)})'")
+    for limit in ((0, 0), (1, resource.RLIM_INFINITY)):
+        def caller(limit=limit) -> None:
+            hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
+            unlimited = limit[1] == resource.RLIM_INFINITY
+            want = (min(1, hard), hard) if unlimited and hard != resource.RLIM_INFINITY else limit
+            resource.setrlimit(resource.RLIMIT_CORE, want)
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+        runs = {}
+        for form in ("replay", "serial"):
+            d = scratch / f"nocore-{form}-{limit[0]}"
+            state = d / "obj_dir" / "engine-passes"
+            state.mkdir(parents=True)
+            (state / "build.ok").touch()
+            (state / "0.json").write_text(json.dumps({"signal": int(signal.SIGSEGV), "core": False}))
+            (state / "0.log").write_bytes(b"")
+            line = f"python3 {tool} replay 0" if form == "replay" else die
+            (d / "Makefile").write_text(f"all:\n\t@{line}\n")
+            runs[form] = subprocess.run(["make", "--no-print-directory"], cwd=d, capture_output=True, text=True,
+                                        preexec_fn=caller, env={**os.environ, "MAKEFLAGS": ""})
+        same = runs["replay"].returncode == runs["serial"].returncode and runs["replay"].stderr == runs["serial"].stderr
+        bad += not same
+        print(f"[{'PASS' if same else 'FAIL'}] a no-core signal death replays as a non-dumpable one at core limit "
+              f"{limit[0]}: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
+    return bad
 
 
 def main() -> int:
