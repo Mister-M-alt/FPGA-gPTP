@@ -1,0 +1,24 @@
+== as-written, /bin/sh host
+[PASS] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all] Segmentation fault (core dumped)'
+[PASS] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:2: all] Killed' vs 'make: *** [Makefile:2: all] Killed'
+check 7 bad = 0
+[PASS] a no-core signal death replays without a dump under a one-byte core limit: 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+check 8 bad = False
+== as-written, /bin/sh fork
+[PASS] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:3: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:3: all] Segmentation fault (core dumped)'
+[PASS] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:3: all] Killed' vs 'make: *** [Makefile:3: all] Killed'
+check 7 bad = 0
+[PASS] a no-core signal death replays without a dump under a one-byte core limit: 'make: *** [Makefile:3: all] Segmentation fault' vs 'make: *** [Makefile:3: all] Segmentation fault'
+check 8 bad = False
+== no-exec, /bin/sh host
+[PASS] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all] Segmentation fault (core dumped)'
+[PASS] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:2: all] Killed' vs 'make: *** [Makefile:2: all] Killed'
+check 7 bad = 0
+[PASS] a no-core signal death replays without a dump under a one-byte core limit: 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+check 8 bad = False
+== no-exec, /bin/sh fork
+[FAIL] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:3: all] Segmentation fault (core dumped)' vs '$REVIEWS/fgpasses-r925-5-packet/scratch/c7/forksh: line 4: 2720474 Segmentation fault         (core dumped) /usr/bin/bash -c "$1"\nmake: *** [Makefile:3: all] Error 139'
+[FAIL] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:3: all] Killed' vs '$REVIEWS/fgpasses-r925-5-packet/scratch/c7/forksh: line 4: 2720495 Killed                     /usr/bin/bash -c "$1"\nmake: *** [Makefile:3: all] Error 137'
+check 7 bad = 2
+[FAIL] a no-core signal death replays without a dump under a one-byte core limit: 'make: *** [Makefile:3: all] Segmentation fault' vs '$REVIEWS/fgpasses-r925-5-packet/scratch/c7/forksh: line 4: 2720511 Segmentation fault         /usr/bin/bash -c "$1"\nmake: *** [Makefile:3: all] Error 139'
+check 8 bad = True

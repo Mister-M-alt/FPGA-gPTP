@@ -1,0 +1,13 @@
+core_pattern: |/usr/lib/systemd/systemd-coredump %P %u
+soft limit 0 bytes: record {"signal": 11, "core": true}
+  serial:   make: *** [MK] Segmentation fault (core dumped)
+  replayed: make: *** [MK] Segmentation fault (core dumped)
+  SAME
+soft limit 1 bytes: record {"signal": 11, "core": false}
+  serial:   make: *** [MK] Segmentation fault
+  replayed: make: *** [MK] Segmentation fault
+  SAME
+soft limit 1048576 bytes: record {"signal": 11, "core": true}
+  serial:   make: *** [MK] Segmentation fault (core dumped)
+  replayed: make: *** [MK] Segmentation fault (core dumped)
+  SAME

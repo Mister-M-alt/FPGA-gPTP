@@ -1,0 +1,11 @@
+--- $REVIEWS/r925-5-fgpasses/tb/verilator/engine/pass_run.py	2026-11-25 01:00:24.182185147 +0100
++++ pass_run.py	2026-11-25 01:06:28.375850331 +0100
+@@ -256,7 +256,7 @@
+         resource.setrlimit(resource.RLIMIT_CORE, (1 if hard == resource.RLIM_INFINITY or hard >= 1 else 0, hard))
+     if signum != signal.SIGKILL:
+         signal.signal(signum, signal.SIG_DFL)
+-    os.chdir(STATE)  # a relative file core_pattern writes this process's core here, never over the simulator's
++    pass  # planted: no chdir; was: a relative file core_pattern writes this process's core here, never over the simulator's
+     os.kill(os.getpid(), signum)
+ 
+ 

@@ -1,0 +1,11 @@
+--- $REVIEWS/r925-5-fgpasses/tb/verilator/engine/pass_run.py	2026-11-25 01:00:24.182185147 +0100
++++ pass_run.py	2026-11-25 01:06:28.376113336 +0100
+@@ -135,7 +135,7 @@
+         if err:
+             record["gen_stderr"] = err.decode(errors="surrogateescape")
+         if os.WIFSIGNALED(status):
+-            record.update(gen_signal=os.WTERMSIG(status), gen_core=os.WCOREDUMP(status))
++            pass  # planted: no gen_signal record
+         record["gen"] = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 0
+         if gen.returncode and not ignoring:
+             stop_later(n)

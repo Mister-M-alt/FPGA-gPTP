@@ -1,0 +1,14 @@
+== lines over 120 columns (both files)
+== module docstring lines over 80 columns (passes_test.py:1-43)
+tb/verilator/engine/passes_test.py:4: 82
+== 128 in pass_run.py
+127:        # signal death as 128+n, which is kept; a shell that execs dies of the signal itself, which is recorded and
+== added lines f1b566a..HEAD matching lane/round/reviewer/comment-id patterns
+no match
+== 'file core_pattern' mentions
+tb/verilator/engine/pass_run.py:252:    suppresses the dump on a piped core_pattern (the kernel skips a pipe only at exactly 1) and on a file one (below
+tb/verilator/engine/pass_run.py:259:    os.chdir(STATE)  # a relative file core_pattern writes this process's core here, never over the simulator's
+tb/verilator/engine/passes_test.py:33:   file core_pattern never replaces the simulator's core.
+tb/verilator/engine/passes_test.py:41:   core_pattern too.
+tb/verilator/engine/passes_test.py:334:    """Check 6: a replayed signal death is re-raised from obj_dir/engine-passes/, so a relative file core_pattern
+tb/verilator/engine/passes_test.py:387:    as the serial line does there, whatever the host's core_pattern (a limit of 0 still dumps to a pipe)."""

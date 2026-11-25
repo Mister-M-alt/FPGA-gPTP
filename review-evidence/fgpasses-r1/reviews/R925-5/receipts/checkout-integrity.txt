@@ -1,0 +1,8 @@
+HEAD a54e9eee922cb632364e864b2bce6aaf06c9c6ea tree 5599752c284f56ca643f6fada9f0cf960a1d28bd index-tree 5599752c284f56ca643f6fada9f0cf960a1d28bd
+porcelain(incl. ignored) lines: 0
+git diff HEAD bytes: 0
+tracked files: 122; gitlinks (mode 160000): 0
+ls-files -s sha256 65203ee17365154574155cc0687a4f9794df30d76d0d2cb73b83f403226cabe3  -
+ls-tree -r HEAD sha256 d0ec68ddb5d4ae292657096a2b8afbc91e742aff23bbbda245d0f598fc651e56  -
+blob check: 0 mismatches
+mode check: 0 mismatches

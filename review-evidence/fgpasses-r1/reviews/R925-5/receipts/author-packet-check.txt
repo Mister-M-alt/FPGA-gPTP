@@ -1,0 +1,12 @@
+author-r5/receipts/diff.txt == git diff f1b566a..dcf1cae: IDENTICAL (c9698140a7176706)
+author-r6/receipts/diff.txt == git diff dcf1cae..a54e9ee: IDENTICAL (4a4801f352017794)
+author-r5/passes-test-plant-gensig.log: PASS=69 FAIL=2 | engine passes test: 2 FAIL
+author-r5/passes-test-pt-g1.log: PASS=71 FAIL=0 | engine passes test: PASS
+author-r5/passes-test-pt-g2.log: PASS=71 FAIL=0 | engine passes test: PASS
+author-r5/passes-test-pt-g3.log: PASS=71 FAIL=0 | engine passes test: PASS
+author-r6/passes-test-plant-nocore.log: PASS=71 FAIL=1 | engine passes test: 1 FAIL
+author-r6/passes-test-pt-i1.log: PASS=72 FAIL=0 | engine passes test: PASS
+author-r6/passes-test-pt-i2.log: PASS=72 FAIL=0 | engine passes test: PASS
+author-r6/passes-test-pt-i3.log: PASS=72 FAIL=0 | engine passes test: PASS
+author-r6/passes-test-pt-i4.log: PASS=72 FAIL=0 | engine passes test: PASS
+[FAIL] a no-core signal death replays without a dump under a one-byte core limit: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all] Segmentation fault'

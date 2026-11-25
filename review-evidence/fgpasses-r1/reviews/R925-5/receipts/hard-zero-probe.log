@@ -1,0 +1,25 @@
+core_pattern: |/usr/lib/systemd/systemd-coredump %P %u
+head, limit (soft,hard)=(0 0): record {"signal": 11, "core": false}
+  serial:   make: *** [MK] Segmentation fault
+  replayed: make: *** [MK] Segmentation fault (core dumped)
+  DIFFER
+head, limit (soft,hard)=(0 -1): record {"signal": 11, "core": false}
+  serial:   make: *** [MK] Segmentation fault
+  replayed: make: *** [MK] Segmentation fault
+  SAME
+head, limit (soft,hard)=(1 -1): record {"signal": 11, "core": false}
+  serial:   make: *** [MK] Segmentation fault
+  replayed: make: *** [MK] Segmentation fault
+  SAME
+prctl, limit (soft,hard)=(0 0): record {"signal": 11, "core": false}
+  serial:   make: *** [MK] Segmentation fault
+  replayed: make: *** [MK] Segmentation fault
+  SAME
+prctl, limit (soft,hard)=(0 -1): record {"signal": 11, "core": false}
+  serial:   make: *** [MK] Segmentation fault
+  replayed: make: *** [MK] Segmentation fault
+  SAME
+prctl, limit (soft,hard)=(1 -1): record {"signal": 11, "core": false}
+  serial:   make: *** [MK] Segmentation fault
+  replayed: make: *** [MK] Segmentation fault
+  SAME

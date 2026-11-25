@@ -1,0 +1,15 @@
+== /bin/sh: host
+record: {"gen_stderr": "gen: about to die\n", "gen": 139, "stopped": true}
+serial rc=2 stderr=gen: about to die|make: *** [Makefile.serial:3: serial] Error 139|
+product rc=2 stderr=gen: about to die|make: *** [Makefile.product:3: product] Error 139|
+product == serial: YES
+== /bin/sh: fork
+record: {"gen_stderr": "gen: about to die\n/usr/bin/bash: line 1: 2720212 Segmentation fault         (core dumped) python3 $REVIEWS/fgpasses-r925-5-packet/scratch/gs/segv.py -o seedrun/x > /dev/null\n", "gen": 139, "stopped": true}
+serial rc=2 stderr=gen: about to die|/usr/bin/bash: line 1: 2720157 Segmentation fault         (core dumped) python3 W/segv.py -o seedrun/x > /dev/null|make: *** [Makefile.serial:3: serial] Error 139|
+product rc=2 stderr=gen: about to die|/usr/bin/bash: line 1: 2720212 Segmentation fault         (core dumped) python3 W/segv.py -o seedrun/x > /dev/null|make: *** [Makefile.product:3: product] Error 139|
+product == serial: NO
+== /bin/sh: exec
+record: {"gen_stderr": "gen: about to die\n", "gen_signal": 11, "gen_core": true, "gen": 0, "stopped": true}
+serial rc=2 stderr=gen: about to die|make: *** [Makefile.serial:3: serial] Segmentation fault (core dumped)|
+product rc=2 stderr=gen: about to die|make: *** [Makefile.product:3: product] Segmentation fault (core dumped)|
+product == serial: YES

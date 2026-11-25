@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Run passes_test.py's own check 7 (gen_signal) and check 8 (no_core_replay) from copies, under the host /bin/sh and
+# under an emulated /bin/sh that forks its -c command (exit 128+n) unless the command is `exec ...`; as written at
+# head, and with `exec ` removed from both reference lines. Only the serial (reference) Makefile names the emulated
+# shell: make runs the replay's metachar-free line directly, as on a real host. The replay Makefile gets a comment
+# line in place of the SHELL line, so make's recipe line numbers match.
+# Usage: check7_shell_probe.sh CLONE WORKDIR
+set -u
+clone=$1; work=$2; rm -rf "$work"; mkdir -p "$work"
+printf '#!/usr/bin/bash\n[ "$1" = -c ] && shift\ncase $1 in exec\\ *) exec /usr/bin/bash -c "$1";; esac\n/usr/bin/bash -c "$1"\nexit $?\n' > "$work/forksh"; chmod +x "$work/forksh"
+for variant in as-written no-exec; do
+  for sh in host fork; do
+    d=$work/$variant-$sh; mkdir -p "$d"
+    cp "$clone/tb/verilator/engine/pass_run.py" "$clone/tb/verilator/engine/passes_test.py" "$d/"
+    shellline=""; [ $sh = fork ] && shellline="SHELL := $work/forksh\\n"
+    python3 - "$d/passes_test.py" "$variant" "$shellline" <<'PY'
+import sys
+p, variant, shell = sys.argv[1:]
+s = open(p).read()
+old = '(d / "Makefile").write_text(f"all:\\n\\t@{line}\\n")'
+assert s.count(old) == 2, s.count(old)
+s = s.replace(old, '(d / "Makefile").write_text(("' + shell + '" if form == "serial" else "#\\n" if "' + shell + '" else "") + f"all:\\n\\t@{line}\\n")')
+if variant == "no-exec":
+    old = 'else f"exec python3 -c'
+    assert s.count(old) == 2, s.count(old)
+    s = s.replace(old, 'else f"python3 -c')
+open(p, "w").write(s)
+PY
+    out=$(cd "$d" && python3 -c "
+import sys, tempfile; from pathlib import Path
+sys.path.insert(0, '.'); import passes_test as t
+with tempfile.TemporaryDirectory(dir='.') as s: print('check 7 bad =', t.gen_signal({}, Path(s)))
+with tempfile.TemporaryDirectory(dir='.') as s: print('check 8 bad =', t.no_core_replay({}, Path(s)))" 2>&1)
+    echo "== $variant, /bin/sh $sh"; echo "$out"
+  done
+done
