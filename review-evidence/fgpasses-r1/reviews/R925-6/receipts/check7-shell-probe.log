@@ -1,0 +1,16 @@
+== as-written, /bin/sh host
+[PASS] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+[PASS] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:2: all] Killed' vs 'make: *** [Makefile:2: all] Killed'
+bad = 0
+== as-written, /bin/sh fork
+[PASS] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:3: all] Segmentation fault' vs 'make: *** [Makefile:3: all] Segmentation fault'
+[PASS] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:3: all] Killed' vs 'make: *** [Makefile:3: all] Killed'
+bad = 0
+== exec-stripped, /bin/sh host
+[PASS] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+[PASS] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:2: all] Killed' vs 'make: *** [Makefile:2: all] Killed'
+bad = 0
+== exec-stripped, /bin/sh fork
+[FAIL] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:3: all] Segmentation fault' vs '$REVIEWS/fgpasses-r925-6-packet/scratch/c7/forksh: line 4: 2951456 Segmentation fault         /usr/bin/bash -c "$1"\nmake: *** [Makefile:3: all] Error 139'
+[FAIL] an image generator killed by SIGKILL replays as the serial line ended: 'make: *** [Makefile:3: all] Killed' vs '$REVIEWS/fgpasses-r925-6-packet/scratch/c7/forksh: line 4: 2951462 Killed                     /usr/bin/bash -c "$1"\nmake: *** [Makefile:3: all] Error 137'
+bad = 2

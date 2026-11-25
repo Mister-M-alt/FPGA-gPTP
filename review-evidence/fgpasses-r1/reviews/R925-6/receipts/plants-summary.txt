@@ -1,0 +1,13 @@
+== no-prctl rc=1 PASS=71 engine passes test: 2 FAIL
+[FAIL] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: al
+[FAIL] a no-core signal death replays as a non-dumpable one at core limit 0: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all
+== no-prctl-c0 rc=1 PASS=70 engine passes test: 3 FAIL
+[FAIL] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: al
+[FAIL] a no-core signal death replays as a non-dumpable one at core limit 0: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all
+[FAIL] a no-core signal death replays as a non-dumpable one at core limit 1: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all
+== soft0-keep-prctl rc=0 PASS=73 engine passes test: PASS
+== soft0-keep-prctl-c0 rc=0 PASS=73 engine passes test: PASS
+== prior-reraise rc=1 PASS=70 engine passes test: 3 FAIL
+[FAIL] an image generator killed by SIGSEGV replays as the serial line ended: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: al
+[FAIL] a no-core signal death replays as a non-dumpable one at core limit 0: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all
+[FAIL] a no-core signal death replays as a non-dumpable one at core limit 1: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' vs 'make: *** [Makefile:2: all

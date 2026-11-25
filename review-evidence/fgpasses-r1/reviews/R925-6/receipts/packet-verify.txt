@@ -1,0 +1,20 @@
+evidence commit 7dfc125877731a27bf055ee6427c6af8861ae36c review-evidence/fgpasses-r1
+entries 890 ok 890 bad 0 missing 0 unlisted 0
+5ffff9775b9f44a531b42c5ddad9529be2ad065bb08996654c1a0a4b6c4a03a7 author-r6/REVIEW-READY.md
+4a4801f352017794e45246e4f6dc8324563267b476e93d0745aece8d566e0096 author-r6/receipts/diff.txt
+39a4c72907f7533462acb6c3971b12282795e8ad7e0afb6390cff08118e09ff4 author-r6/receipts/passes-test-plant-nocore.log
+ed5c6b1fbc68ec1270f314bfd8da1dbf19ff03ab3933212adb9c2a830001cd35 author-r6/receipts/passes-test-pt-i1.log
+bb680d734c383af8eaca5f5e0eefb0450cc0ede9a3aa72cb8c03096971b54a47 author-r6/receipts/passes-test-pt-i2.log
+ecaa8f0168bbadfcaaee65971731460f1aa0caa78b40a04f555be85b0381c7d5 author-r6/receipts/passes-test-pt-i3.log
+624cf34bea15adfdc794d5d8693f8e75f2939f3047af3353cd7ef2e11a59f4a1 author-r6/receipts/passes-test-pt-i4.log
+5b6cbaec908afd40b84302c76672500fd408940b56ed336573102356a66fd122 author-r7/REVIEW-READY.md
+99e164175b530f61c4f07fb71d38e13292ef698deb940e0f70f4335faffc9458 author-r7/receipts/diff.txt
+c26b3a6b1b6c464431b213c1f8d31409e7ec3230beee04da999aa6b52c3aaeab author-r7/receipts/passes-test-plant-prctl.log
+c3f7b544cc014bb50545786e4991a8a05007ed5386b19061f79a9d2f562a4eee author-r7/receipts/passes-test-pt-k0.log
+76600dd5d62cbf0eda80d1c473c108f0c6c5724054eb47af8a8ef2f01b46db88 author-r7/receipts/passes-test-pt-k1.log
+e8f7cab996c25dcd3dd8922805a9adf42c8d648c7899cc26955789a5ac900a56 author-r7/receipts/passes-test-pt-k2.log
+f276ec9a8769af2775675db8eaa0615dda0578ede90cad784b360e61bcbdb09e author-r7/receipts/passes-test-pt-k3.log
+79ea65faef1ec39ec31053c964175d121d485353914145247f68cada75eb9874 author-r7/receipts/passes-test-pt-k4.log
+verify rc 0
+author-r6 diff.txt == git diff dcf1cae..a54e9ee
+author-r7 diff.txt == git diff a54e9ee..dfd13a1

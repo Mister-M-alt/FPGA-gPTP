@@ -1,0 +1,12 @@
+{
+  "requested_model": "claude-opus-5-5",
+  "requested_effort": "high",
+  "exit_code": 0,
+  "wall_seconds": 656.4175161320018,
+  "cwd": "$REVIEWS/r925-6-fgpasses",
+  "subtype": "success",
+  "duration_ms": 655724,
+  "num_turns": 47,
+  "is_error": false,
+  "requested_model_present": true
+}

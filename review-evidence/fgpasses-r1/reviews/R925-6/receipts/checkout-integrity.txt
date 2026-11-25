@@ -1,0 +1,11 @@
+HEAD dfd13a1079d265d68edc806b2d8111d0e5f89493 tree 2615bfb2baa70beb33b1e053522fbc3f1d4122f7
+status --porcelain --ignored (untracked/ignored listed):
+(end)
+diff-index vs HEAD: 0 paths
+index tree 2615bfb2baa70beb33b1e053522fbc3f1d4122f7
+    118 100644
+      4 100755
+gitlinks (mode 160000): 0
+worktree blob ids == HEAD blob ids (122 files)
+on-disk mode mismatches: 0
+submodules: none in .gitmodules or the index (no gitlink required at this head)

@@ -1,0 +1,11 @@
+--- $REVIEWS/r925-6-fgpasses/tb/verilator/engine/pass_run.py	2026-11-25 01:38:50.295514147 +0100
++++ pass_run.py	2026-11-25 01:42:36.352599937 +0100
+@@ -256,7 +256,7 @@
+     pipe)."""
+     if not core:
+         hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
+-        soft = 1 if hard == resource.RLIM_INFINITY or hard >= 1 else 0
++        soft = 0
+         resource.setrlimit(resource.RLIMIT_CORE, (soft, hard))
+         ctypes.CDLL(None, use_errno=True).prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
+     if signum != signal.SIGKILL:
