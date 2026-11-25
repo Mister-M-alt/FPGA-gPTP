@@ -34,9 +34,9 @@ run: export CCACHE_BASEDIR ?= $(abspath ../../..)
 
 .PHONY: all run mutants mutants-jobs-test mutants-order-test clean
 .DEFAULT_GOAL := all
-all: run mutants-order-test mutants
+all: run passes-test mutants-order-test mutants
 
-# The suite runs THREE times against the same build. Regression images seed
+# The suite runs FOUR times against the same build. Regression images seed
 # the request and Sync counters independently above 16 bits, where an
 # unbounded counter aliases into the claim's flags or messageType. Ordinary
 # runs need 2,097,152 requests (24.3 days) or 65,536 Syncs (2 h 16 min at
@@ -46,21 +46,56 @@ all: run mutants-order-test mutants
 # only the self-publication phases, from an image whose priority1 is 255.
 # That image also states clockAccuracy 0xFE, so the pass proves the #100
 # --clock-accuracy build parameter against the 0x22 of the shipping image.
-run: gptp_ucode.hex
+#
+# #111: the four passes are independent: each reads its own image from its own
+# directory, and none writes anything another reads. Each pass is a target of
+# its own, so make runs them within the caller's job budget: one at a time with
+# no -j or -j1, all four with -j4, each one job of a parent make's jobserver.
+# pass_run.py runs a pass and keeps what it printed and how it ended. `run`'s
+# rules then print each pass in the serial order, from its own recipe line,
+# under the serial echo lines, and end that line as the serial line ended (its
+# exit status, or the signal that killed it), so the transcript and make's own
+# messages are the serial run's, under -s, -i and -k too; only the recipe line
+# numbers in make's messages differ. The first failing pass in order stops the
+# later ones, whose output the serial recipe never printed; -i runs and prints
+# all four, as the serial recipe did. An INT, TERM, QUIT or HUP stops every
+# pass. On four free job slots the run takes about as long as its longest pass.
+# `make passes-test` proves all of this with stub tools in about 90 s.
+PASS = python3 pass_run.py $(if $(findstring i,$(firstword -$(MAKEFLAGS))),--ignore-errors)
+PASSES = engine-pass0 engine-pass1 engine-pass2 engine-pass3
+.PHONY: engine-fresh $(PASSES) passes-test
+run:: engine-fresh gptp_ucode.hex
 	$(VERILATOR) $(VFLAGS) $(SRCS) $(CPP) -o Vengine_sim
-	./obj_dir/Vengine_sim
-	@mkdir -p seedrun
-	@python3 $(GEN) $(GENARGS) --seq-seed 0x200000 -o seedrun/gptp_ucode.hex >/dev/null
-	@echo "-- again, with the request counter seeded above 16 bits --"
-	@cd seedrun && ../obj_dir/Vengine_sim
-	@mkdir -p syncseedrun
-	@python3 $(GEN) $(GENARGS) --sync-seq-seed 0x10000 -o syncseedrun/gptp_ucode.hex >/dev/null
-	@echo "-- again, with the Sync counter seeded above 16 bits --"
-	@cd syncseedrun && ../obj_dir/Vengine_sim
-	@mkdir -p p1run
-	@python3 $(GEN) $(GENARGS) --p1 255 --clock-accuracy 0xFE -o p1run/gptp_ucode.hex >/dev/null
-	@echo "-- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --"
-	@cd p1run && ../obj_dir/Vengine_sim +not-gm-capable
+	@mkdir -p obj_dir/engine-passes && touch obj_dir/engine-passes/build.ok
+run:: $(PASSES)
+	@$(PASS) replay 0 $(if $(findstring s,$(firstword -$(MAKEFLAGS))),,--banner ./obj_dir/Vengine_sim)
+run::
+	@$(PASS) replay-gen 1
+	@$(PASS) replay 1 --banner "-- again, with the request counter seeded above 16 bits --"
+run::
+	@$(PASS) replay-gen 2
+	@$(PASS) replay 2 --banner "-- again, with the Sync counter seeded above 16 bits --"
+run::
+	@$(PASS) replay-gen 3
+	@$(PASS) replay 3 --banner "-- the self publication again, not grandmaster-capable (priority1 255), clockAccuracy 0xFE --"
+engine-fresh:
+	@rm -rf obj_dir/engine-passes
+engine-pass0:
+	@$(PASS) run 0 -- ./obj_dir/Vengine_sim
+engine-pass1:
+	@$(PASS) run 1 --mkdir seedrun --gen 'python3 $(GEN) $(GENARGS) --seq-seed 0x200000 -o seedrun/gptp_ucode.hex' \
+	  --shell 'cd seedrun && ../obj_dir/Vengine_sim'
+engine-pass2:
+	@$(PASS) run 2 --mkdir syncseedrun --gen 'python3 $(GEN) $(GENARGS) --sync-seq-seed 0x10000 -o syncseedrun/gptp_ucode.hex' \
+	  --shell 'cd syncseedrun && ../obj_dir/Vengine_sim'
+engine-pass3:
+	@$(PASS) run 3 --mkdir p1run --gen 'python3 $(GEN) $(GENARGS) --p1 255 --clock-accuracy 0xFE -o p1run/gptp_ucode.hex' \
+	  --shell 'cd p1run && ../obj_dir/Vengine_sim +not-gm-capable'
+
+# #111: the serial order, the budget, the fail-fast stop and the signals, all
+# against the serial recipe, with stub tools in a scratch copy; about 90 s.
+passes-test:
+	python3 passes_test.py
 
 # Rule 8: prove the checks above are load-bearing. Defects are injected into
 # the real engine RTL and the real micro-code generator, one per mutant, and
