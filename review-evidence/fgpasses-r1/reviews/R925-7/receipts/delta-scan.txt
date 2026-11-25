@@ -1,0 +1,14 @@
+delta scan a54e9ee..a2352e7 at a2352e723b481b011b32b0f6892a7920a079443b
+-- lines >120 cols in delta files:
+-- module docstring lines 28-41 >80 cols:
+-- added lines with lane/round/reviewer/comment IDs:
+-- unused imports (AST):
+tb/verilator/engine/pass_run.py ['resource']
+tb/verilator/engine/passes_test.py []
+-- resource uses in pass_run.py:
+45:import resource
+-- resource uses at dfd13a1:
+45:import resource
+258:        hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
+259:        soft = 1 if hard == resource.RLIM_INFINITY or hard >= 1 else 0
+260:        resource.setrlimit(resource.RLIMIT_CORE, (soft, hard))

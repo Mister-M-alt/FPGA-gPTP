@@ -1,0 +1,4 @@
+257c257
+<         ctypes.CDLL(None, use_errno=True).prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
+---
+>         pass  # plant: prctl removed

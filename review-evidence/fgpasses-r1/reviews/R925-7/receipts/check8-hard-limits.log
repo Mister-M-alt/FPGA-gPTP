@@ -1,0 +1,20 @@
+== hard unlimited
+caller RLIMIT_CORE: (0, -1)
+[PASS] a no-core signal death replays as a non-dumpable one at core limit 0: 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+[PASS] a no-core signal death replays as a non-dumpable one at core limit 1: 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+rc=0
+== hard 4096
+caller RLIMIT_CORE: (0, 4194304)
+[PASS] a no-core signal death replays as a non-dumpable one at core limit 0: 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+[PASS] a no-core signal death replays as a non-dumpable one at core limit 1 (clamped to the hard limit): 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+rc=0
+== hard 1
+caller RLIMIT_CORE: (0, 1024)
+[PASS] a no-core signal death replays as a non-dumpable one at core limit 0: 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+[PASS] a no-core signal death replays as a non-dumpable one at core limit 1 (clamped to the hard limit): 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+rc=0
+== hard 0
+caller RLIMIT_CORE: (0, 0)
+[PASS] a no-core signal death replays as a non-dumpable one at core limit 0: 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+[PASS] a no-core signal death replays as a non-dumpable one at core limit 0 (clamped to the hard limit): 'make: *** [Makefile:2: all] Segmentation fault' vs 'make: *** [Makefile:2: all] Segmentation fault'
+rc=0

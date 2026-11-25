@@ -1,0 +1,7 @@
+core_pattern='|/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c %h %d %F %I' caller_hard=0
+(0,0): PASS replay=(11, False) nondumpable=(11, False) dumpable=(11, True) | make: 'make: *** [Makefile:2: all] Segmentation fault' / 'make: *** [Makefile:2: all] Segmentation fault' / 'make: *** [Makefile:2: all] Segmentation fault (core dumped)'
+(0,inf): SKIP (hard limit 0 cannot be raised)
+(1,inf): SKIP (hard limit 0 cannot be raised)
+(inf,inf): SKIP (hard limit 0 cannot be raised)
+probe: PASS
+rc=0

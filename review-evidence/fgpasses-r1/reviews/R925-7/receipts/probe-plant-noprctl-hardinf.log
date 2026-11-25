@@ -1,0 +1,7 @@
+core_pattern='|/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c %h %d %F %I' caller_hard=inf
+(0,0): FAIL replay=(11, True) nondumpable=(11, False) dumpable=(11, True) | make: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' / 'make: *** [Makefile:2: all] Segmentation fault' / 'make: *** [Makefile:2: all] Segmentation fault (core dumped)'
+(0,inf): FAIL replay=(11, True) nondumpable=(11, False) dumpable=(11, True) | make: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' / 'make: *** [Makefile:2: all] Segmentation fault' / 'make: *** [Makefile:2: all] Segmentation fault (core dumped)'
+(1,inf): PASS replay=(11, False) nondumpable=(11, False) dumpable=(11, False) | make: 'make: *** [Makefile:2: all] Segmentation fault' / 'make: *** [Makefile:2: all] Segmentation fault' / 'make: *** [Makefile:2: all] Segmentation fault'
+(inf,inf): FAIL replay=(11, True) nondumpable=(11, False) dumpable=(11, True) | make: 'make: *** [Makefile:2: all] Segmentation fault (core dumped)' / 'make: *** [Makefile:2: all] Segmentation fault' / 'make: *** [Makefile:2: all] Segmentation fault (core dumped)'
+probe: 3 FAIL
+rc=1
