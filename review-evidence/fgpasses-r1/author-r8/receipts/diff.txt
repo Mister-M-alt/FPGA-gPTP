@@ -1,0 +1,44 @@
+diff --git a/tb/verilator/engine/pass_run.py b/tb/verilator/engine/pass_run.py
+index 51cab18..cbf387b 100644
+--- a/tb/verilator/engine/pass_run.py
++++ b/tb/verilator/engine/pass_run.py
+@@ -252,12 +252,8 @@ def replay(n: int, banner: str | None, ignoring: bool) -> int:
+ def reraise(signum: int, core: bool) -> None:
+     """End as the recorded process ended: by its signal, dumping core only if it did. A death that did not dump is
+     re-raised non-dumpable (prctl PR_SET_DUMPABLE 0), which suppresses the dump whatever the core limits and the
+-    core_pattern, piped or file; the soft limit also drops to 1 where the hard limit allows (0 still dumps to a
+-    pipe)."""
++    core_pattern, piped or file."""
+     if not core:
+-        hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
+-        soft = 1 if hard == resource.RLIM_INFINITY or hard >= 1 else 0
+-        resource.setrlimit(resource.RLIMIT_CORE, (soft, hard))
+         ctypes.CDLL(None, use_errno=True).prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
+     if signum != signal.SIGKILL:
+         signal.signal(signum, signal.SIG_DFL)
+diff --git a/tb/verilator/engine/passes_test.py b/tb/verilator/engine/passes_test.py
+index 337a1da..772de32 100644
+--- a/tb/verilator/engine/passes_test.py
++++ b/tb/verilator/engine/passes_test.py
+@@ -30,7 +30,7 @@ The checks:
+ 5. A pass's kept transcript that cannot be read back fails the run with a
+    diagnostic, after the passes before it and with nothing after it.
+ 6. A replayed signal death is re-raised from obj_dir/engine-passes/, so a
+-   file core_pattern never replaces the simulator's core.
++   relative file core_pattern never replaces the simulator's core.
+ 7. An image generator whose shell died of a signal (a shell that execs the
+    line, as dash does) ends as the serial line did: make reports the signal
+    for SIGSEGV and SIGKILL. A crafted record stands in for the run, so the
+@@ -412,8 +412,11 @@ def no_core_replay(trees: dict[str, Path], scratch: Path) -> int:
+                                         preexec_fn=caller, env={**os.environ, "MAKEFLAGS": ""})
+         same = runs["replay"].returncode == runs["serial"].returncode and runs["replay"].stderr == runs["serial"].stderr
+         bad += not same
++        hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
++        label = ("0" if limit[0] == 0 else "1" if hard == resource.RLIM_INFINITY
++                 else f"{min(1, hard)} (clamped to the hard limit)")
+         print(f"[{'PASS' if same else 'FAIL'}] a no-core signal death replays as a non-dumpable one at core limit "
+-              f"{limit[0]}: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
++              f"{label}: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
+     return bad
+ 
+ 

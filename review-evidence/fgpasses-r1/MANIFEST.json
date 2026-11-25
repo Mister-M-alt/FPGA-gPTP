@@ -5590,5 +5590,41 @@
     "original_sha256": "3c78f5491fd8294d224c6fb918a3ae2df898aa5d1de7df56e022a110e56c79de",
     "published_sha256": "3c78f5491fd8294d224c6fb918a3ae2df898aa5d1de7df56e022a110e56c79de",
     "path_redacted": false
+  },
+  {
+    "file": "author-r8/REVIEW-READY.md",
+    "original_sha256": "8e59abf81ac9fbadc869d5d1dd0d520c11d27d67ea6052033e7486f146187f18",
+    "published_sha256": "8e59abf81ac9fbadc869d5d1dd0d520c11d27d67ea6052033e7486f146187f18",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r8/receipts/diff.txt",
+    "original_sha256": "2f4c16af8da2b8c49a5b035c14ff34d0f83cc8a057eae21a0b8ecd53352cc818",
+    "published_sha256": "2f4c16af8da2b8c49a5b035c14ff34d0f83cc8a057eae21a0b8ecd53352cc818",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r8/receipts/passes-test-plant-prctl2.log",
+    "original_sha256": "bd94c9da0d14205f1e89a8dbb24ff500850baf684696457a3154c76e5f2b9959",
+    "published_sha256": "bd94c9da0d14205f1e89a8dbb24ff500850baf684696457a3154c76e5f2b9959",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r8/receipts/passes-test-pt-l0.log",
+    "original_sha256": "4b7b1fd8f73c0c2e1d67fc9e0f1516235f286826d0fa29b8ebd85669a2c8a156",
+    "published_sha256": "4b7b1fd8f73c0c2e1d67fc9e0f1516235f286826d0fa29b8ebd85669a2c8a156",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r8/receipts/passes-test-pt-l1.log",
+    "original_sha256": "33c849fcf23bcd86129eae8c3e6513953e95bdb48ae70555b92661321195c67e",
+    "published_sha256": "33c849fcf23bcd86129eae8c3e6513953e95bdb48ae70555b92661321195c67e",
+    "path_redacted": false
+  },
+  {
+    "file": "author-r8/receipts/passes-test-pt-l2.log",
+    "original_sha256": "5e8941fc296093086bd0ee064fab68330e12705d4ba277bd5e5776a68b4298ba",
+    "published_sha256": "5e8941fc296093086bd0ee064fab68330e12705d4ba277bd5e5776a68b4298ba",
+    "path_redacted": false
   }
 ]
