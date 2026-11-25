@@ -30,7 +30,7 @@ The checks:
 5. A pass's kept transcript that cannot be read back fails the run with a
    diagnostic, after the passes before it and with nothing after it.
 6. A replayed signal death is re-raised from obj_dir/engine-passes/, so a
-   file core_pattern never replaces the simulator's core.
+   relative file core_pattern never replaces the simulator's core.
 7. An image generator whose shell died of a signal (a shell that execs the
    line, as dash does) ends as the serial line did: make reports the signal
    for SIGSEGV and SIGKILL. A crafted record stands in for the run, so the
@@ -412,8 +412,11 @@ def no_core_replay(trees: dict[str, Path], scratch: Path) -> int:
                                         preexec_fn=caller, env={**os.environ, "MAKEFLAGS": ""})
         same = runs["replay"].returncode == runs["serial"].returncode and runs["replay"].stderr == runs["serial"].stderr
         bad += not same
+        hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
+        label = ("0" if limit[0] == 0 else "1" if hard == resource.RLIM_INFINITY
+                 else f"{min(1, hard)} (clamped to the hard limit)")
         print(f"[{'PASS' if same else 'FAIL'}] a no-core signal death replays as a non-dumpable one at core limit "
-              f"{limit[0]}: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
+              f"{label}: {runs['replay'].stderr.strip()!r} vs {runs['serial'].stderr.strip()!r}")
     return bad
 
 
