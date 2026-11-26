@@ -94,8 +94,10 @@ engine-pass3:
 
 # #111: the serial order, the budget, the fail-fast stop and the signals, all
 # against the serial recipe, with stub tools in a scratch copy; about 90 s.
+# #113: the test watches real processes on the host's clock, so, like the
+# mutation arm's order and jobs tests, it sits in tb/, outside the suite.
 passes-test:
-	python3 passes_test.py
+	python3 ../../engine_passes_test.py
 
 # Rule 8: prove the checks above are load-bearing. Defects are injected into
 # the real engine RTL and the real micro-code generator, one per mutant, and

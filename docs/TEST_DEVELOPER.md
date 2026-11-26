@@ -22,6 +22,7 @@ Terms are defined in the [glossary](GLOSSARY.md).
 | Python | `tb/mutation_verdict.py` | Reads each mutant's verdict from suite output |
 | Python | `tb/mutation_jobs_test.py` | Compares engine mutation output across jobs and caches |
 | Python | `tb/mutation_order_test.py` | Checks engine verdict order with stubbed mutants |
+| Python | `tb/engine_passes_test.py` | Checks engine pass order, budget and signals with stub tools |
 | Python | `tb/tsngen/run_tsngen.py` | Cross-checks frames against independent protocol decoders |
 | Python | `scripts/check_docs.py` | Checks documentation rules and generated values |
 | Python | `scripts/check_docs_selftest.py` | Plants documentation defects the docs gate must catch |
