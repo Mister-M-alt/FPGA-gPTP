@@ -181,7 +181,7 @@ def tree(scratch: Path) -> dict[str, Path]:
     return trees
 
 
-def make(engine: Path, flags: list[str], plan: dict, events: Path, stdout: int | None = None,
+def make(engine: Path, flags: list[str], plan: dict, events: Path,
          directory: Path | None = None, target: str = "run") -> subprocess.CompletedProcess:
     """One make run with the stubs; its captured streams and status."""
     stub = engine.parents[1] / "stub"
@@ -191,7 +191,7 @@ def make(engine: Path, flags: list[str], plan: dict, events: Path, stdout: int |
     args = ["make", *flags, target, "VERILATOR=../../stub/verilator.py", "GEN=../../stub/gen.py"]
     subprocess.run(["make", "-s", "clean"], cwd=engine, check=True, env=env)
     return subprocess.run(args, cwd=directory or engine, env=env, text=True, preexec_fn=no_cores, timeout=120,
-                          stdout=subprocess.PIPE if stdout is None else stdout, stderr=subprocess.PIPE)
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def no_cores() -> None:
@@ -202,6 +202,7 @@ def no_cores() -> None:
 
 
 def read(events: Path) -> list[dict]:
+    """The stub jobs' recorded events, none before the first."""
     return [json.loads(line) for line in events.read_text().splitlines()] if events.exists() else []
 
 
@@ -391,7 +392,9 @@ def no_core_replay(trees: dict[str, Path], scratch: Path) -> int:
     die = (f"exec python3 -c 'import ctypes, os; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); "
            f"os.kill(os.getpid(), {int(signal.SIGSEGV)})'")
     for limit in ((0, 0), (1, resource.RLIM_INFINITY)):
-        def caller(limit=limit) -> None:
+        def caller(limit: tuple[int, int] = limit) -> None:
+            """In the make child: the core limit `limit`, held within the hard limit, and INT and QUIT at their
+            defaults."""
             hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
             unlimited = limit[1] == resource.RLIM_INFINITY
             want = (min(1, hard), hard) if unlimited and hard != resource.RLIM_INFINITY else limit
@@ -421,6 +424,7 @@ def no_core_replay(trees: dict[str, Path], scratch: Path) -> int:
 
 
 def main() -> int:
+    """Every check against a scratch tree of stubs; 1 when any failed."""
     with tempfile.TemporaryDirectory(prefix="engine-passes-test-") as name:
         scratch = Path(name)
         trees = tree(scratch)
