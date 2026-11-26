@@ -102,14 +102,17 @@ def run(n: int, directory: str | None, generate: str | None, argv: list[str], ig
     child: list[subprocess.Popen] = []
 
     def chunk(stream: int, data: bytes) -> None:
+        """Keep `data` as one record of the transcript: the stream (1 or 2), its length, then the bytes."""
         log.write(bytes([stream]) + len(data).to_bytes(4, "big") + data)
 
     def forward(signum: int, _frame: object) -> None:
+        """Pass an INT, TERM, QUIT or HUP on to the simulator and all below it, and remember it for the end."""
         received.append(signum)
         if child and child[0].returncode is None:
             signal_all(child[0].pid, signum)
 
     def stop(_signum: int, _frame: object) -> None:
+        """An earlier pass's SIGUSR1: if that pass failed, mark this one stopped and end its simulator."""
         if failed_before(n):
             record["stopped"] = True
             if child and child[0].returncode is None:
@@ -262,6 +265,7 @@ def reraise(signum: int, core: bool) -> None:
 
 
 def main() -> int:
+    """Run or replay one pass, as the command line names it."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--ignore-errors", action="store_true", help="make runs with -i")
     sub = parser.add_subparsers(dest="what", required=True)

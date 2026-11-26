@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Kebag Logic
 # SPDX-License-Identifier: CERN-OHL-W-2.0
-"""#111: `make run`'s scheduled passes against the serial recipe, with stub tools.
+"""#111: the engine suite's scheduled passes against the serial recipe, with stub tools.
 
-usage: passes_test.py
+usage: engine_passes_test.py
 
-Copies this Makefile and pass_run.py into a scratch tree, beside a reference
-Makefile whose `run` is the serial recipe the passes replaced, and runs both
-with a stub Verilator, a stub image generator and a stub simulator. Each stub
-pass prints to standard output and standard error and ends as a plan says.
+`make -C tb/verilator/engine passes-test` runs it. Like
+`mutation_order_test.py` and `mutation_jobs_test.py`, it tests how the
+suite's runner schedules real processes, not the RTL, so it sits beside them
+and outside the suite directories (#113).
+
+Copies the engine's Makefile and pass_run.py into a scratch tree, beside a
+reference Makefile whose `run` is the serial recipe the passes replaced, and
+runs both with a stub Verilator, a stub image generator and a stub
+simulator. Each stub pass prints to standard output and standard error and
+ends as a plan says.
 The checks:
 
 1. The transcript and the exit status equal the serial recipe's, byte for
@@ -56,7 +62,8 @@ import tempfile
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+#: The engine suite, whose Makefile and pass_run.py are under test.
+ENGINE = Path(__file__).resolve().parent / "verilator" / "engine"
 START = "# #111: the four passes are independent"
 END = "# #111: the serial order, the budget"
 SERIAL = """run: gptp_ucode.hex
@@ -167,7 +174,7 @@ def tree(scratch: Path) -> dict[str, Path]:
     for name, text in (("sim.py", SIM), ("verilator.py", VERILATOR), ("gen.py", GEN), ("hog.py", HOG)):
         (stub / name).write_text(text)
     (stub / "verilator.py").chmod(0o755)
-    real = (HERE / "Makefile").read_text()
+    real = (ENGINE / "Makefile").read_text()
     assert real.count(START) == 1 and real.count(END) == 1, "the Makefile's #111 anchors moved"
     serial = real[:real.index(START)] + SERIAL + real[real.index(END):]
     trees = {}
@@ -175,13 +182,13 @@ def tree(scratch: Path) -> dict[str, Path]:
         engine = scratch / name / "engine"
         engine.mkdir(parents=True)
         (engine / "Makefile").write_text(text)
-        shutil.copy(HERE / "pass_run.py", engine)
+        shutil.copy(ENGINE / "pass_run.py", engine)
         trees[name] = engine
     (scratch / "parallel" / "Makefile").write_text(TOP)
     return trees
 
 
-def make(engine: Path, flags: list[str], plan: dict, events: Path, stdout: int | None = None,
+def make(engine: Path, flags: list[str], plan: dict, events: Path,
          directory: Path | None = None, target: str = "run") -> subprocess.CompletedProcess:
     """One make run with the stubs; its captured streams and status."""
     stub = engine.parents[1] / "stub"
@@ -191,7 +198,7 @@ def make(engine: Path, flags: list[str], plan: dict, events: Path, stdout: int |
     args = ["make", *flags, target, "VERILATOR=../../stub/verilator.py", "GEN=../../stub/gen.py"]
     subprocess.run(["make", "-s", "clean"], cwd=engine, check=True, env=env)
     return subprocess.run(args, cwd=directory or engine, env=env, text=True, preexec_fn=no_cores, timeout=120,
-                          stdout=subprocess.PIPE if stdout is None else stdout, stderr=subprocess.PIPE)
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def no_cores() -> None:
@@ -202,6 +209,7 @@ def no_cores() -> None:
 
 
 def read(events: Path) -> list[dict]:
+    """The stub jobs' recorded events, none before the first."""
     return [json.loads(line) for line in events.read_text().splitlines()] if events.exists() else []
 
 
@@ -346,7 +354,7 @@ def replay_cwd(trees: dict[str, Path], scratch: Path) -> int:
              "    os._exit(0)\n"
              "os.kill = kill\n"
              "sys.argv = ['pass_run.py', 'replay', '0']\n"
-             f"runpy.run_path({str(Path(__file__).resolve().parent / 'pass_run.py')!r}, run_name='__main__')\n")
+             f"runpy.run_path({str(ENGINE / 'pass_run.py')!r}, run_name='__main__')\n")
     subprocess.run([sys.executable, "-c", probe], cwd=state.parent.parent,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
     where = seen.read_text() if seen.exists() else None
@@ -359,7 +367,7 @@ def gen_signal(trees: dict[str, Path], scratch: Path) -> int:
     """Check 7: an image generator whose shell died of a signal (a shell that execs, as dash does) ends as the serial
     line did: make reports the signal, not 128+n. A crafted record stands in for the run on any host's shell."""
     bad = 0
-    tool = Path(__file__).resolve().parent / "pass_run.py"
+    tool = ENGINE / "pass_run.py"
     for signum in (signal.SIGSEGV, signal.SIGKILL):
         runs = {}
         for form in ("replay", "serial"):
@@ -387,11 +395,13 @@ def no_core_replay(trees: dict[str, Path], scratch: Path) -> int:
     """Check 8: a replayed signal death recorded without a core ends as a non-dumpable serial death does, under a
     caller core limit of (0, 0) and of (1, unlimited hard), whatever the host's core_pattern."""
     bad = 0
-    tool = Path(__file__).resolve().parent / "pass_run.py"
+    tool = ENGINE / "pass_run.py"
     die = (f"exec python3 -c 'import ctypes, os; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); "
            f"os.kill(os.getpid(), {int(signal.SIGSEGV)})'")
     for limit in ((0, 0), (1, resource.RLIM_INFINITY)):
-        def caller(limit=limit) -> None:
+        def caller(limit: tuple[int, int] = limit) -> None:
+            """In the make child: the core limit `limit`, held within the hard limit, and INT and QUIT at their
+            defaults."""
             hard = resource.getrlimit(resource.RLIMIT_CORE)[1]
             unlimited = limit[1] == resource.RLIM_INFINITY
             want = (min(1, hard), hard) if unlimited and hard != resource.RLIM_INFINITY else limit
@@ -421,6 +431,7 @@ def no_core_replay(trees: dict[str, Path], scratch: Path) -> int:
 
 
 def main() -> int:
+    """Every check against a scratch tree of stubs; 1 when any failed."""
     with tempfile.TemporaryDirectory(prefix="engine-passes-test-") as name:
         scratch = Path(name)
         trees = tree(scratch)
